@@ -22,6 +22,7 @@ const TABLES = [
   'members',
   'next_of_kin',
   'org_counters',
+  'import_batches',
 ];
 
 const url =

@@ -10,7 +10,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { MembersService, MemberRow, NextOfKinRow } from './members.service';
+import {
+  MemberImportService,
+  ImportPreviewResult,
+  ImportCommitResult,
+} from './member-import.service';
 import { CreateMemberDto } from './dto/create-member.dto';
+import { CommitImportDto, PreviewImportDto } from './dto/import-member.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
@@ -28,7 +34,10 @@ const READ_PERMISSIONS = [
 @Controller('members')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class MembersController {
-  constructor(private readonly membersService: MembersService) {}
+  constructor(
+    private readonly membersService: MembersService,
+    private readonly memberImportService: MemberImportService,
+  ) {}
 
   @Post()
   @RequirePermissions('members.create')
@@ -128,6 +137,35 @@ export class MembersController {
       principal.userId,
       memberId,
       'EXITED',
+    );
+  }
+
+  // ----------------------------------------------------------- bulk import
+
+  @Post('import/preview')
+  @RequirePermissions('members.import')
+  previewImport(
+    @CurrentUser() principal: AuthPrincipal,
+    @Body() dto: PreviewImportDto,
+  ): Promise<ImportPreviewResult> {
+    return this.memberImportService.preview(
+      principal.organizationId,
+      principal.userId,
+      dto.filename,
+      dto.csv,
+    );
+  }
+
+  @Post('import/commit')
+  @RequirePermissions('members.import')
+  commitImport(
+    @CurrentUser() principal: AuthPrincipal,
+    @Body() dto: CommitImportDto,
+  ): Promise<ImportCommitResult> {
+    return this.memberImportService.commit(
+      principal.organizationId,
+      principal.userId,
+      dto.batchId,
     );
   }
 }

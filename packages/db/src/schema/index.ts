@@ -162,6 +162,47 @@ export const nextOfKin = pgTable(
   ],
 );
 
+/** Bulk member-import batches: validated preview rows awaiting commit. */
+export const importBatches = pgTable(
+  'import_batches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    filename: varchar('filename', { length: 255 }).notNull(),
+    status: text('status').notNull().default('PENDING'),
+    totalRows: bigint('total_rows', { mode: 'number' }).notNull().default(0),
+    validRows: bigint('valid_rows', { mode: 'number' }).notNull().default(0),
+    invalidRows: bigint('invalid_rows', { mode: 'number' })
+      .notNull()
+      .default(0),
+    committedCount: bigint('committed_count', { mode: 'number' })
+      .notNull()
+      .default(0),
+    rows: jsonb('rows').notNull(),
+    createdBy: uuid('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    committedAt: timestamp('committed_at', { withTimezone: true }),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    index('import_batches_org_status_idx').on(
+      table.organizationId,
+      table.status,
+    ),
+  ],
+);
+
 export const organizationSettings = pgTable(
   'organization_settings',
   {
@@ -401,6 +442,8 @@ export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
 export type NextOfKin = typeof nextOfKin.$inferSelect;
 export type NewNextOfKin = typeof nextOfKin.$inferInsert;
+export type ImportBatch = typeof importBatches.$inferSelect;
+export type NewImportBatch = typeof importBatches.$inferInsert;
 export type Role = typeof roles.$inferSelect;
 export type NewRole = typeof roles.$inferInsert;
 export type User = typeof users.$inferSelect;
