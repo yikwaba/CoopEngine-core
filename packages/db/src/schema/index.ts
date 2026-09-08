@@ -741,6 +741,46 @@ export const payrollBatches = pgTable(
   ],
 );
 
+/**
+ * Public org resolver (NO RLS by design): lets pre-auth flows (member OTP,
+ * future signup) resolve a slug to an organization id without a tenant
+ * context. Populated transactionally at onboarding.
+ */
+export const orgLookups = pgTable('org_lookups', {
+  slug: varchar('slug', { length: 80 }).primaryKey(),
+  organizationId: uuid('organization_id').notNull().unique(),
+});
+
+/** Member OTP login codes (tenant-scoped; hashed at rest, 10-min TTL). */
+export const memberOtps = pgTable(
+  'member_otps',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    attempts: bigint('attempts', { mode: 'number' }).notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    index('member_otps_member_created_idx').on(table.memberId, table.createdAt),
+  ],
+);
+
 /** Bulk member-import batches: validated preview rows awaiting commit. */
 export const importBatches = pgTable(
   'import_batches',
@@ -1045,6 +1085,9 @@ export type ShareTransaction = typeof shareTransactions.$inferSelect;
 export type NewShareTransaction = typeof shareTransactions.$inferInsert;
 export type PayrollBatch = typeof payrollBatches.$inferSelect;
 export type NewPayrollBatch = typeof payrollBatches.$inferInsert;
+export type OrgLookup = typeof orgLookups.$inferSelect;
+export type MemberOtp = typeof memberOtps.$inferSelect;
+export type NewMemberOtp = typeof memberOtps.$inferInsert;
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
 export type NextOfKin = typeof nextOfKin.$inferSelect;

@@ -1,0 +1,69 @@
+/** Member PWA API client (self-service, OTP auth). */
+
+export const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3999/api/v1';
+
+export async function apiFetch<T>(
+  path: string,
+  token?: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers ?? {}),
+    },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { message?: string | string[] };
+      if (Array.isArray(body.message)) message = body.message.join('; ');
+      else if (body.message) message = body.message;
+    } catch {
+      /* keep default */
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as T;
+}
+
+export const MEMBER_TOKEN_KEY = 'coopengine_member_token';
+export const MEMBER_INFO_KEY = 'coopengine_member_info';
+
+export function storeMemberSession(accessToken: string, info: unknown): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(MEMBER_TOKEN_KEY, accessToken);
+  localStorage.setItem(MEMBER_INFO_KEY, JSON.stringify(info));
+}
+
+export function clearMemberSession(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(MEMBER_TOKEN_KEY);
+  localStorage.removeItem(MEMBER_INFO_KEY);
+}
+
+export function readMemberToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(MEMBER_TOKEN_KEY);
+}
+
+export function readMemberInfo(): {
+  memberNo?: number;
+  firstName?: string;
+  lastName?: string;
+} | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return JSON.parse(localStorage.getItem(MEMBER_INFO_KEY) ?? 'null') as {
+      memberNo?: number;
+      firstName?: string;
+      lastName?: string;
+    } | null;
+  } catch {
+    return null;
+  }
+}

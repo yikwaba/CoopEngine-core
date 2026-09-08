@@ -85,6 +85,13 @@
       "when": 1788890486864,
       "tag": "0011_gigantic_imperial_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788892543512,
+      "tag": "0012_wet_warbound",
+      "breakpoints": true
     }
   ]
 }

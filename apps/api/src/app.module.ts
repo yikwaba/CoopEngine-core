@@ -9,6 +9,8 @@ import { LoansModule } from './loans/loans.module';
 import { SharesModule } from './shares/shares.module';
 import { ReportsModule } from './reports/reports.module';
 import { PayrollModule } from './payroll/payroll.module';
+import { MemberAuthModule } from './member-auth/member-auth.module';
+import { MemberSpaceModule } from './member-space/member-space.module';
 import { DatabaseModule } from './database/database.module';
 
 @Module({
@@ -23,6 +25,8 @@ import { DatabaseModule } from './database/database.module';
     SharesModule,
     ReportsModule,
     PayrollModule,
+    MemberAuthModule,
+    MemberSpaceModule,
     HealthModule,
   ],
 })
