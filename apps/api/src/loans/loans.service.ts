@@ -313,20 +313,36 @@ export class LoansService {
       } else if (target === 'DISBURSED') {
         // Disburse: update loan + post the balanced journal atomically.
         const loan = await c.query(
-          `SELECT l.id, l.member_id, l.principal FROM loans l
+          `SELECT l.id, l.member_id, l.principal, l.term_months,
+                  l.interest_rate_pa, l.interest_method
+             FROM loans l
             WHERE l.organization_id = $1 AND l.id = $2`,
           [orgId, loanId],
         );
-        const principal = Number(
-          (loan.rows[0] as { principal: string }).principal,
-        );
+        const loanRow = loan.rows[0] as {
+          member_id: string;
+          principal: string;
+          term_months: number | string;
+          interest_rate_pa: string;
+          interest_method: string;
+        };
+        const principal = Number(loanRow.principal);
         await this.postDisbursement(
           c,
           orgId,
           actorUserId,
           loanId,
-          (loan.rows[0] as { member_id: string }).member_id,
+          loanRow.member_id,
           principal,
+        );
+        await this.generateSchedule(
+          c,
+          orgId,
+          loanId,
+          Number(loanRow.term_months),
+          principal,
+          Number(loanRow.interest_rate_pa),
+          loanRow.interest_method,
         );
         await c.query(
           `UPDATE loans
@@ -350,6 +366,371 @@ export class LoansService {
       void current;
     });
     return this.getLoan(orgId, loanId);
+  }
+
+  // ------------------------------------------------------------- helpers
+
+  /**
+   * Flat-interest schedule (interest = principal * ratePa/100 * months/12).
+   * Monthly installments of equal size; the last one absorbs rounding.
+   */
+  private async generateSchedule(
+    c: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> },
+    orgId: string,
+    loanId: string,
+    termMonths: number,
+    principal: number,
+    interestRatePa: number,
+    interestMethod: string,
+  ): Promise<void> {
+    if (interestMethod !== 'FLAT') {
+      throw new BadRequestException(
+        `Schedule generation only supports FLAT interest (got ${interestMethod})`,
+      );
+    }
+    const totalInterest = round2((principal * interestRatePa * termMonths) / 1200);
+    const basePrincipal = Math.floor((principal * 100) / termMonths) / 100;
+    const baseInterest = Math.floor((totalInterest * 100) / termMonths) / 100;
+    const values: string[] = [];
+    const params: unknown[] = [];
+    let remainingP = principal;
+    let remainingI = totalInterest;
+    const today = new Date();
+    for (let seq = 1; seq <= termMonths; seq += 1) {
+      const last = seq === termMonths;
+      const p = last ? round2(remainingP) : Math.min(basePrincipal, round2(remainingP));
+      const i = last ? round2(remainingI) : Math.min(baseInterest, round2(remainingI));
+      remainingP = round2(remainingP - p);
+      remainingI = round2(remainingI - i);
+      const due = new Date(today);
+      due.setUTCMonth(due.getUTCMonth() + seq);
+      const base = params.length;
+      values.push(
+        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}::date, $${base + 6}, $${base + 7})`,
+      );
+      params.push(
+        randomUUID(),
+        orgId,
+        loanId,
+        seq,
+        due.toISOString().slice(0, 10),
+        String(p),
+        String(i),
+      );
+    }
+    await c.query(
+      `INSERT INTO loan_repayments (id, organization_id, loan_id, seq, due_date, principal_due, interest_due)
+       VALUES ${values.join(', ')}`,
+      params,
+    );
+  }
+
+  async listSchedule(
+    organizationId: string | null,
+    loanId: string,
+  ): Promise<
+    {
+      seq: number;
+      dueDate: string;
+      principalDue: number;
+      interestDue: number;
+      paidPrincipal: number;
+      paidInterest: number;
+      status: string;
+    }[]
+  > {
+    const orgId = this.requireOrg(organizationId);
+    await this.getLoan(orgId, loanId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT seq, due_date, principal_due, interest_due,
+                paid_principal, paid_interest
+           FROM loan_repayments
+          WHERE organization_id = $1 AND loan_id = $2
+          ORDER BY seq`,
+        [orgId, loanId],
+      );
+      const today = new Date().toISOString().slice(0, 10);
+      return rows.map((r: Record<string, unknown>) => {
+        const paidPrincipal = Number(r.paid_principal);
+        const paidInterest = Number(r.paid_interest);
+        const principalDue = Number(r.principal_due);
+        const interestDue = Number(r.interest_due);
+        let status = 'PENDING';
+        if (paidPrincipal >= principalDue && paidInterest >= interestDue) {
+          status = 'PAID';
+        } else if (paidPrincipal > 0 || paidInterest > 0) {
+          status = 'PARTIAL';
+        } else if ((r.due_date as Date).toISOString().slice(0, 10) < today) {
+          status = 'OVERDUE';
+        }
+        return {
+          seq: Number(r.seq),
+          dueDate: (r.due_date as Date).toISOString().slice(0, 10),
+          principalDue,
+          interestDue,
+          paidPrincipal,
+          paidInterest,
+          status,
+        };
+      });
+    });
+  }
+
+  /**
+   * Capture a loan repayment. Allocation follows the decision-log order
+   * (penalties -> fees -> interest -> principal) across the schedule in due
+   * order; posts the balanced journal Dr Cash / Cr Loan Receivables (principal
+   * part) + Cr Loan Interest Income (interest part) in the same transaction.
+   */
+  async captureRepayment(
+    organizationId: string | null,
+    actorUserId: string,
+    loanId: string,
+    amount: number,
+    description?: string,
+    idempotencyKey?: string,
+  ): Promise<{ loan: LoanRow }> {
+    const orgId = this.requireOrg(organizationId);
+    const value = round2(amount);
+    if (value <= 0) throw new BadRequestException('Invalid repayment amount');
+    await withTenant(this.pool, orgId, async (c) => {
+      if (idempotencyKey) {
+        const dup = await c.query(
+          `SELECT 1 FROM journal_entries
+            WHERE organization_id = $1 AND idempotency_key = $2 LIMIT 1`,
+          [orgId, idempotencyKey],
+        );
+        if (dup.rows[0]) {
+          throw new ConflictException('idempotencyKey has already been used');
+        }
+      }
+      const loan = await c.query(
+        `SELECT l.id, l.member_id, l.status, l.outstanding_principal
+           FROM loans l WHERE l.organization_id = $1 AND l.id = $2 FOR UPDATE`,
+        [orgId, loanId],
+      );
+      const loanRow = loan.rows[0] as
+        | { id: string; member_id: string; status: string; outstanding_principal: string }
+        | undefined;
+      if (!loanRow) throw new NotFoundException('Loan not found');
+      if (loanRow.status !== 'DISBURSED') {
+        throw new ConflictException('Loan is not in repayment (DISBURSED) state');
+      }
+
+      const schedule = await c.query(
+        `SELECT id, principal_due, interest_due, paid_principal, paid_interest
+           FROM loan_repayments
+          WHERE organization_id = $1 AND loan_id = $2
+            AND (paid_principal < principal_due OR paid_interest < interest_due)
+          ORDER BY seq
+          FOR UPDATE`,
+        [orgId, loanId],
+      );
+      const rows = schedule.rows as {
+        id: string;
+        principal_due: string;
+        interest_due: string;
+        paid_principal: string;
+        paid_interest: string;
+      }[];
+      if (rows.length === 0) {
+        throw new ConflictException('Loan has no outstanding installments');
+      }
+      const totalRemaining = round2(
+        rows.reduce(
+          (acc, r) =>
+            acc +
+            Number(r.principal_due) +
+            Number(r.interest_due) -
+            Number(r.paid_principal) -
+            Number(r.paid_interest),
+          0,
+        ),
+      );
+      if (value > totalRemaining) {
+        throw new BadRequestException(
+          `Repayment ${value} exceeds the outstanding balance of ${totalRemaining}`,
+        );
+      }
+
+      // Allocate: interest before principal within each installment in due order
+      let remaining = value;
+      let principalPortion = 0;
+      let interestPortion = 0;
+      for (const row of rows) {
+        if (remaining <= 0) break;
+        const remInterest = round2(
+          Number(row.interest_due) - Number(row.paid_interest),
+        );
+        const takeInterest = Math.min(remInterest, remaining);
+        const remPrincipal = round2(
+          Number(row.principal_due) - Number(row.paid_principal),
+        );
+        const takePrincipal = Math.min(remPrincipal, remaining - takeInterest);
+        if (takeInterest > 0 || takePrincipal > 0) {
+          const newPaidInterest = round2(Number(row.paid_interest) + takeInterest);
+          const newPaidPrincipal = round2(Number(row.paid_principal) + takePrincipal);
+          const done =
+            newPaidInterest >= Number(row.interest_due) &&
+            newPaidPrincipal >= Number(row.principal_due);
+          await c.query(
+            `UPDATE loan_repayments
+                SET paid_interest = $1, paid_principal = $2,
+                    status = $3
+              WHERE organization_id = $4 AND id = $5`,
+            [
+              String(newPaidInterest),
+              String(newPaidPrincipal),
+              done ? 'PAID' : 'PARTIAL',
+              orgId,
+              row.id,
+            ],
+          );
+          interestPortion = round2(interestPortion + takeInterest);
+          principalPortion = round2(principalPortion + takePrincipal);
+          remaining = round2(remaining - takeInterest - takePrincipal);
+        }
+      }
+
+      // Journal: Dr Cash / Cr Loan Receivables (principal) + Cr Interest Income
+      const entryId = randomUUID();
+      await this.postRepaymentJournal(
+        c,
+        orgId,
+        actorUserId,
+        loanId,
+        loanRow.member_id,
+        value,
+        principalPortion,
+        interestPortion,
+        idempotencyKey ?? null,
+        description,
+      );
+
+      const outstanding = round2(
+        Number(loanRow.outstanding_principal) - principalPortion,
+      );
+      await c.query(
+        `UPDATE loans
+            SET outstanding_principal = $1,
+                status = CASE WHEN $1::numeric <= 0 THEN 'COMPLETED' ELSE status END
+          WHERE organization_id = $2 AND id = $3`,
+        [String(outstanding), orgId, loanId],
+      );
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, 'loan.repayment', 'loan', $3, $4)`,
+        [
+          orgId,
+          actorUserId,
+          loanId,
+          JSON.stringify({
+            amount: value,
+            principal: principalPortion,
+            interest: interestPortion,
+            outstanding,
+          }),
+        ],
+      );
+    });
+    const loan = await this.getLoan(orgId, loanId);
+    return { loan };
+  }
+
+  private async postRepaymentJournal(
+    c: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> },
+    orgId: string,
+    actorUserId: string,
+    loanId: string,
+    memberId: string,
+    amount: number,
+    principalPortion: number,
+    interestPortion: number,
+    idempotencyKey: string | null,
+    description: string | undefined,
+  ): Promise<void> {
+    const period = await c.query(
+      `SELECT id FROM ledger_periods
+        WHERE organization_id = $1 AND status = 'OPEN'
+          AND now()::date BETWEEN start_date AND end_date
+        ORDER BY start_date DESC LIMIT 1`,
+      [orgId],
+    );
+    const periodId = (period.rows[0] as { id: string } | undefined)?.id;
+    if (!periodId) {
+      throw new ConflictException('No OPEN accounting period for today — cannot post');
+    }
+    const seq = await c.query(
+      `UPDATE org_counters SET journal_seq = journal_seq + 1, updated_at = now()
+        WHERE organization_id = $1 RETURNING journal_seq`,
+      [orgId],
+    );
+    const entryNo = Number(
+      (seq.rows[0] as { journal_seq: string | number }).journal_seq,
+    );
+    const entryId = randomUUID();
+    await c.query(
+      `INSERT INTO journal_entries
+         (id, organization_id, period_id, entry_date, description, source,
+          source_type, source_id, status, entry_no, idempotency_key, created_by, posted_by, posted_at)
+       VALUES ($1, $2, $3, now()::date, $4, 'LOAN_REPAYMENT', 'loan', $5,
+               'POSTED', $6, $7, $8, $8, now())`,
+      [
+        entryId,
+        orgId,
+        periodId,
+        description ?? `Loan repayment ${String(amount)}`,
+        loanId,
+        entryNo,
+        idempotencyKey,
+        actorUserId,
+      ],
+    );
+    const accRes = await c.query(
+      `SELECT id, code FROM chart_of_accounts
+        WHERE organization_id = $1 AND code = ANY($2::varchar[])`,
+      [orgId, ['1000', '1020', '4000']],
+    );
+    const idByCode = new Map<string, string>();
+    for (const r of accRes.rows as { id: string; code: string }[]) {
+      idByCode.set(r.code, r.id);
+    }
+    const missing = ['1000', '1020', '4000'].find((code) => !idByCode.has(code));
+    if (missing) throw new BadRequestException(`Unknown account code: ${missing}`);
+    // Lines: 1 debit + up to 2 credits (interest credit only when > 0)
+    const creditClauses: string[] = [];
+    const params: unknown[] = [orgId, entryId, idByCode.get('1000'), String(round2(amount)), memberId];
+    if (principalPortion > 0) {
+      creditClauses.push(
+        `($1, $2, $${params.length + 1}, '0', $${params.length + 2}, $5)`,
+      );
+      params.push(idByCode.get('1020'), String(round2(principalPortion)));
+    }
+    if (interestPortion > 0) {
+      creditClauses.push(
+        `($1, $2, $${params.length + 1}, '0', $${params.length + 2}, $5)`,
+      );
+      params.push(idByCode.get('4000'), String(round2(interestPortion)));
+    }
+    if (creditClauses.length === 0) {
+      throw new BadRequestException('Nothing to post — both portions are zero');
+    }
+    await c.query(
+      `INSERT INTO journal_lines (organization_id, journal_entry_id, account_id, debit, credit, member_id)
+       VALUES ($1, $2, $3, $4, '0', $5), ${creditClauses.join(', ')}`,
+      params,
+    );
+    await c.query(
+      `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, $2, 'journal.auto.posted', 'journal_entry', $3, $4)`,
+      [
+        orgId,
+        actorUserId,
+        entryId,
+        JSON.stringify({ entryNo, source: 'LOAN_REPAYMENT', loanId }),
+      ],
+    );
   }
 
   // ------------------------------------------------------------- helpers

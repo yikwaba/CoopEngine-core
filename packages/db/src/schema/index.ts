@@ -594,6 +594,113 @@ export const loanGuarantors = pgTable(
   ],
 );
 
+/** Loan repayment schedule — one row per installment (generated on disbursement). */
+export const loanRepayments = pgTable(
+  'loan_repayments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    loanId: uuid('loan_id')
+      .notNull()
+      .references(() => loans.id, { onDelete: 'cascade' }),
+    seq: bigint('seq', { mode: 'number' }).notNull(),
+    dueDate: date('due_date').notNull(),
+    principalDue: numeric('principal_due', { precision: 19, scale: 2 }).notNull(),
+    interestDue: numeric('interest_due', { precision: 19, scale: 2 }).notNull(),
+    paidPrincipal: numeric('paid_principal', { precision: 19, scale: 2 })
+      .notNull()
+      .default('0'),
+    paidInterest: numeric('paid_interest', { precision: 19, scale: 2 })
+      .notNull()
+      .default('0'),
+    status: text('status').notNull().default('PENDING'), // PENDING|PARTIAL|PAID (OVERDUE derived)
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('loan_repayments_loan_seq_uq').on(table.loanId, table.seq),
+  ],
+);
+
+/** Member share capital accounts — one per member per tenant. */
+export const memberShareAccounts = pgTable(
+  'member_share_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    currentBalance: numeric('current_balance', { precision: 19, scale: 2 })
+      .notNull()
+      .default('0'),
+    status: text('status').notNull().default('ACTIVE'),
+    openedAt: timestamp('opened_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('member_share_accounts_org_member_uq').on(
+      table.organizationId,
+      table.memberId,
+    ),
+  ],
+);
+
+/** Share purchase projection (append-only; journal is source of truth). */
+export const shareTransactions = pgTable(
+  'share_transactions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => memberShareAccounts.id, { onDelete: 'cascade' }),
+    journalEntryId: uuid('journal_entry_id')
+      .notNull()
+      .references(() => journalEntries.id),
+    type: varchar('type', { length: 16 }).notNull().default('PURCHASE'),
+    signedAmount: numeric('signed_amount', { precision: 19, scale: 2 })
+      .notNull(),
+    runningBalance: numeric('running_balance', { precision: 19, scale: 2 })
+      .notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    index('share_txn_account_time_idx').on(table.accountId, table.createdAt),
+  ],
+);
+
 /** Bulk member-import batches: validated preview rows awaiting commit. */
 export const importBatches = pgTable(
   'import_batches',
@@ -890,6 +997,12 @@ export type Loan = typeof loans.$inferSelect;
 export type NewLoan = typeof loans.$inferInsert;
 export type LoanGuarantor = typeof loanGuarantors.$inferSelect;
 export type NewLoanGuarantor = typeof loanGuarantors.$inferInsert;
+export type LoanRepayment = typeof loanRepayments.$inferSelect;
+export type NewLoanRepayment = typeof loanRepayments.$inferInsert;
+export type MemberShareAccount = typeof memberShareAccounts.$inferSelect;
+export type NewMemberShareAccount = typeof memberShareAccounts.$inferInsert;
+export type ShareTransaction = typeof shareTransactions.$inferSelect;
+export type NewShareTransaction = typeof shareTransactions.$inferInsert;
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
 export type NextOfKin = typeof nextOfKin.$inferSelect;

@@ -12,6 +12,33 @@ import {
 } from '@nestjs/common';
 import { LoansService } from './loans.service';
 import { CreateLoanDto, RejectLoanDto } from './dto/loans.dto';
+import {
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+} from 'class-validator';
+
+class RepaymentDto {
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @Max(100_000_000_000)
+  amount!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(16)
+  @MaxLength(100)
+  idempotencyKey?: string;
+}
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
@@ -75,6 +102,33 @@ export class LoansController {
     @Param('id', new ParseUUIDPipe()) loanId: string,
   ) {
     return this.loansService.listGuarantors(principal.organizationId, loanId);
+  }
+
+  @Get(':id/schedule')
+  @RequirePermissions(...LOAN_READ)
+  schedule(
+    @CurrentUser() principal: AuthPrincipal,
+    @Param('id', new ParseUUIDPipe()) loanId: string,
+  ) {
+    return this.loansService.listSchedule(principal.organizationId, loanId);
+  }
+
+  @Post(':id/repayments')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('loans.review', 'loans.approve', 'savings.post', 'payments.reconcile')
+  repay(
+    @CurrentUser() principal: AuthPrincipal,
+    @Param('id', new ParseUUIDPipe()) loanId: string,
+    @Body() dto: RepaymentDto,
+  ) {
+    return this.loansService.captureRepayment(
+      principal.organizationId,
+      principal.userId,
+      loanId,
+      dto.amount,
+      dto.description,
+      dto.idempotencyKey,
+    );
   }
 
   @Post(':id/approve')

@@ -96,6 +96,7 @@ const ROLE_TEMPLATES = {
     'loans.approve',
     'loans.disburse',
     'loans.restructure',
+    'shares.post',
   ],
   CHAIRMAN: ['reports.view', 'reports.export', 'loans.approve', 'members.approve'],
   SECRETARY: [

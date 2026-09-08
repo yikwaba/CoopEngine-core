@@ -33,6 +33,9 @@ const TABLES = [
   'loan_products',
   'loans',
   'loan_guarantors',
+  'loan_repayments',
+  'member_share_accounts',
+  'share_transactions',
 ];
 
 const BALANCED_JOURNAL_SQL = `

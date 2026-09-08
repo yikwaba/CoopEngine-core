@@ -71,6 +71,13 @@
       "when": 1788888778916,
       "tag": "0009_damp_blade",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788889499917,
+      "tag": "0010_woozy_quasar",
+      "breakpoints": true
     }
   ]
 }
