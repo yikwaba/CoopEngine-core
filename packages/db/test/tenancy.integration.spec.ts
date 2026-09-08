@@ -60,6 +60,11 @@ describe('tenant isolation (RLS)', () => {
          VALUES ($1, $2, $3, true), ($1, $4, $5, false)`,
         [orgA, 'Alpha Head Office', 'HQA', 'Alpha Annex', 'ANX'],
       );
+      const justInserted = await c.query(
+        `SELECT count(*)::int AS n FROM branches WHERE organization_id = $1`,
+        [orgA],
+      );
+      expect((justInserted.rows[0] as { n: number }).n).toBe(2);
     });
 
     // Tenant B onboarding: org row + one branch

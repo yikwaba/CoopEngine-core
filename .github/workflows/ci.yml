@@ -29,14 +29,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Workspace typechecking resolves @coopengine/* declarations from their
+      # built dist, so packages are built before typechecking.
+      - name: Build packages
+        run: pnpm build
+
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Test
         run: pnpm test
-
-      - name: Build
-        run: pnpm build
 
   integration:
     name: Integration (real PostgreSQL 16)
