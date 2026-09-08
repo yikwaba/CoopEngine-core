@@ -119,6 +119,8 @@ export const users = pgTable('users', {
   email: varchar('email', { length: 320 }).notNull().unique(),
   passwordHash: text('password_hash'),
   status: text('status').notNull().default('ACTIVE'),
+  mfaSecret: text('mfa_secret'),
+  mfaEnabled: boolean('mfa_enabled').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -126,6 +128,26 @@ export const users = pgTable('users', {
     .notNull()
     .defaultNow(),
 });
+
+/** Login attempt tracking for rate limiting (email + IP windows). */
+export const loginAttempts = pgTable(
+  'login_attempts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: varchar('email', { length: 320 }).notNull(),
+    ipAddress: text('ip_address').notNull(),
+    attemptedAt: timestamp('attempted_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('login_attempts_email_ip_time_idx').on(
+      table.email,
+      table.ipAddress,
+      table.attemptedAt,
+    ),
+  ],
+);
 
 /**
  * Roles (org-scoped by default; `scope='saas'` roles are platform-global).
@@ -271,6 +293,10 @@ export type Branch = typeof branches.$inferSelect;
 export type NewBranch = typeof branches.$inferInsert;
 export type Role = typeof roles.$inferSelect;
 export type NewRole = typeof roles.$inferInsert;
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
+export type LoginAttempt = typeof loginAttempts.$inferSelect;
+export type NewLoginAttempt = typeof loginAttempts.$inferInsert;
 export type Permission = typeof permissions.$inferSelect;
 export type NewPermission = typeof permissions.$inferInsert;
 export type RolePermission = typeof rolePermissions.$inferSelect;

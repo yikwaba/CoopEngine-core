@@ -15,14 +15,11 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { AppModule } from '../src/app.module';
-import { createPool, withTenant } from '@coopengine/db';
+import { createPool } from '@coopengine/db';
+import { ensureRbacSeeded } from './helpers';
 
 const ADMIN_EMAIL = 'admin@coopengine.dev';
 const ADMIN_PASSWORD = 'AdminDev123!';
-
-/** Orgs created by this suite — cleaned up surgically (never TRUNCATE:
- *  cascade would wipe the RBAC template rows referenced by user_roles). */
-const createdOrgIds: string[] = [];
 
 let app: INestApplication;
 let pool: Pool;
@@ -33,6 +30,7 @@ beforeAll(async () => {
     'postgres://coopengine:coopengine@127.0.0.1:5432/coopengine';
 
   pool = createPool(process.env.DATABASE_URL);
+  await ensureRbacSeeded(pool);
 
   try {
     const moduleRef = await Test.createTestingModule({
@@ -53,13 +51,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (pool) {
-    // Surgical cleanup: delete created orgs inside their own tenant context
-    // (cascade removes their settings/branches/user_roles), then test users.
-    for (const orgId of createdOrgIds) {
-      await withTenant(pool, orgId, (c) =>
-        c.query(`DELETE FROM organizations WHERE id = $1`, [orgId]),
-      ).catch(() => undefined);
-    }
+    // Test-only cleanup. RBAC template rows and seeded users are preserved.
     await pool.query(`DELETE FROM users WHERE email LIKE '%@coopengine.test'`);
     await pool.query(`DELETE FROM sessions`);
     await pool.end();
@@ -114,7 +106,6 @@ describe('auth + RBAC (HTTP)', () => {
     const onboardBody = res.body as Record<string, unknown>;
     expect(onboardBody).toMatchObject({ slug, status: 'ACTIVE' });
     const orgId = res.body.id as string;
-    createdOrgIds.push(orgId);
 
     // Coop admin can log in with org context
     const coopAdmin = await login(adminEmail, 'CoopPass123!', slug);
@@ -186,7 +177,6 @@ describe('auth + RBAC (HTTP)', () => {
       .set('Authorization', `Bearer ${saas.tokens?.accessToken}`)
       .send(payload);
     expect(first.status).toBe(201);
-    createdOrgIds.push(first.body.id as string);
     const second = await request(app.getHttpServer())
       .post('/api/v1/organizations')
       .set('Authorization', `Bearer ${saas.tokens?.accessToken}`)

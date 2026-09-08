@@ -1,13 +1,20 @@
 import {
+  HttpException,
+  HttpStatus,
+  Inject,
   Injectable,
   UnauthorizedException,
-  Inject,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomBytes, createHash } from 'node:crypto';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
 import * as bcrypt from 'bcryptjs';
+import {
+  generateSecret,
+  generateURI,
+  verify,
+} from 'otplib/functional';
 import { DB_POOL } from '../database/database.module';
 import { ENV } from '../config/env';
 import { JwtClaims } from '../common/auth.types';
@@ -28,6 +35,14 @@ export interface SessionTokens {
   permissions: string[];
 }
 
+/** Result of credential verification (before org/context selection). */
+export interface AuthenticatedUser {
+  id: string;
+  email: string;
+  mfaEnabled: boolean;
+  organizations: OrgSummary[];
+}
+
 interface MembershipRow {
   organization_id: string | null;
   role_code: string;
@@ -46,6 +61,10 @@ interface SessionRow {
 const hashToken = (token: string): string =>
   createHash('sha256').update(token).digest('hex');
 
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 5;
+const MFA_ISSUER = 'Co-opEngine';
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -53,29 +72,129 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
+  // ----------------------------------------------------------- rate limit
+
+  private async assertLoginAllowed(email: string, ip: string): Promise<void> {
+    const { rows } = await this.pool.query(
+      `SELECT count(*)::int AS n FROM login_attempts
+        WHERE email = $1 AND ip_address = $2
+          AND attempted_at > now() - interval '15 minutes'`,
+      [email.toLowerCase(), ip],
+    );
+    if ((rows[0] as { n: number }).n >= LOGIN_MAX_ATTEMPTS) {
+      throw new HttpException(
+        'Too many login attempts. Try again in 15 minutes.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  private async recordLoginFailure(email: string, ip: string): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO login_attempts (email, ip_address) VALUES ($1, $2)`,
+      [email.toLowerCase(), ip],
+    );
+  }
+
+  private async clearLoginFailures(email: string): Promise<void> {
+    await this.pool.query(`DELETE FROM login_attempts WHERE email = $1`, [
+      email.toLowerCase(),
+    ]);
+  }
+
   // ---------------------------------------------------------------- login
 
-  /** Verify credentials; returns the user and their org summaries. */
+  /** Verify credentials (rate-limited). Does NOT issue tokens yet. */
   async authenticate(
     email: string,
     password: string,
-  ): Promise<{ user: { id: string; email: string }; organizations: OrgSummary[] }> {
+    ipAddress = 'unknown',
+  ): Promise<AuthenticatedUser> {
+    await this.assertLoginAllowed(email, ipAddress);
     const { rows } = await this.pool.query(
-      `SELECT id, email, password_hash, status FROM users WHERE email = $1`,
+      `SELECT id, email, password_hash, status, mfa_enabled
+         FROM users WHERE email = $1`,
       [email.toLowerCase()],
     );
     const user = rows[0] as
-      | { id: string; email: string; password_hash: string | null; status: string }
+      | {
+          id: string;
+          email: string;
+          password_hash: string | null;
+          status: string;
+          mfa_enabled: boolean;
+        }
       | undefined;
     if (!user || !user.password_hash || user.status !== 'ACTIVE') {
+      await this.recordLoginFailure(email, ipAddress);
       throw new UnauthorizedException('Invalid email or password');
     }
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) {
+      await this.recordLoginFailure(email, ipAddress);
       throw new UnauthorizedException('Invalid email or password');
     }
+    await this.clearLoginFailures(email);
     const organizations = await this.listOrganizations(user.id);
-    return { user: { id: user.id, email: user.email }, organizations };
+    return {
+      id: user.id,
+      email: user.email,
+      mfaEnabled: user.mfa_enabled,
+      organizations,
+    };
+  }
+
+  /**
+   * Resolve org context and issue tokens:
+   * - slug provided -> that org membership
+   * - no slug + no orgs -> platform (saas) context
+   * - no slug + one org -> auto-select
+   * - no slug + many orgs -> requiresOrgSelection
+   */
+  async issueForUser(
+    userId: string,
+    organizationSlug: string | undefined,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<{
+    tokens?: SessionTokens;
+    requiresOrgSelection: boolean;
+    organizations: OrgSummary[];
+  }> {
+    const organizations = await this.listOrganizations(userId);
+
+    if (organizations.length === 0 && organizationSlug === undefined) {
+      const tokens = await this.issueTokens(
+        userId,
+        undefined,
+        ipAddress,
+        userAgent,
+      );
+      return { tokens, requiresOrgSelection: false, organizations };
+    }
+    if (organizations.length === 1 && organizationSlug === undefined) {
+      const tokens = await this.issueTokens(
+        userId,
+        organizations[0]?.slug,
+        ipAddress,
+        userAgent,
+      );
+      return { tokens, requiresOrgSelection: false, organizations };
+    }
+    if (organizationSlug) {
+      const tokens = await this.issueTokens(
+        userId,
+        organizationSlug,
+        ipAddress,
+        userAgent,
+      );
+      return { tokens, requiresOrgSelection: false, organizations };
+    }
+    return {
+      tokens: undefined,
+      requiresOrgSelection: true,
+      organizations,
+    };
   }
 
   /**
@@ -84,7 +203,7 @@ export class AuthService {
    *   own memberships only — never from arbitrary input)
    * - omitted                    -> platform (saas) context
    */
-  async issueTokens(
+  private async issueTokens(
     userId: string,
     organizationSlug: string | undefined,
     ipAddress?: string,
@@ -164,6 +283,123 @@ export class AuthService {
     };
   }
 
+  // ------------------------------------------------------------------ MFA
+
+  /** Generate a TOTP secret + otpauth URL (persisted, not yet enabled). */
+  async setupMfa(userId: string, email: string): Promise<{ secret: string; otpauthUrl: string }> {
+    const secret = generateSecret();
+    const otpauthUrl = generateURI({
+      secret,
+      label: email,
+      issuer: MFA_ISSUER,
+    });
+    await this.pool.query(
+      `UPDATE users SET mfa_secret = $1, mfa_enabled = false WHERE id = $2`,
+      [secret, userId],
+    );
+    return { secret, otpauthUrl };
+  }
+
+  /** Confirm setup with a live TOTP code; enables MFA. */
+  async verifyMfaSetup(userId: string, code: string): Promise<void> {
+    const secret = await this.rawMfaSecretFor(userId);
+    if (!secret || !(await this.verifyCode(secret, code))) {
+      throw new UnauthorizedException('Invalid TOTP code');
+    }
+    await this.pool.query(
+      `UPDATE users SET mfa_enabled = true WHERE id = $1`,
+      [userId],
+    );
+    await this.pool.query(
+      `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'mfa.enabled', 'user', $1, $2)`,
+      [userId, JSON.stringify({ method: 'totp' })],
+    );
+  }
+
+  /** Disable MFA after verifying the current code. */
+  async disableMfa(userId: string, code: string): Promise<void> {
+    const secret = await this.mfaSecretFor(userId);
+    if (!secret || !(await this.verifyCode(secret, code))) {
+      throw new UnauthorizedException('Invalid TOTP code');
+    }
+    await this.pool.query(
+      `UPDATE users SET mfa_enabled = false, mfa_secret = NULL WHERE id = $1`,
+      [userId],
+    );
+    await this.pool.query(
+      `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'mfa.disabled', 'user', $1, $2)`,
+      [userId, JSON.stringify({ method: 'totp' })],
+    );
+  }
+
+  /** Short-lived challenge token issued when MFA is enabled at login. */
+  async createMfaChallenge(userId: string): Promise<string> {
+    return this.jwtService.signAsync(
+      { sub: userId, typ: 'mfa' },
+      { secret: ENV.jwtAccessSecret, expiresIn: 5 * 60 },
+    );
+  }
+
+  /** Verify challenge token + TOTP code; returns the user id. */
+  async verifyMfaChallenge(
+    mfaToken: string,
+    code: string,
+  ): Promise<string> {
+    let claims: { sub: string; typ?: string };
+    try {
+      claims = await this.jwtService.verifyAsync<{ sub: string; typ?: string }>(
+        mfaToken,
+        { secret: ENV.jwtAccessSecret },
+      );
+    } catch {
+      throw new UnauthorizedException('MFA challenge expired or invalid');
+    }
+    if (claims.typ !== 'mfa') {
+      throw new UnauthorizedException('MFA challenge expired or invalid');
+    }
+    const userId = claims.sub;
+    const secret = await this.mfaSecretFor(userId);
+    if (!secret || !(await this.verifyCode(secret, code))) {
+      throw new UnauthorizedException('Invalid TOTP code');
+    }
+    await this.pool.query(
+      `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'auth.mfa.verified', 'user', $1, $2)`,
+      [userId, JSON.stringify({})],
+    );
+    return userId;
+  }
+
+  private async mfaSecretFor(userId: string): Promise<string | null> {
+    const { rows } = await this.pool.query(
+      `SELECT mfa_secret, mfa_enabled FROM users WHERE id = $1`,
+      [userId],
+    );
+    const user = rows[0] as
+      | { mfa_secret: string | null; mfa_enabled: boolean }
+      | undefined;
+    if (!user?.mfa_enabled || !user.mfa_secret) return null;
+    return user.mfa_secret;
+  }
+
+  /** Secret regardless of enabled state (used during setup verification). */
+  private async rawMfaSecretFor(userId: string): Promise<string | null> {
+    const { rows } = await this.pool.query(
+      `SELECT mfa_secret FROM users WHERE id = $1`,
+      [userId],
+    );
+    const user = rows[0] as { mfa_secret: string | null } | undefined;
+    return user?.mfa_secret ?? null;
+  }
+
+  /** otplib v13 verify returns {valid}; unwrap to a boolean. */
+  private async verifyCode(secret: string, code: string): Promise<boolean> {
+    const result = await verify({ secret, token: code });
+    return result?.valid === true;
+  }
+
   // ------------------------------------------------------------- sessions
 
   /** Rotate a refresh token: revoke old session, issue a new one. */
@@ -201,12 +437,17 @@ export class AuthService {
 
   async findUserById(
     userId: string,
-  ): Promise<{ id: string; email: string } | null> {
+  ): Promise<{ id: string; email: string; mfaEnabled: boolean } | null> {
     const { rows } = await this.pool.query(
-      `SELECT id, email FROM users WHERE id = $1`,
+      `SELECT id, email, mfa_enabled FROM users WHERE id = $1`,
       [userId],
     );
-    return (rows[0] as { id: string; email: string } | undefined) ?? null;
+    const u = rows[0] as
+      | { id: string; email: string; mfa_enabled: boolean }
+      | undefined;
+    return u
+      ? { id: u.id, email: u.email, mfaEnabled: u.mfa_enabled }
+      : null;
   }
 
   async recordAudit(
@@ -276,9 +517,7 @@ export class AuthService {
   }
 
   /** RLS-safe org read: each org is read inside its own tenant transaction. */
-  private async fetchOrgSummary(
-    orgId: string,
-  ): Promise<OrgSummary | null> {
+  private async fetchOrgSummary(orgId: string): Promise<OrgSummary | null> {
     return withTenant(this.pool, orgId, async (c) => {
       const res = await c.query(
         `SELECT id, name, slug FROM organizations WHERE id = $1`,

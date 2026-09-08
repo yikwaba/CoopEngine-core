@@ -9,7 +9,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthService, SessionTokens } from './auth.service';
-import { LoginDto, RefreshDto } from './dto/auth.dto';
+import {
+  LoginDto,
+  MfaDisableDto,
+  MfaLoginVerifyDto,
+  MfaVerifySetupDto,
+  RefreshDto,
+} from './dto/auth.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
@@ -18,6 +24,8 @@ interface LoginResult {
   user: { id: string; email: string };
   organizations: { id: string; slug: string; name: string; roleCodes: string[] }[];
   requiresOrgSelection: boolean;
+  requiresMfa: boolean;
+  mfaToken?: string;
   tokens?: SessionTokens;
 }
 
@@ -31,69 +39,103 @@ export class AuthController {
     @Body() dto: LoginDto,
     @Req() request: { ip?: string; headers: { 'user-agent'?: string } },
   ): Promise<LoginResult> {
-    const { user, organizations } = await this.authService.authenticate(
+    const ip = request.ip ?? 'unknown';
+    const ua = request.headers['user-agent'];
+    const auth = await this.authService.authenticate(
       dto.email,
       dto.password,
+      ip,
+    );
+
+    if (auth.mfaEnabled) {
+      const mfaToken = await this.authService.createMfaChallenge(auth.id);
+      return {
+        user: { id: auth.id, email: auth.email },
+        organizations: auth.organizations,
+        requiresOrgSelection: false,
+        requiresMfa: true,
+        mfaToken,
+      };
+    }
+
+    const outcome = await this.authService.issueForUser(
+      auth.id,
+      dto.organizationSlug,
+      ip,
+      ua,
     );
     void this.authService.recordAudit(
-      null,
-      user.id,
+      outcome.tokens?.organization?.id ?? null,
+      auth.id,
       'auth.login.success',
       'user',
-      user.id,
+      auth.id,
     );
+    return {
+      user: { id: auth.id, email: auth.email },
+      organizations: auth.organizations,
+      requiresOrgSelection: outcome.requiresOrgSelection,
+      requiresMfa: false,
+      tokens: outcome.tokens,
+    };
+  }
 
-    // Platform (saas) user with no org memberships -> org-less token.
-    if (organizations.length === 0 && dto.organizationSlug === undefined) {
-      const tokens = await this.authService.issueTokens(
-        user.id,
-        undefined,
-        request.ip,
-        request.headers['user-agent'],
-      );
-      return {
-        user,
-        organizations,
-        requiresOrgSelection: false,
-        tokens,
-      };
-    }
+  /** Second factor step: verify TOTP + challenge, then issue tokens. */
+  @Post('mfa/login-verify')
+  @HttpCode(HttpStatus.OK)
+  async mfaLoginVerify(
+    @Body() dto: MfaLoginVerifyDto,
+    @Req() request: { ip?: string; headers: { 'user-agent'?: string } },
+  ): Promise<LoginResult> {
+    const ip = request.ip ?? 'unknown';
+    const ua = request.headers['user-agent'];
+    const userId = await this.authService.verifyMfaChallenge(
+      dto.mfaToken,
+      dto.code,
+    );
+    const user = await this.authService.findUserById(userId);
+    const outcome = await this.authService.issueForUser(
+      userId,
+      dto.organizationSlug,
+      ip,
+      ua,
+    );
+    return {
+      user: { id: userId, email: user?.email ?? '' },
+      organizations: outcome.organizations,
+      requiresOrgSelection: outcome.requiresOrgSelection,
+      requiresMfa: false,
+      tokens: outcome.tokens,
+    };
+  }
 
-    // Single org -> auto-select.
-    if (organizations.length === 1 && dto.organizationSlug === undefined) {
-      const single = organizations[0] as { slug: string };
-      const tokens = await this.authService.issueTokens(
-        user.id,
-        single.slug,
-        request.ip,
-        request.headers['user-agent'],
-      );
-      return {
-        user,
-        organizations,
-        requiresOrgSelection: false,
-        tokens,
-      };
-    }
+  // --------------------------------------------------- MFA management (authed)
 
-    // Explicit slug requested.
-    if (dto.organizationSlug) {
-      const tokens = await this.authService.issueTokens(
-        user.id,
-        dto.organizationSlug,
-        request.ip,
-        request.headers['user-agent'],
-      );
-      return {
-        user,
-        organizations,
-        requiresOrgSelection: false,
-        tokens,
-      };
-    }
+  @Post('mfa/setup')
+  @UseGuards(JwtAuthGuard)
+  async setupMfa(@CurrentUser() principal: AuthPrincipal) {
+    const user = await this.authService.findUserById(principal.userId);
+    return this.authService.setupMfa(principal.userId, user?.email ?? '');
+  }
 
-    // Multiple orgs, no slug -> client must choose.
-    return { user, organizations, requiresOrgSelection: true };
+  @Post('mfa/verify-setup')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(JwtAuthGuard)
+  async verifyMfaSetup(
+    @CurrentUser() principal: AuthPrincipal,
+    @Body() dto: MfaVerifySetupDto,
+  ): Promise<void> {
+    await this.authService.verifyMfaSetup(principal.userId, dto.code);
+  }
+
+  @Post('mfa/disable')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(JwtAuthGuard)
+  async disableMfa(
+    @CurrentUser() principal: AuthPrincipal,
+    @Body() dto: MfaDisableDto,
+  ): Promise<void> {
+    await this.authService.disableMfa(principal.userId, dto.code);
   }
 
   @Post('refresh')
