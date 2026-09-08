@@ -83,6 +83,14 @@ export class OrganizationsService {
            ON CONFLICT (organization_id, code) DO NOTHING`,
           [orgId],
         );
+        // Default loan products per Decision Log v1.1 (3x / 15% / 12.5%)
+        await c.query(
+          `INSERT INTO loan_products (organization_id, code, name, interest_rate_pa, interest_method, multiplier)
+           VALUES ($1, 'CASH-LOAN', 'Cash Loan', 15, 'FLAT', 3),
+                  ($1, 'ASSET-FINANCE', 'Asset Finance', 12.5, 'FLAT', 3)
+           ON CONFLICT (organization_id, code) DO NOTHING`,
+          [orgId],
+        );
         // Open the current month's accounting period
         const now = new Date();
         const period = monthPeriod(

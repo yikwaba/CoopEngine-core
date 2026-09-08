@@ -92,6 +92,10 @@ const ROLE_TEMPLATES = {
     'payments.reconcile',
     'savings.post',
     'savings.withdraw',
+    'loans.review',
+    'loans.approve',
+    'loans.disburse',
+    'loans.restructure',
   ],
   CHAIRMAN: ['reports.view', 'reports.export', 'loans.approve', 'members.approve'],
   SECRETARY: [

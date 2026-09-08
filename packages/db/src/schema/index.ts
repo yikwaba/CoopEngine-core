@@ -460,6 +460,140 @@ export const savingsTransactions = pgTable(
   ],
 );
 
+/** Loan products (per tenant). Rate/interest method snapshotted on the loan. */
+export const loanProducts = pgTable(
+  'loan_products',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    code: varchar('code', { length: 32 }).notNull(),
+    name: varchar('name', { length: 120 }).notNull(),
+    interestRatePa: numeric('interest_rate_pa', {
+      precision: 7,
+      scale: 4,
+    })
+      .notNull()
+      .default('0'),
+    interestMethod: varchar('interest_method', { length: 16 })
+      .notNull()
+      .default('FLAT'), // FLAT | REDUCING
+    multiplier: numeric('multiplier', { precision: 5, scale: 2 })
+      .notNull()
+      .default('3'),
+    minPrincipal: numeric('min_principal', { precision: 19, scale: 2 })
+      .notNull()
+      .default('0'),
+    maxPrincipal: numeric('max_principal', { precision: 19, scale: 2 }),
+    status: text('status').notNull().default('ACTIVE'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('loan_products_org_code_uq').on(
+      table.organizationId,
+      table.code,
+    ),
+  ],
+);
+
+/** Loan applications with lifecycle state machine (PRD §13). */
+export const loans = pgTable(
+  'loans',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    loanProductId: uuid('loan_product_id')
+      .notNull()
+      .references(() => loanProducts.id),
+    principal: numeric('principal', { precision: 19, scale: 2 }).notNull(),
+    termMonths: bigint('term_months', { mode: 'number' }).notNull(),
+    // Rate snapshot at application time (product rates may change later).
+    interestRatePa: numeric('interest_rate_pa', {
+      precision: 7,
+      scale: 4,
+    }).notNull(),
+    interestMethod: varchar('interest_method', { length: 16 })
+      .notNull()
+      .default('FLAT'),
+    status: text('status').notNull().default('PENDING'), // PENDING|APPROVED|REJECTED|DISBURSED|COMPLETED|DEFAULTED
+    outstandingPrincipal: numeric('outstanding_principal', {
+      precision: 19,
+      scale: 2,
+    })
+      .notNull()
+      .default('0'),
+    rejectionReason: varchar('rejection_reason', { length: 255 }),
+    createdBy: uuid('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    approvedBy: uuid('approved_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    disbursedBy: uuid('disbursed_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    disbursedAt: timestamp('disbursed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    index('loans_org_status_idx').on(table.organizationId, table.status),
+    index('loans_org_member_idx').on(table.organizationId, table.memberId),
+  ],
+);
+
+/** Loan guarantors (min 2 per application; PRD §13). */
+export const loanGuarantors = pgTable(
+  'loan_guarantors',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    loanId: uuid('loan_id')
+      .notNull()
+      .references(() => loans.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('PENDING'), // PENDING|APPROVED|REJECTED
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('loan_guarantors_uq').on(table.loanId, table.memberId),
+  ],
+);
+
 /** Bulk member-import batches: validated preview rows awaiting commit. */
 export const importBatches = pgTable(
   'import_batches',
@@ -750,6 +884,12 @@ export type MemberSavingsAccount = typeof memberSavingsAccounts.$inferSelect;
 export type NewMemberSavingsAccount = typeof memberSavingsAccounts.$inferInsert;
 export type SavingsTransaction = typeof savingsTransactions.$inferSelect;
 export type NewSavingsTransaction = typeof savingsTransactions.$inferInsert;
+export type LoanProduct = typeof loanProducts.$inferSelect;
+export type NewLoanProduct = typeof loanProducts.$inferInsert;
+export type Loan = typeof loans.$inferSelect;
+export type NewLoan = typeof loans.$inferInsert;
+export type LoanGuarantor = typeof loanGuarantors.$inferSelect;
+export type NewLoanGuarantor = typeof loanGuarantors.$inferInsert;
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
 export type NextOfKin = typeof nextOfKin.$inferSelect;

@@ -30,6 +30,9 @@ const TABLES = [
   'savings_products',
   'member_savings_accounts',
   'savings_transactions',
+  'loan_products',
+  'loans',
+  'loan_guarantors',
 ];
 
 const BALANCED_JOURNAL_SQL = `
