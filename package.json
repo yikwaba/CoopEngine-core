@@ -1,0 +1,19 @@
+{
+  "name": "coopengine",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "dev": "turbo run dev --parallel",
+    "db:generate": "pnpm --filter @coopengine/db db:generate",
+    "db:migrate": "pnpm --filter @coopengine/db db:migrate"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3"
+  }
+}
