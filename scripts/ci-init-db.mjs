@@ -7,7 +7,14 @@
  * would make every isolation test meaningless. Local dev creates the role
  * with CREATE ROLE (plain login), matching what this script restores in CI.
  */
-import { Client } from 'pg';
+import { createRequire } from 'node:module';
+
+// pg is a dependency of @coopengine/db; under pnpm's strict layout it is not
+// resolvable from the repo root, so require it relative to packages/db.
+const require = createRequire(
+  new URL('../packages/db/package.json', import.meta.url),
+);
+const { Client } = require('pg');
 
 const admin = new Client({
   host: process.env.PGHOST ?? 'localhost',
