@@ -17,6 +17,7 @@ import {
   date,
   index,
   jsonb,
+  numeric,
   pgPolicy,
   pgTable,
   primaryKey,
@@ -69,6 +70,9 @@ export const orgCounters = pgTable(
       .primaryKey()
       .references(() => organizations.id, { onDelete: 'cascade' }),
     memberSeq: bigint('member_seq', { mode: 'number' })
+      .notNull()
+      .default(0),
+    journalSeq: bigint('journal_seq', { mode: 'number' })
       .notNull()
       .default(0),
     updatedAt: timestamp('updated_at', { withTimezone: true })
@@ -159,6 +163,168 @@ export const nextOfKin = pgTable(
       table.organizationId,
       table.memberId,
     ),
+  ],
+);
+
+/** Chart of accounts (per tenant). Codes unique within the tenant. */
+export const chartOfAccounts = pgTable(
+  'chart_of_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    code: varchar('code', { length: 16 }).notNull(),
+    name: varchar('name', { length: 180 }).notNull(),
+    type: varchar('type', { length: 16 }).notNull(), // ASSET|LIABILITY|EQUITY|INCOME|EXPENSE
+    category: varchar('category', { length: 80 }),
+    parentId: uuid('parent_id').references((): any => chartOfAccounts.id, {
+      onDelete: 'set null',
+    }),
+    isSystem: boolean('is_system').notNull().default(false),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('coa_org_code_uq').on(table.organizationId, table.code),
+  ],
+);
+
+/** Accounting periods: OPEN -> SOFT_CLOSED -> LOCKED (per tenant). */
+export const ledgerPeriods = pgTable(
+  'ledger_periods',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    code: varchar('code', { length: 7 }).notNull(), // YYYY-MM
+    startDate: date('start_date').notNull(),
+    endDate: date('end_date').notNull(),
+    status: text('status').notNull().default('OPEN'), // OPEN|SOFT_CLOSED|LOCKED
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('ledger_periods_org_code_uq').on(
+      table.organizationId,
+      table.code,
+    ),
+  ],
+);
+
+/**
+ * Journal entries (append-only): DRAFT -> SUBMITTED -> POSTED -> REVERSED.
+ * Never edited after posting; reversals create linked opposite entries.
+ */
+export const journalEntries = pgTable(
+  'journal_entries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    periodId: uuid('period_id')
+      .notNull()
+      .references(() => ledgerPeriods.id),
+    entryNo: bigint('entry_no', { mode: 'number' }), // allocated on POST
+    entryDate: date('entry_date').notNull(),
+    description: varchar('description', { length: 255 }).notNull(),
+    source: varchar('source', { length: 40 }).notNull().default('MANUAL'),
+    sourceType: varchar('source_type', { length: 40 }),
+    sourceId: uuid('source_id'),
+    status: text('status').notNull().default('DRAFT'), // DRAFT|SUBMITTED|POSTED|REVERSED
+    idempotencyKey: varchar('idempotency_key', { length: 100 }),
+    createdBy: uuid('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    postedBy: uuid('posted_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    postedAt: timestamp('posted_at', { withTimezone: true }),
+    reversalOfEntryId: uuid('reversal_of_entry_id').references(
+      (): any => journalEntries.id,
+      { onDelete: 'set null' },
+    ),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('journal_entries_org_no_uq')
+      .on(table.organizationId, table.entryNo)
+      .where(sql`${table.entryNo} IS NOT NULL`),
+    index('journal_entries_org_status_idx').on(
+      table.organizationId,
+      table.status,
+    ),
+    index('journal_entries_org_date_idx').on(
+      table.organizationId,
+      table.entryDate,
+    ),
+  ],
+);
+
+/** Journal lines: single-sided debits/credits, balanced per entry. */
+export const journalLines = pgTable(
+  'journal_lines',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    journalEntryId: uuid('journal_entry_id')
+      .notNull()
+      .references(() => journalEntries.id, { onDelete: 'cascade' }),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => chartOfAccounts.id),
+    debit: numeric('debit', { precision: 19, scale: 2 })
+      .notNull()
+      .default('0'),
+    credit: numeric('credit', { precision: 19, scale: 2 })
+      .notNull()
+      .default('0'),
+    memo: varchar('memo', { length: 255 }),
+    memberId: uuid('member_id').references(() => members.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    index('journal_lines_entry_idx').on(table.journalEntryId),
   ],
 );
 
@@ -438,6 +604,14 @@ export type Branch = typeof branches.$inferSelect;
 export type NewBranch = typeof branches.$inferInsert;
 export type OrgCounter = typeof orgCounters.$inferSelect;
 export type NewOrgCounter = typeof orgCounters.$inferInsert;
+export type ChartOfAccount = typeof chartOfAccounts.$inferSelect;
+export type NewChartOfAccount = typeof chartOfAccounts.$inferInsert;
+export type LedgerPeriod = typeof ledgerPeriods.$inferSelect;
+export type NewLedgerPeriod = typeof ledgerPeriods.$inferInsert;
+export type JournalEntry = typeof journalEntries.$inferSelect;
+export type NewJournalEntry = typeof journalEntries.$inferInsert;
+export type JournalLine = typeof journalLines.$inferSelect;
+export type NewJournalLine = typeof journalLines.$inferInsert;
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
 export type NextOfKin = typeof nextOfKin.$inferSelect;

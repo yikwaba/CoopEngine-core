@@ -86,6 +86,10 @@ const ROLE_TEMPLATES = {
     'documents.manage',
     'notifications.send',
     'audit.view',
+    'journals.create',
+    'journals.approve',
+    'journals.post',
+    'payments.reconcile',
   ],
   CHAIRMAN: ['reports.view', 'reports.export', 'loans.approve', 'members.approve'],
   SECRETARY: [

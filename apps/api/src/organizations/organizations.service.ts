@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
+import { DEFAULT_CHART_OF_ACCOUNTS, monthPeriod } from '@coopengine/shared';
 import * as bcrypt from 'bcryptjs';
 import { DB_POOL } from '../database/database.module';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
@@ -59,6 +60,33 @@ export class OrganizationsService {
           `INSERT INTO branches (organization_id, name, code, is_headquarters)
            VALUES ($1, $2, $3, true)`,
           [orgId, `${dto.name} Head Office`, 'HQ'],
+        );
+        // Baseline chart of accounts
+        for (const account of DEFAULT_CHART_OF_ACCOUNTS) {
+          await c.query(
+            `INSERT INTO chart_of_accounts (id, organization_id, code, name, type, category, is_system)
+             VALUES ($1, $2, $3, $4, $5, $6, true)`,
+            [
+              randomUUID(),
+              orgId,
+              account.code,
+              account.name,
+              account.type,
+              account.category,
+            ],
+          );
+        }
+        // Open the current month's accounting period
+        const now = new Date();
+        const period = monthPeriod(
+          now.getUTCFullYear(),
+          now.getUTCMonth() + 1,
+        );
+        await c.query(
+          `INSERT INTO ledger_periods (organization_id, code, start_date, end_date, status)
+           VALUES ($1, $2, $3, $4, 'OPEN')
+           ON CONFLICT (organization_id, code) DO NOTHING`,
+          [orgId, period.code, period.startDate, period.endDate],
         );
       });
 

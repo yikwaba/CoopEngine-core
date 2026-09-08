@@ -52,5 +52,60 @@ export const ACCOUNTING_PERIOD_STATE = [
 ] as const;
 export type AccountingPeriodState = (typeof ACCOUNTING_PERIOD_STATE)[number];
 
+export type AccountType =
+  | 'ASSET'
+  | 'LIABILITY'
+  | 'EQUITY'
+  | 'INCOME'
+  | 'EXPENSE';
+
+export interface DefaultAccount {
+  code: string;
+  name: string;
+  type: AccountType;
+  category: string;
+}
+
+/**
+ * Baseline chart of accounts seeded for every cooperative at onboarding
+ * (Decision Log v1.1 — owner-approved; external accountant review deferred).
+ */
+export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
+  { code: '1000', name: 'Cash at Bank', type: 'ASSET', category: 'Cash & Bank' },
+  { code: '1010', name: 'Cash on Hand', type: 'ASSET', category: 'Cash & Bank' },
+  { code: '1020', name: 'Loan Receivables', type: 'ASSET', category: 'Loans' },
+  { code: '1030', name: 'Accrued Interest Receivable', type: 'ASSET', category: 'Loans' },
+  { code: '1100', name: 'Property and Equipment', type: 'ASSET', category: 'Fixed Assets' },
+  { code: '2000', name: 'Member Savings Deposits', type: 'LIABILITY', category: 'Member Funds' },
+  { code: '2010', name: 'Due to Members', type: 'LIABILITY', category: 'Member Funds' },
+  { code: '2100', name: 'Accrued Expenses', type: 'LIABILITY', category: 'Liabilities' },
+  { code: '3000', name: 'Member Share Capital', type: 'EQUITY', category: 'Capital' },
+  { code: '3010', name: 'Retained Earnings', type: 'EQUITY', category: 'Capital' },
+  { code: '3020', name: 'Current Year Earnings', type: 'EQUITY', category: 'Capital' },
+  { code: '4000', name: 'Loan Interest Income', type: 'INCOME', category: 'Income' },
+  { code: '4010', name: 'Investment Income', type: 'INCOME', category: 'Income' },
+  { code: '4020', name: 'Fees and Charges Income', type: 'INCOME', category: 'Income' },
+  { code: '4030', name: 'Penalties Income', type: 'INCOME', category: 'Income' },
+  { code: '5000', name: 'Interest on Savings', type: 'EXPENSE', category: 'Expenses' },
+  { code: '5010', name: 'Administrative Expenses', type: 'EXPENSE', category: 'Expenses' },
+  { code: '5020', name: 'Loan Loss Provision', type: 'EXPENSE', category: 'Expenses' },
+  { code: '5030', name: 'Depreciation', type: 'EXPENSE', category: 'Expenses' },
+];
+
+/** YYYY-MM code + inclusive date range for a month period. */
+export function monthPeriod(
+  year: number,
+  month: number, // 1-12
+): { code: string; startDate: string; endDate: string } {
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 0)); // last day of month
+  const iso = (d: Date): string => d.toISOString().slice(0, 10);
+  return {
+    code: `${year}-${String(month).padStart(2, '0')}`,
+    startDate: iso(start),
+    endDate: iso(end),
+  };
+}
+
 /** Tenant-scoped core table prefix guarantee (RLS strategy). */
 export const TENANT_ID_COLUMN = 'organization_id' as const;
