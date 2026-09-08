@@ -26,3 +26,6 @@ pnpm-debug.log*
 
 # Local docker data
 .docker-data/
+
+# TypeScript build info
+*.tsbuildinfo
