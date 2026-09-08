@@ -14,8 +14,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --exclude '**/*.integration.spec.ts'",
+    "test:integration": "vitest run test/tenancy.integration.spec.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "db:force-rls": "node scripts/force-rls.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.36.4",
@@ -25,6 +28,7 @@
     "@types/node": "^22.10.0",
     "@types/pg": "^8.11.10",
     "drizzle-kit": "^0.28.1",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9"
   }
 }
