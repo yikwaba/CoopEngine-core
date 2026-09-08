@@ -75,6 +75,9 @@ export const orgCounters = pgTable(
     journalSeq: bigint('journal_seq', { mode: 'number' })
       .notNull()
       .default(0),
+    savingsSeq: bigint('savings_seq', { mode: 'number' })
+      .notNull()
+      .default(0),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -325,6 +328,135 @@ export const journalLines = pgTable(
       withCheck: tenantScope(table.organizationId),
     }),
     index('journal_lines_entry_idx').on(table.journalEntryId),
+  ],
+);
+
+/** Savings products (per tenant), e.g. Regular Savings. */
+export const savingsProducts = pgTable(
+  'savings_products',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    code: varchar('code', { length: 32 }).notNull(),
+    name: varchar('name', { length: 120 }).notNull(),
+    interestRatePa: numeric('interest_rate_pa', {
+      precision: 7,
+      scale: 4,
+    })
+      .notNull()
+      .default('0'),
+    minDeposit: numeric('min_deposit', { precision: 19, scale: 2 })
+      .notNull()
+      .default('0'),
+    allowWithdrawal: boolean('allow_withdrawal').notNull().default(true),
+    status: text('status').notNull().default('ACTIVE'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('savings_products_org_code_uq').on(
+      table.organizationId,
+      table.code,
+    ),
+  ],
+);
+
+/** Member savings accounts — one per (member, product) per tenant. */
+export const memberSavingsAccounts = pgTable(
+  'member_savings_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    productId: uuid('product_id')
+      .notNull()
+      .references(() => savingsProducts.id),
+    accountNo: bigint('account_no', { mode: 'number' }).notNull(),
+    currentBalance: numeric('current_balance', { precision: 19, scale: 2 })
+      .notNull()
+      .default('0'),
+    status: text('status').notNull().default('ACTIVE'),
+    openedAt: timestamp('opened_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('savings_accounts_org_no_uq').on(
+      table.organizationId,
+      table.accountNo,
+    ),
+    uniqueIndex('savings_accounts_member_product_uq').on(
+      table.organizationId,
+      table.memberId,
+      table.productId,
+    ),
+  ],
+);
+
+/**
+ * Savings transaction projection (append-only). The JOURNAL is the source
+ * of truth; this table keeps member statements and running balances fast.
+ * Written in the same transaction as the posting.
+ */
+export const savingsTransactions = pgTable(
+  'savings_transactions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => memberSavingsAccounts.id, { onDelete: 'cascade' }),
+    journalEntryId: uuid('journal_entry_id')
+      .notNull()
+      .references(() => journalEntries.id),
+    type: varchar('type', { length: 12 }).notNull(), // DEPOSIT|WITHDRAWAL|INTEREST|FEE
+    signedAmount: numeric('signed_amount', { precision: 19, scale: 2 })
+      .notNull(),
+    runningBalance: numeric('running_balance', { precision: 19, scale: 2 })
+      .notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    index('savings_txn_account_time_idx').on(
+      table.accountId,
+      table.createdAt,
+    ),
   ],
 );
 
@@ -612,6 +744,12 @@ export type JournalEntry = typeof journalEntries.$inferSelect;
 export type NewJournalEntry = typeof journalEntries.$inferInsert;
 export type JournalLine = typeof journalLines.$inferSelect;
 export type NewJournalLine = typeof journalLines.$inferInsert;
+export type SavingsProduct = typeof savingsProducts.$inferSelect;
+export type NewSavingsProduct = typeof savingsProducts.$inferInsert;
+export type MemberSavingsAccount = typeof memberSavingsAccounts.$inferSelect;
+export type NewMemberSavingsAccount = typeof memberSavingsAccounts.$inferInsert;
+export type SavingsTransaction = typeof savingsTransactions.$inferSelect;
+export type NewSavingsTransaction = typeof savingsTransactions.$inferInsert;
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
 export type NextOfKin = typeof nextOfKin.$inferSelect;

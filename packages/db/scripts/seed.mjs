@@ -90,6 +90,8 @@ const ROLE_TEMPLATES = {
     'journals.approve',
     'journals.post',
     'payments.reconcile',
+    'savings.post',
+    'savings.withdraw',
   ],
   CHAIRMAN: ['reports.view', 'reports.export', 'loans.approve', 'members.approve'],
   SECRETARY: [

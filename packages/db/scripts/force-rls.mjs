@@ -27,6 +27,9 @@ const TABLES = [
   'ledger_periods',
   'journal_entries',
   'journal_lines',
+  'savings_products',
+  'member_savings_accounts',
+  'savings_transactions',
 ];
 
 const BALANCED_JOURNAL_SQL = `

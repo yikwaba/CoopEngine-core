@@ -76,6 +76,13 @@ export class OrganizationsService {
             ],
           );
         }
+        // Default savings product (rate configured later by the coop)
+        await c.query(
+          `INSERT INTO savings_products (organization_id, code, name, interest_rate_pa, min_deposit, allow_withdrawal)
+           VALUES ($1, 'REGULAR-SAVINGS', 'Regular Savings', 0, 0, true)
+           ON CONFLICT (organization_id, code) DO NOTHING`,
+          [orgId],
+        );
         // Open the current month's accounting period
         const now = new Date();
         const period = monthPeriod(

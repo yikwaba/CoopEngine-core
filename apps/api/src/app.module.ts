@@ -4,6 +4,7 @@ import { AuthModule } from './auth/auth.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { MembersModule } from './members/members.module';
 import { LedgerModule } from './ledger/ledger.module';
+import { SavingsModule } from './savings/savings.module';
 import { DatabaseModule } from './database/database.module';
 
 @Module({
@@ -13,6 +14,7 @@ import { DatabaseModule } from './database/database.module';
     OrganizationsModule,
     MembersModule,
     LedgerModule,
+    SavingsModule,
     HealthModule,
   ],
 })
