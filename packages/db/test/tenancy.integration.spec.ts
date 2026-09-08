@@ -109,6 +109,18 @@ describe('tenant isolation (RLS)', () => {
 
     // Tenant A cannot read tenant B's org row by guessed UUID
     await withTenant(pool, orgA, async (c) => {
+      const diag = await c.query(
+        `SELECT current_setting('app.tenant_id', true) AS guc,
+                (SELECT count(*)::int FROM pg_policies WHERE schemaname='public' AND tablename='organizations' AND policyname='tenant_isolation') AS org_policies,
+                (SELECT relforcerowsecurity::int FROM pg_class WHERE relname='organizations') AS org_force,
+                (SELECT relrowsecurity::int FROM pg_class WHERE relname='organizations') AS org_rls`,
+      );
+      const d = diag.rows[0] as { guc: string | null; org_policies: number; org_force: number; org_rls: number };
+      console.log('TENANCY DIAG', JSON.stringify({ ...d, orgA, orgB }));
+      expect(d.guc).toBe(orgA);
+      expect(d.org_policies).toBe(1);
+      expect(d.org_force).toBe(1);
+      expect(d.org_rls).toBe(1);
       const { rows } = await c.query(
         `SELECT id, slug FROM organizations WHERE id = $1`,
         [orgB],
