@@ -18,9 +18,11 @@
     "test:integration": "vitest run test/tenancy.integration.spec.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:force-rls": "node scripts/force-rls.mjs"
+    "db:force-rls": "node scripts/force-rls.mjs",
+    "db:seed": "node scripts/seed.mjs"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "drizzle-orm": "^0.36.4",
     "pg": "^8.13.1"
   },
