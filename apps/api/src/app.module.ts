@@ -7,6 +7,7 @@ import { LedgerModule } from './ledger/ledger.module';
 import { SavingsModule } from './savings/savings.module';
 import { LoansModule } from './loans/loans.module';
 import { SharesModule } from './shares/shares.module';
+import { ReportsModule } from './reports/reports.module';
 import { DatabaseModule } from './database/database.module';
 
 @Module({
@@ -19,6 +20,7 @@ import { DatabaseModule } from './database/database.module';
     SavingsModule,
     LoansModule,
     SharesModule,
+    ReportsModule,
     HealthModule,
   ],
 })

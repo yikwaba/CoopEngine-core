@@ -1,0 +1,38 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background: #f4f6f8;
+  color: #17202a;
+}
+a { color: #0a6c2e; }
+.card {
+  background: #fff;
+  border: 1px solid #e3e8ee;
+  border-radius: 10px;
+  padding: 18px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+.stat-value { font-size: 26px; font-weight: 700; margin: 4px 0 0; }
+.stat-label { color: #5b6772; font-size: 13px; text-transform: uppercase; letter-spacing: 0.4px; }
+table.data { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.data th, table.data td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eef1f5; }
+table.data th { color: #5b6772; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+.btn {
+  background: #0a6c2e;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 15px;
+  cursor: pointer;
+}
+.btn:hover { background: #085a26; }
+.btn.secondary { background: #eef1f5; color: #17202a; }
+input.field {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #c9d2db;
+  border-radius: 8px;
+  font-size: 15px;
+}
