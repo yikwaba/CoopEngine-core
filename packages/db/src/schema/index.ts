@@ -12,7 +12,9 @@
  */
 
 import {
+  bigint,
   boolean,
+  date,
   index,
   jsonb,
   pgPolicy,
@@ -20,6 +22,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
@@ -55,6 +58,107 @@ export const organizations = pgTable(
       using: tenantScope(table.id),
       withCheck: tenantScope(table.id),
     }),
+  ],
+);
+
+/** Per-tenant running counters (e.g. member_no) — row-locked increments. */
+export const orgCounters = pgTable(
+  'org_counters',
+  {
+    organizationId: uuid('organization_id')
+      .primaryKey()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberSeq: bigint('member_seq', { mode: 'number' })
+      .notNull()
+      .default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+  ],
+);
+
+export const members = pgTable(
+  'members',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberNo: bigint('member_no', { mode: 'number' }).notNull(),
+    firstName: varchar('first_name', { length: 120 }).notNull(),
+    lastName: varchar('last_name', { length: 120 }).notNull(),
+    email: varchar('email', { length: 320 }),
+    phone: varchar('phone', { length: 32 }),
+    gender: varchar('gender', { length: 16 }),
+    dateOfBirth: date('date_of_birth'),
+    status: text('status').notNull().default('PENDING'),
+    joinedAt: timestamp('joined_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    index('members_org_status_idx').on(table.organizationId, table.status),
+    uniqueIndex('members_org_member_no_uq').on(
+      table.organizationId,
+      table.memberNo,
+    ),
+  ],
+);
+
+export const nextOfKin = pgTable(
+  'next_of_kin',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    fullName: varchar('full_name', { length: 255 }).notNull(),
+    relationship: varchar('relationship', { length: 64 }),
+    phone: varchar('phone', { length: 32 }),
+    email: varchar('email', { length: 320 }),
+    address: text('address'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    index('next_of_kin_org_member_idx').on(
+      table.organizationId,
+      table.memberId,
+    ),
   ],
 );
 
@@ -291,6 +395,12 @@ export type OrganizationSettings = typeof organizationSettings.$inferSelect;
 export type NewOrganizationSettings = typeof organizationSettings.$inferInsert;
 export type Branch = typeof branches.$inferSelect;
 export type NewBranch = typeof branches.$inferInsert;
+export type OrgCounter = typeof orgCounters.$inferSelect;
+export type NewOrgCounter = typeof orgCounters.$inferInsert;
+export type Member = typeof members.$inferSelect;
+export type NewMember = typeof members.$inferInsert;
+export type NextOfKin = typeof nextOfKin.$inferSelect;
+export type NewNextOfKin = typeof nextOfKin.$inferInsert;
 export type Role = typeof roles.$inferSelect;
 export type NewRole = typeof roles.$inferInsert;
 export type User = typeof users.$inferSelect;

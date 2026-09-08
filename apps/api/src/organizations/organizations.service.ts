@@ -52,6 +52,10 @@ export class OrganizationsService {
           [orgId],
         );
         await c.query(
+          `INSERT INTO org_counters (organization_id) VALUES ($1)`,
+          [orgId],
+        );
+        await c.query(
           `INSERT INTO branches (organization_id, name, code, is_headquarters)
            VALUES ($1, $2, $3, true)`,
           [orgId, `${dto.name} Head Office`, 'HQ'],

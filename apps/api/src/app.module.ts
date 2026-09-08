@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { OrganizationsModule } from './organizations/organizations.module';
+import { MembersModule } from './members/members.module';
 import { DatabaseModule } from './database/database.module';
 
 @Module({
@@ -9,6 +10,7 @@ import { DatabaseModule } from './database/database.module';
     DatabaseModule,
     AuthModule,
     OrganizationsModule,
+    MembersModule,
     HealthModule,
   ],
 })

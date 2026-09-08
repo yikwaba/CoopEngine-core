@@ -19,6 +19,9 @@ const TABLES = [
   'organizations',
   'organization_settings',
   'branches',
+  'members',
+  'next_of_kin',
+  'org_counters',
 ];
 
 const url =
