@@ -52,6 +52,12 @@ export class ReportsController {
     return this.reportsService.loanBook(principal.organizationId);
   }
 
+  @Get('savings-reconciliation')
+  @RequirePermissions('reports.view', 'settings.manage', 'savings.post', 'payroll.post')
+  savingsReconciliation(@CurrentUser() principal: AuthPrincipal) {
+    return this.reportsService.savingsReconciliation(principal.organizationId);
+  }
+
   @Get('audit-logs')
   @RequirePermissions('audit.view', 'settings.manage', 'reports.view')
   auditLogs(

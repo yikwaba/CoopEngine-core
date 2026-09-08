@@ -701,6 +701,46 @@ export const shareTransactions = pgTable(
   ],
 );
 
+/** Bulk payroll-deduction batches (preview -> commit; FR-020). */
+export const payrollBatches = pgTable(
+  'payroll_batches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    filename: varchar('filename', { length: 255 }).notNull(),
+    status: text('status').notNull().default('PENDING'), // PENDING|PREVIEWED|COMMITTED
+    totalRows: bigint('total_rows', { mode: 'number' }).notNull().default(0),
+    validRows: bigint('valid_rows', { mode: 'number' }).notNull().default(0),
+    invalidCount: bigint('invalid_count', { mode: 'number' })
+      .notNull()
+      .default(0),
+    rows: jsonb('rows'),
+    totalAmount: numeric('total_amount', { precision: 19, scale: 2 })
+      .notNull()
+      .default('0'),
+    createdBy: uuid('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    committedBy: uuid('committed_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    committedAt: timestamp('committed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+  ],
+);
+
 /** Bulk member-import batches: validated preview rows awaiting commit. */
 export const importBatches = pgTable(
   'import_batches',
@@ -1003,6 +1043,8 @@ export type MemberShareAccount = typeof memberShareAccounts.$inferSelect;
 export type NewMemberShareAccount = typeof memberShareAccounts.$inferInsert;
 export type ShareTransaction = typeof shareTransactions.$inferSelect;
 export type NewShareTransaction = typeof shareTransactions.$inferInsert;
+export type PayrollBatch = typeof payrollBatches.$inferSelect;
+export type NewPayrollBatch = typeof payrollBatches.$inferInsert;
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
 export type NextOfKin = typeof nextOfKin.$inferSelect;

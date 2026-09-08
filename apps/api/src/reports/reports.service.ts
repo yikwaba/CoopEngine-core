@@ -238,6 +238,75 @@ export class ReportsService {
     });
   }
 
+  /**
+   * Savings reconciliation: projection (member_savings_accounts.current_balance)
+   * vs the ledger truth (sum of 2000-side lines of POSTED savings entries).
+   */
+  async savingsReconciliation(organizationId: string | null): Promise<{
+    checked: number;
+    matched: number;
+    mismatches: {
+      accountId: string;
+      memberNo: number;
+      projected: number;
+      ledger: number;
+      diff: number;
+    }[];
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT a.id AS account_id, m.member_no, a.current_balance AS projected,
+                COALESCE((
+                  SELECT SUM(CASE WHEN jl.credit > 0 THEN jl.credit ELSE -jl.debit END)
+                    FROM journal_lines jl
+                    JOIN journal_entries je ON je.id = jl.journal_entry_id
+                   WHERE je.organization_id = a.organization_id
+                     AND je.status = 'POSTED'
+                     AND jl.member_id = a.member_id
+                     AND jl.account_id = (
+                       SELECT id FROM chart_of_accounts ca
+                        WHERE ca.organization_id = a.organization_id AND ca.code = '2000'
+                     )
+                ), 0) AS ledger
+           FROM member_savings_accounts a
+           JOIN members m ON m.id = a.member_id
+          WHERE a.organization_id = $1`,
+        [orgId],
+      );
+      const mismatches: {
+        accountId: string;
+        memberNo: number;
+        projected: number;
+        ledger: number;
+        diff: number;
+      }[] = [];
+      for (const r of rows as {
+        account_id: string;
+        member_no: number;
+        projected: string;
+        ledger: string;
+      }[]) {
+        const projected = Number(r.projected);
+        const ledger = Number(r.ledger);
+        if (Math.abs(projected - ledger) > 0.004) {
+          mismatches.push({
+            accountId: r.account_id,
+            memberNo: Number(r.member_no),
+            projected,
+            ledger,
+            diff: Math.round((projected - ledger) * 100) / 100,
+          });
+        }
+      }
+      return {
+        checked: rows.length,
+        matched: rows.length - mismatches.length,
+        mismatches,
+      };
+    });
+  }
+
   /** Audit trail (system table, NOT RLS-scoped — org filter is explicit). */
   async auditLogs(
     organizationId: string | null,

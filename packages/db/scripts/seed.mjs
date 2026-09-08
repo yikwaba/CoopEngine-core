@@ -97,6 +97,9 @@ const ROLE_TEMPLATES = {
     'loans.disburse',
     'loans.restructure',
     'shares.post',
+    'payroll.upload',
+    'payroll.approve',
+    'payroll.post',
   ],
   CHAIRMAN: ['reports.view', 'reports.export', 'loans.approve', 'members.approve'],
   SECRETARY: [
