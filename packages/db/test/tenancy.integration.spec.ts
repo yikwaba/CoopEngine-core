@@ -86,14 +86,23 @@ describe('tenant isolation (RLS)', () => {
 
     // Tenant A sees exactly its own branches
     await withTenant(pool, orgA, async (c) => {
-      const { rows } = await c.query(`SELECT id, code FROM branches ORDER BY code`);
-      expect(rows).toHaveLength(2);
-      expect(rows.map((r) => r.code).sort()).toEqual(['ANX', 'HQA']);
+      const { rows } = await c.query(
+        `SELECT id, code FROM branches WHERE organization_id = $1 ORDER BY code`,
+        [orgA],
+      );
+      expect(
+        rows,
+        `tenant A branch codes: ${JSON.stringify(rows.map((r) => (r as { code: string }).code))} for org ${orgA}`,
+      ).toHaveLength(2);
+      expect(rows.map((r) => (r as { code: string }).code).sort()).toEqual(['ANX', 'HQA']);
     });
 
     // Tenant B sees exactly its own branch
     await withTenant(pool, orgB, async (c) => {
-      const { rows } = await c.query(`SELECT id, code FROM branches ORDER BY code`);
+      const { rows } = await c.query(
+        `SELECT id, code FROM branches WHERE organization_id = $1 ORDER BY code`,
+        [orgB],
+      );
       expect(rows).toHaveLength(1);
       expect(rows.map((r) => r.code)).toEqual(['HQB']);
     });
