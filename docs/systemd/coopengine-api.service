@@ -1,0 +1,28 @@
+# Co-opEngine API — systemd user unit (Contabo VPS).
+#
+# Install (run once, as the service user):
+#   mkdir -p ~/.config/systemd/user
+#   cp docs/systemd/coopengine-api.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now coopengine-api
+#
+# Environment file (dev on this box): /root/coopengine/api.env
+# For production set NODE_ENV=production and the required secrets there.
+
+[Unit]
+Description=Co-opEngine API (NestJS, multi-tenant cooperative platform)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/CoopEngine-core/apps/api
+EnvironmentFile=/root/coopengine/api.env
+ExecStart=/usr/bin/env node /root/CoopEngine-core/apps/api/dist/main.js
+Restart=on-failure
+RestartSec=3
+# Keep the working set modest for the Contabo VPS
+Environment=NODE_OPTIONS=--max-old-space-size=512
+
+[Install]
+WantedBy=default.target
