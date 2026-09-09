@@ -24,4 +24,20 @@ export class MemberSpaceController {
       principal.memberId,
     );
   }
+
+  @Get('virtual-account')
+  virtualAccount(@CurrentMember() principal: MemberPrincipal) {
+    return this.memberSpaceService.virtualAccount(
+      principal.organizationId,
+      principal.memberId,
+    );
+  }
+
+  @Get('payments')
+  payments(@CurrentMember() principal: MemberPrincipal) {
+    return this.memberSpaceService.myPayments(
+      principal.organizationId,
+      principal.memberId,
+    );
+  }
 }

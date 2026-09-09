@@ -26,7 +26,10 @@ let pool: Pool;
 const sign = (rawBody: string): string =>
   createHash('sha512').update(`${MONNIFY_SECRET}|${rawBody}`).digest('hex');
 
-async function onboardCoop(label: string): Promise<{ tokens: { accessToken: string } }> {
+async function onboardCoop(label: string): Promise<{
+  tokens: { accessToken: string };
+  slug: string;
+}> {
   const saasLogin = await request(app.getHttpServer())
     .post('/api/v1/auth/login')
     .send({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD });
@@ -46,18 +49,22 @@ async function onboardCoop(label: string): Promise<{ tokens: { accessToken: stri
     .post('/api/v1/auth/login')
     .send({ email: `${label}-${suffix}@coopengine.test`, password: 'CoopPass123!' });
   expect(coopLogin.status).toBe(200);
-  return { tokens: { accessToken: coopLogin.body.tokens.accessToken as string } };
+  return {
+    tokens: { accessToken: coopLogin.body.tokens.accessToken as string },
+    slug: onboard.body.slug as string,
+  };
 }
 
 async function createActiveMember(
   coop: { tokens: { accessToken: string } },
   seed: string,
+  email?: string,
 ): Promise<string> {
   const auth = { Authorization: `Bearer ${coop.tokens.accessToken}` };
   const created = await request(app.getHttpServer())
     .post('/api/v1/members')
     .set(auth)
-    .send({ firstName: `Pay${seed}`, lastName: 'Member', email: `pay-${seed}-${randomUUID().slice(0, 6)}@coopengine.test` });
+    .send({ firstName: `Pay${seed}`, lastName: 'Member', email: email ?? `pay-${seed}-${randomUUID().slice(0, 6)}@coopengine.test` });
   expect(created.status).toBe(201);
   const id = created.body.id as string;
   await request(app.getHttpServer()).post(`/api/v1/members/${id}/approve`).set(auth);
@@ -123,7 +130,8 @@ describe('virtual-account payments', () => {
   it('creates accounts and auto-posts signature-verified webhooks', async () => {
     const coop = await onboardCoop('mny');
     const auth = { Authorization: `Bearer ${coop.tokens.accessToken}` };
-    const memberId = await createActiveMember(coop, 'V');
+    const memberEmail = `pay-${coop.slug}@coopengine.test`;
+    const memberId = await createActiveMember(coop, 'V', memberEmail);
 
     // Create a virtual account (dev provider)
     const created = await request(app.getHttpServer())
@@ -214,5 +222,32 @@ describe('virtual-account payments', () => {
       .get('/api/v1/payments/internal/notifications')
       .set(auth);
     expect(listAfter.body).toHaveLength(1);
+    expect(listAfter.headers['x-total-count']).toBe('1');
+
+    // Member self-service: sees their own account + funding history (OTP login)
+    const otp = await request(app.getHttpServer())
+      .post('/api/v1/auth/member/request-otp')
+      .send({ organizationSlug: coop.slug, email: memberEmail });
+    expect(otp.status).toBe(200);
+    expect(otp.body.devCode).toBeTruthy();
+    const verify = await request(app.getHttpServer())
+      .post('/api/v1/auth/member/verify-otp')
+      .send({ organizationSlug: coop.slug, email: memberEmail, code: otp.body.devCode });
+    expect(verify.status).toBe(200);
+    const memberTok = verify.body.accessToken as string;
+
+    const myAccount = await request(app.getHttpServer())
+      .get('/api/v1/member/virtual-account')
+      .set({ Authorization: `Bearer ${memberTok}` });
+    expect(myAccount.status).toBe(200);
+    expect(myAccount.body.accountNumber).toBe(accountNumber);
+
+    const myPayments = await request(app.getHttpServer())
+      .get('/api/v1/member/payments')
+      .set({ Authorization: `Bearer ${memberTok}` });
+    expect(myPayments.status).toBe(200);
+    expect(myPayments.body).toHaveLength(1);
+    expect(myPayments.body[0].amount).toBe(25000);
+    expect(myPayments.body[0].status).toBe('POSTED');
   });
 });

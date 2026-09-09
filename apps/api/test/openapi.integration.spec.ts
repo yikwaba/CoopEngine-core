@@ -53,6 +53,10 @@ describe('OpenAPI contract', () => {
       '/api/v1/ledger/journals',
       '/api/v1/ledger/trial-balance',
       '/api/v1/shares/member/:memberId/redemptions',
+      // payments (virtual accounts + webhook)
+      '/api/v1/payments/virtual-accounts',
+      '/api/v1/payments/monnify/webhook',
+      '/api/v1/payments/internal/notifications',
       // reports
       '/api/v1/reports/member/:memberId/360',
       '/api/v1/reports/loans-aging',
@@ -61,6 +65,8 @@ describe('OpenAPI contract', () => {
       '/api/v1/auth/member/request-otp',
       '/api/v1/auth/member/verify-otp',
       '/api/v1/member/dashboard',
+      '/api/v1/member/virtual-account',
+      '/api/v1/member/payments',
     ];
 
     const missing = required.filter((r) => !paths.includes(r));

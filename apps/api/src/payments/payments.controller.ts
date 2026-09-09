@@ -10,9 +10,10 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { PaymentsService } from './payments.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -68,12 +69,18 @@ export class PaymentsInternalController {
   @RequirePermissions('payments.reconcile', 'audit.view', 'settings.manage')
   async listNotifications(
     @CurrentUser() principal: AuthPrincipal,
+    @Res({ passthrough: true }) res: Response,
     @Query('accountNumber') accountNumber?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
-    const rows = await this.paymentsService.listNotifications(
+    const { items, total } = await this.paymentsService.listNotifications(
       principal.organizationId,
       accountNumber,
+      limit ? Number(limit) : undefined,
+      offset ? Number(offset) : undefined,
     );
-    return rows;
+    res.setHeader('X-Total-Count', String(total));
+    return items;
   }
 }

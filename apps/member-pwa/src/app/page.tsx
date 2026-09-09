@@ -24,12 +24,31 @@ interface Dashboard {
   }[];
 }
 
+interface VirtualAccount {
+  id: string;
+  provider: string;
+  accountNumber: string;
+  accountName: string;
+  bankName: string;
+  status: string;
+}
+
+interface MemberPayment {
+  id: string;
+  paymentReference: string;
+  amount: number;
+  paidAt: string;
+  status: string;
+}
+
 const naira = (n: number): string =>
   `₦${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
 export default function MemberDashboardPage() {
   const router = useRouter();
   const [data, setData] = useState<Dashboard | null>(null);
+  const [vAccount, setVAccount] = useState<VirtualAccount | null>(null);
+  const [funding, setFunding] = useState<MemberPayment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const info = readMemberInfo();
 
@@ -42,8 +61,16 @@ export default function MemberDashboardPage() {
     let cancelled = false;
     (async () => {
       try {
-        const dash = await apiFetch<Dashboard>('/member/dashboard', token);
-        if (!cancelled) setData(dash);
+        const [dash, acc, payments] = await Promise.all([
+          apiFetch<Dashboard>('/member/dashboard', token),
+          apiFetch<VirtualAccount | null>('/member/virtual-account', token),
+          apiFetch<MemberPayment[]>('/member/payments', token),
+        ]);
+        if (!cancelled) {
+          setData(dash);
+          setVAccount(acc);
+          setFunding(payments);
+        }
       } catch (err) {
         if (cancelled) return;
         clearMemberSession();
@@ -60,8 +87,16 @@ export default function MemberDashboardPage() {
     const token = readMemberToken();
     if (!token) return;
     setData(null);
-    void apiFetch<Dashboard>('/member/dashboard', token)
-      .then(setData)
+    Promise.all([
+      apiFetch<Dashboard>('/member/dashboard', token),
+      apiFetch<VirtualAccount | null>('/member/virtual-account', token),
+      apiFetch<MemberPayment[]>('/member/payments', token),
+    ])
+      .then(([dash, acc, payments]) => {
+        setData(dash);
+        setVAccount(acc);
+        setFunding(payments);
+      })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Refresh failed');
       });
@@ -129,13 +164,49 @@ export default function MemberDashboardPage() {
         </div>
       </section>
 
+      {vAccount && (
+        <section
+          className="card"
+          style={{
+            marginTop: 14,
+            background: '#0a6c2e',
+            color: '#fff',
+          }}
+        >
+          <h2 style={{ margin: '0 0 6px', fontSize: 15 }}>My collection account</h2>
+          <p style={{ margin: '2px 0', fontSize: 15 }}>
+            Transfer to <strong>{vAccount.accountNumber}</strong> — {vAccount.bankName}
+          </p>
+          <p style={{ margin: '2px 0', opacity: 0.9, fontSize: 13 }}>
+            {vAccount.accountName} · funds credit your savings automatically
+          </p>
+        </section>
+      )}
+
       <section className="card" style={{ marginTop: 14 }}>
         <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Recent activity</h2>
         {data ? (
-          data.recentTransactions.length === 0 ? (
+          data.recentTransactions.length === 0 && funding.length === 0 ? (
             <p style={{ color: '#5b6772', margin: 0 }}>No transactions yet.</p>
           ) : (
             <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+              {funding.map((p) => (
+                <li
+                  key={`fund-${p.id}`}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    padding: '9px 0',
+                    borderBottom: '1px solid #eef1f5',
+                    fontSize: 14,
+                  }}
+                >
+                  <span>Transfer received — {p.paymentReference}</span>
+                  <span style={{ fontWeight: 600, color: '#067647' }}>
+                    +{naira(p.amount)}
+                  </span>
+                </li>
+              ))}
               {data.recentTransactions.map((t, i) => (
                 <li
                   key={i}

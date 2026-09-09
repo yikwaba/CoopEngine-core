@@ -346,8 +346,11 @@ export class PaymentsService {
   async listNotifications(
     organizationId: string | null,
     accountNumber?: string,
-  ): Promise<
-    {
+    limit = 100,
+    offset = 0,
+  ): Promise<{
+    total: number;
+    items: {
       id: string;
       accountNumber: string;
       memberId: string;
@@ -356,29 +359,40 @@ export class PaymentsService {
       amount: number;
       paidAt: Date;
       status: string;
-    }[]
-  > {
+    }[];
+  }> {
     const orgId = this.requireOrg(organizationId);
+    const n = Math.min(Math.max(Number.isFinite(Number(limit)) ? Number(limit) : 100, 1), 500);
+    const off = Math.max(offset, 0);
     return withTenant(this.pool, orgId, async (c) => {
+      const whereClause = `organization_id = $1${accountNumber ? ' AND account_number = $2' : ''}`;
+      const params = accountNumber ? [orgId, accountNumber] : [orgId];
       const { rows } = await c.query(
         `SELECT id, account_number, member_id, payment_reference,
                 transaction_reference, amount, paid_at, status
            FROM payment_notifications
-          WHERE organization_id = $1
-            ${accountNumber ? 'AND account_number = $2' : ''}
-          ORDER BY created_at DESC LIMIT 500`,
+          WHERE ${whereClause}
+          ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, n, off],
+      );
+      const count = await c.query(
+        `SELECT count(*)::int AS n FROM payment_notifications
+          WHERE organization_id = $1 ${accountNumber ? 'AND account_number = $2' : ''}`,
         accountNumber ? [orgId, accountNumber] : [orgId],
       );
-      return rows.map((r: Record<string, unknown>) => ({
-        id: r.id as string,
-        accountNumber: r.account_number as string,
-        memberId: r.member_id as string,
-        paymentReference: r.payment_reference as string,
-        transactionReference: r.transaction_reference as string,
-        amount: Number(r.amount),
-        paidAt: r.paid_at as Date,
-        status: r.status as string,
-      }));
+      return {
+        total: (count.rows[0] as { n: number }).n,
+        items: rows.map((r: Record<string, unknown>) => ({
+          id: r.id as string,
+          accountNumber: r.account_number as string,
+          memberId: r.member_id as string,
+          paymentReference: r.payment_reference as string,
+          transactionReference: r.transaction_reference as string,
+          amount: Number(r.amount),
+          paidAt: r.paid_at as Date,
+          status: r.status as string,
+        })),
+      };
     });
   }
 
