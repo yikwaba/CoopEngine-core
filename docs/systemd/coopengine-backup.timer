@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Co-opEngine nightly backup at 02:17
+
+[Timer]
+OnCalendar=*-*-* 02:17:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

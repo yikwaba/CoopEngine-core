@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Param,
@@ -93,6 +94,27 @@ export class ReportsController {
   @RequirePermissions('reports.view', 'reports.export', 'settings.manage')
   savingsInterestPreview(@CurrentUser() principal: AuthPrincipal) {
     return this.reportsService.savingsInterestPreview(principal.organizationId);
+  }
+
+  @Get('export/:kind')
+  @RequirePermissions('reports.export', 'reports.view', 'settings.manage')
+  async exportCsv(
+    @CurrentUser() principal: AuthPrincipal,
+    @Res({ passthrough: true }) res: Response,
+    @Param('kind') kind: string,
+  ) {
+    const allowed = ['savings-book', 'loan-book', 'contribution-schedule', 'audit-logs'];
+    if (!allowed.includes(kind)) {
+      throw new BadRequestException(`Unknown export kind: ${kind}`);
+    }
+    const csv = await this.reportsService.exportCsv(
+      principal.organizationId,
+      kind as 'savings-book' | 'loan-book' | 'contribution-schedule' | 'audit-logs',
+    );
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="coopengine-${kind}-${stamp}.csv"`);
+    return csv;
   }
 
   @Get('audit-logs')

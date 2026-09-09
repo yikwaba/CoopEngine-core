@@ -1,0 +1,8 @@
+[Unit]
+Description=Co-opEngine nightly database backup
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/CoopEngine-core/scripts/db-backup.sh

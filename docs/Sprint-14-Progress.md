@@ -101,3 +101,54 @@ role) · full-stack demo run green against the live systemd API (2026-09-09):
 onboard → 5 members → payroll ₦35k → savings/shares → loan ₦40k disbursed →
 repayment ₦13,833.33 → outstanding ₦26,666.67 → reconciliation 3/3 →
 trial balance net ₦0 → member OTP dashboard.
+
+---
+
+## 6. Sprints 20–23 (coverage v3) + beta go-live
+
+### 20 — Full-stack demo + Supabase readiness
+Full-stack run (systemd API + portal + PWA) with the E2E demo green; PRD
+coverage v2; `docs/supabase-migration.md` staged dry-run checklist (app
+NOSUPERUSER role, transaction-URL migrations, warm-fallback cut-over).
+
+### 21 — Monnify virtual-account payments
+Per-member reserved accounts (dev provider local; `MONNIFY_PROVIDER=monnify`
+calls the real API), signature-verified webhook
+(`SHA-512(secret|rawBody)`, raw-bytes capture), duplicate-delivery
+idempotency, unknown-account silent acknowledgement, and auto-posting
+`Dr 1000 / Cr 2000` (schema v16: 25 tenant tables under FORCE RLS +
+non-RLS `virtual_account_lookups` pre-tenant resolver).
+
+### 22 — Payments-visible member experience
+Member self-service: own virtual account + funding history; portal
+Collections page (issue + accounts + inbound feed, paginated); `docs/payments.md`
+ops note; OpenAPI contract pinned to 31 routes.
+
+### 23 — Batch money ops + ops tooling
+`/bulk/share-purchases` and `/bulk/loan-repayments` CSV preview/commit
+(single-tenant-tx, balanced journals, kind-scoped batches, 409 on
+double-commit); `GET /loans/:id/payments` history; portal loan detail page
+(schedule/guarantors/history/capture) + Audit log viewer; postgres-superuser
+`db-backup.sh`/`db-restore.sh` (FORCE RLS blocks app-role dumps).
+
+### 24 — Report exports + scheduled backups
+`/reports/export/{savings-book,loan-book,contribution-schedule,audit-logs}`
+as download CSVs; systemd **nightly backup timer 02:17** (armed, persistent,
+7-dump retention); coverage v3 + beta go-live checklist.
+
+### Verification baseline (coverage v3)
+typecheck 5/5 · unit 8/8 · build 5/5 · integration 35/35 across 18 spec
+files (real PostgreSQL) · CI green (quality + integration, NOSUPERUSER app
+role) · E2E demo green · nightly backups armed.
+
+## 7. Beta go-live checklist
+- [ ] Rotate standing credentials (GitHub PATs, Composio keys, himalaya app
+      password, dev secrets) — docs/deploy.md §5
+- [ ] Supabase migration per docs/supabase-migration.md (NOSUPERUSER app role,
+      force-RLS on 25 tables, trigger, seed w/ fresh admin password)
+- [ ] Termii: `MEMBER_OTP_PROVIDER=termii` + keys; member `phone` populated
+- [ ] Monnify: real keys + webhook URL registration (docs/payments.md)
+- [ ] `JWT_ACCESS_SECRET` (openssl rand -base64 48), `CORS_ORIGINS`, TLS proxy
+- [ ] Nightly backup verified restoring into a scratch DB
+- [ ] One month of ledger ops with savings-reconciliation = 0 mismatches
+      before retiring the local warm-fallback database

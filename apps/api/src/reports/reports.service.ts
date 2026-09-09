@@ -524,6 +524,64 @@ export class ReportsService {
     });
   }
 
+  /**
+   * CSV export of a report. `kind` maps to an existing report query; rows are
+   * flattened into RFC-4180-ish CSV with quote/escape handling.
+   */
+  async exportCsv(
+    organizationId: string | null,
+    kind: 'savings-book' | 'loan-book' | 'contribution-schedule' | 'audit-logs',
+  ): Promise<string> {
+    const orgId = this.requireOrg(organizationId);
+    const escape = (v: unknown): string => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csv = (rows: unknown[][]): string =>
+      rows.map((r) => r.map(escape).join(',')).join('\n') + '\n';
+
+    if (kind === 'savings-book') {
+      const data = await this.savingsBook(orgId);
+      const rows = data.rows.map((r) => [
+        r.memberNo,
+        r.memberName,
+        r.accountNo,
+        r.productCode,
+        r.balance.toFixed(2),
+        r.status,
+      ]);
+      return csv([['memberNo', 'memberName', 'accountNo', 'productCode', 'balance', 'status'], ...rows]);
+    }
+    if (kind === 'loan-book') {
+      const data = await this.loanBook(orgId);
+      const rows = data.rows.map((r) => [
+        r.memberNo,
+        r.memberName,
+        r.productCode,
+        r.principal.toFixed(2),
+        r.outstandingPrincipal.toFixed(2),
+        r.status,
+        r.disbursedAt ? new Date(r.disbursedAt).toISOString().slice(0, 10) : '',
+      ]);
+      return csv([['memberNo', 'memberName', 'productCode', 'principal', 'outstandingPrincipal', 'status', 'disbursedAt'], ...rows]);
+    }
+    if (kind === 'contribution-schedule') {
+      const data = await this.contributionSchedule(orgId);
+      const rows = data.rows.map((r) => [r.memberNo, r.member, r.period, r.contributed.toFixed(2)]);
+      return csv([['memberNo', 'member', 'period', 'contributed'], ...rows]);
+    }
+    const data = await this.auditLogs(orgId, 500);
+    const rows = data.items.map((r) => [
+      new Date(r.createdAt).toISOString(),
+      r.actorEmail ?? 'system',
+      r.action,
+      r.entityType ?? '',
+      r.entityId ?? '',
+      r.metadata ? JSON.stringify(r.metadata) : '',
+    ]);
+    return csv([['createdAt', 'actor', 'action', 'entityType', 'entityId', 'metadata'], ...rows]);
+  }
+
   /** Audit trail (system table, NOT RLS-scoped — org filter is explicit). */
   async auditLogs(
     organizationId: string | null,
