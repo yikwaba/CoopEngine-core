@@ -55,3 +55,49 @@
 - Pipeline: typecheck 5/5 packages · unit tests 8/8 · build 5/5 · integration **29/29 across 12 spec files** (real PostgreSQL, incl. db isolation suite).
 - CI (GitHub Actions): quality job + **integration job running migrations/RLS/seed against a real Postgres 16 service container with a NOSUPERUSER app role** (RLS binds in CI) — green.
 - Demo run (2026-09-09): onboard → 5 members → payroll ₦35k → savings/shares → loan ₦40k disbursed → first repayment ₦13,833.33 → outstanding ₦26,666.67 → reconciliation 3/3 → trial balance net **₦0** → member OTP dashboard.
+
+---
+
+## 5. Sprint 15–19 additions (coverage v2)
+
+### 15 — Savings interest engine
+Preview (`GET /savings/interest/preview`) and idempotent period-end posting
+(`POST /savings/interest/post`): one balanced journal per run
+(`Dr 5000 Interest on Savings / Cr 2000 Member Savings Deposits` per member,
+member-linked lines, one statement), credits balances + `INTEREST`
+projections, requires an OPEN ledger period, 409 on double-post. Schema v14:
+`savings_interest_postings` (23 tenant tables under FORCE RLS).
+
+### 16 — Termii OTP + staff user administration
+Member OTPs route through the Termii SMS API behind
+`MEMBER_OTP_PROVIDER=termii` (dev provider unchanged for tests; verification
+stays local hash-compare with attempt limiting). Staff users API
+(`users.manage`): invite with org-template roles + one-time temp password,
+role replacement, suspend/reactivate with session revocation, self-change and
+last-COOP_ADMIN guards.
+
+### 17 — Portal deep-dive + endpoint hardening
+Portal: members search/pagination table, member detail 360 with
+deposit/withdraw and approve/suspend/exit, users management. API: member `?q`
+search, limit/offset + `X-Total-Count` on journals/loans/audit lists,
+production env sweep (JWT secret required in prod, CORS allow-list).
+
+### 18 — Loans workspace + interest-run UI
+Portal `/loans` (status-filtered, approve/disburse/record-repayment capturing
+the earliest unpaid installment) and `/interest` (preview → post with
+per-account accrual table). Loan list rows carry memberNo/memberName. Member
+PWA: refresh, friendlier transaction labels.
+
+### 19 — Production-readiness
+`scripts/start-stack.sh` (one-command API + portal + PWA), systemd USER
+service for the API (validated active + healthy on the VPS), `docs/deploy.md`
+(env table, Supabase/Termii wiring, rotation checklist), and an OpenAPI
+contract test pinning 25 routes in the generated spec.
+
+### Verification baseline (coverage v2)
+typecheck 5/5 · unit 8/8 · build 5/5 · integration 32/32 across 15 spec files
+(real PostgreSQL) · CI green (quality + integration with a NOSUPERUSER app
+role) · full-stack demo run green against the live systemd API (2026-09-09):
+onboard → 5 members → payroll ₦35k → savings/shares → loan ₦40k disbursed →
+repayment ₦13,833.33 → outstanding ₦26,666.67 → reconciliation 3/3 →
+trial balance net ₦0 → member OTP dashboard.
