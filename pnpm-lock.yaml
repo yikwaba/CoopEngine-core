@@ -44,6 +44,9 @@ importers:
       class-validator:
         specifier: ^0.14.1
         version: 0.14.4
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
       otplib:
         specifier: ^13.5.0
         version: 13.5.0

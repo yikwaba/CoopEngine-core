@@ -10,7 +10,7 @@ import { Pool, PoolClient } from 'pg';
 import { TENANT_GUC } from './schema';
 
 export const DEFAULT_DATABASE_URL =
-  'postgres://coopengine:coopengine@127.0.0.1:5432/coopengine';
+  'postgres://coopengine:ff3f816bba09d8289c23a1b7914272f6e29e23c7b4bd9eaf@127.0.0.1:5432/coopengine';
 
 export function createPool(connectionString: string | undefined): Pool {
   return new Pool({

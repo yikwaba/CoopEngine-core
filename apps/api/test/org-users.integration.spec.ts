@@ -14,10 +14,9 @@ import request from 'supertest';
 import { Pool } from 'pg';
 import { AppModule } from '../src/app.module';
 import { createPool } from '@coopengine/db';
-import { ensureRbacSeeded } from './helpers';
+import { ensureRbacSeeded, ADMIN_PASSWORD, TEST_DATABASE_URL } from './helpers';
 
 const ADMIN_EMAIL = 'admin@coopengine.dev';
-const ADMIN_PASSWORD = 'AdminDev123!';
 
 let app: INestApplication;
 let pool: Pool;
@@ -53,7 +52,7 @@ async function onboardCoop(label: string): Promise<{
 
 beforeAll(async () => {
   process.env.DATABASE_URL =
-    process.env.DATABASE_URL ?? 'postgres://coopengine:coopengine@127.0.0.1:5432/coopengine';
+    TEST_DATABASE_URL;
   pool = createPool(process.env.DATABASE_URL);
   await ensureRbacSeeded(pool);
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();

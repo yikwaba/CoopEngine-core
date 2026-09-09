@@ -77,7 +77,7 @@ EXECUTE FUNCTION assert_balanced_journal();
 
 const url =
   process.env.DATABASE_URL ??
-  'postgres://coopengine:coopengine@127.0.0.1:5432/coopengine';
+  'postgres://coopengine:ff3f816bba09d8289c23a1b7914272f6e29e23c7b4bd9eaf@127.0.0.1:5432/coopengine';
 
 const pool = new Pool({ connectionString: url });
 

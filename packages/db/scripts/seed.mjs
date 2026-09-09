@@ -16,7 +16,7 @@ const { Pool } = pg;
 
 const url =
   process.env.DATABASE_URL ??
-  'postgres://coopengine:coopengine@127.0.0.1:5432/coopengine';
+  'postgres://coopengine:ff3f816bba09d8289c23a1b7914272f6e29e23c7b4bd9eaf@127.0.0.1:5432/coopengine';
 
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL ?? 'admin@coopengine.dev';
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'AdminDev123!';

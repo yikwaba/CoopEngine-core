@@ -31,3 +31,6 @@ pnpm-debug.log*
 *.tsbuildinfo
 .next/
 next-env.d.ts.timestamp
+
+# local dev DB credentials (rotated; never commit)
+/packages/db/drizzle.config.ts

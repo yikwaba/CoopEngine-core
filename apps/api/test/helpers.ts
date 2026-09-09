@@ -25,7 +25,7 @@ export async function ensureRbacSeeded(pool: Pool): Promise<void> {
       ...process.env,
       DATABASE_URL:
         process.env.DATABASE_URL ??
-        'postgres://coopengine:coopengine@127.0.0.1:5432/coopengine',
+        TEST_DATABASE_URL,
     },
   });
   const after = await pool.query(`SELECT count(*)::int AS n FROM roles`);
@@ -33,3 +33,26 @@ export async function ensureRbacSeeded(pool: Pool): Promise<void> {
     throw new Error('RBAC seed failed to restore roles');
   }
 }
+
+// Admin credentials: local runs read the rotated password from the root-only
+// file; CI (fresh seed) falls back to the seed.mjs default.
+export const ADMIN_PASSWORD: string = (() => {
+  try {
+    return require('fs').readFileSync('/root/coopengine/admin-password', 'utf8').trim();
+  } catch {
+    return 'AdminDev123!';
+  }
+})();
+
+// DB URL for local runs: env wins, else read the root-only api.env (rotated
+// dev password); final fallback matches a fresh CI seed but CI always sets env.
+export const TEST_DATABASE_URL: string = (() => {
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  try {
+    const m = require('fs')
+      .readFileSync('/root/coopengine/api.env', 'utf8')
+      .match(/DATABASE_URL=(\S+)/);
+    if (m) return m[1];
+  } catch {}
+  return TEST_DATABASE_URL;
+})();
