@@ -239,5 +239,14 @@ describe('share redemption and member exit', () => {
       .set(auth);
     expect(second.body).toHaveLength(1);
     expect(second.body[0].memberNo).toBe(3);
+
+    // Search narrows the result set and total
+    const search = await request(app.getHttpServer())
+      .get('/api/v1/members?q=ExitP3')
+      .set(auth);
+    expect(search.status).toBe(200);
+    expect(search.headers['x-total-count']).toBe('1');
+    expect(search.body).toHaveLength(1);
+    expect(search.body[0].memberNo).toBe(3);
   });
 });

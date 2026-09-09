@@ -220,20 +220,31 @@ export class LoansService {
   async list(
     organizationId: string | null,
     status?: string,
-  ): Promise<LoanRow[]> {
+    limit?: number,
+    offset?: number,
+  ): Promise<{ items: LoanRow[]; total: number }> {
     const orgId = this.requireOrg(organizationId);
+    const pageLimit = Math.min(Math.max(limit ?? 200, 1), 500);
+    const pageOffset = Math.max(offset ?? 0, 0);
     return withTenant(this.pool, orgId, async (c) => {
-      const params: unknown[] = [orgId];
+      const params: unknown[] = [orgId, pageLimit, pageOffset];
       let where = `l.organization_id = $1`;
       if (status) {
-        params.push(status);
-        where += ` AND l.status = $${params.length}`;
+        params.splice(params.length - 2, 0, status);
+        where += ` AND l.status = $2`;
       }
       const { rows } = await c.query(
-        `${selectLoan} WHERE ${where} ORDER BY l.created_at DESC LIMIT 200`,
+        `${selectLoan} WHERE ${where} ORDER BY l.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
         params,
       );
-      return rows.map((r) => this.mapLoan(r as Record<string, unknown>));
+      const count = await c.query(
+        `SELECT count(*)::int AS n FROM loans l WHERE l.organization_id = $1 ${status ? 'AND l.status = $2' : ''}`,
+        status ? [orgId, status] : [orgId],
+      );
+      return {
+        total: (count.rows[0] as { n: number }).n,
+        items: rows.map((r) => this.mapLoan(r as Record<string, unknown>)),
+      };
     });
   }
 

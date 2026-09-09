@@ -8,8 +8,10 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { LedgerService } from './ledger.service';
 import { CreateJournalDto, PeriodQueryDto } from './dto/ledger.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -53,11 +55,21 @@ export class LedgerController {
 
   @Get('journals')
   @RequirePermissions(...READ_PERMISSIONS)
-  journals(
+  async journals(
     @CurrentUser() principal: AuthPrincipal,
+    @Res({ passthrough: true }) res: Response,
     @Query('status') status?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
-    return this.ledgerService.listJournals(principal.organizationId, status);
+    const { items, total } = await this.ledgerService.listJournals(
+      principal.organizationId,
+      status,
+      limit ? Number(limit) : undefined,
+      offset ? Number(offset) : undefined,
+    );
+    res.setHeader('X-Total-Count', String(total));
+    return items;
   }
 
   @Get('journals/:id')

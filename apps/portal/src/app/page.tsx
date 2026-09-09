@@ -8,6 +8,7 @@ import {
   readToken,
   API_BASE,
 } from '../lib/api';
+import Nav from './components/Nav';
 
 interface MemberRow {
   id: string;
@@ -93,7 +94,7 @@ export default function DashboardPage() {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginBottom: 22,
+          marginBottom: 4,
         }}
       >
         <div>
@@ -106,6 +107,7 @@ export default function DashboardPage() {
           Sign out
         </button>
       </header>
+      <Nav />
 
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14 }}>
         <div className="card">

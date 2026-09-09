@@ -116,18 +116,29 @@ export class MembersService {
     organizationId: string | null,
     limit?: number,
     offset?: number,
+    q?: string,
   ): Promise<{ items: MemberRow[]; total: number }> {
     const orgId = this.requireOrg(organizationId);
     const pageLimit = Math.min(Math.max(limit ?? 200, 1), 500);
     const pageOffset = Math.max(offset ?? 0, 0);
+    const search = q?.trim();
+    const clause = (param: number): string =>
+      search
+        ? `AND (
+             first_name ILIKE $${param} OR last_name ILIKE $${param} OR email ILIKE $${param}
+             OR member_no::text ILIKE $${param}
+           )`
+        : '';
     return withTenant(this.pool, orgId, async (c) => {
+      const params: unknown[] = [orgId, pageLimit, pageOffset];
+      if (search) params.push(`%${search}%`);
       const { rows } = await c.query(
-        `${selectMember} WHERE organization_id = $1 ORDER BY member_no LIMIT $2 OFFSET $3`,
-        [orgId, pageLimit, pageOffset],
+        `${selectMember} WHERE organization_id = $1 ${clause(4)} ORDER BY member_no LIMIT $2 OFFSET $3`,
+        params,
       );
       const count = await c.query(
-        `SELECT count(*)::int AS n FROM members WHERE organization_id = $1`,
-        [orgId],
+        `SELECT count(*)::int AS n FROM members WHERE organization_id = $1 ${clause(2)}`,
+        search ? [orgId, `%${search}%`] : [orgId],
       );
       return {
         items: rows.map((r) => this.toMemberRow(r as Record<string, unknown>)),

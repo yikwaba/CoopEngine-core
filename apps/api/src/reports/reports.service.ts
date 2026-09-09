@@ -529,9 +529,11 @@ export class ReportsService {
     organizationId: string | null,
     limit = 100,
     action?: string,
-  ): Promise<AuditLogRow[]> {
+    offset = 0,
+  ): Promise<{ items: AuditLogRow[]; total: number }> {
     const orgId = this.requireOrg(organizationId);
     const n = Math.min(Math.max(Number.isFinite(Number(limit)) ? Number(limit) : 100, 1), 500);
+    const off = Math.max(offset, 0);
     const params: unknown[] = [orgId];
     let filter = `WHERE al.organization_id = $1`;
     if (action) {
@@ -545,18 +547,25 @@ export class ReportsService {
          LEFT JOIN users u ON u.id = al.actor_user_id
          ${filter}
          ORDER BY al.created_at DESC
-         LIMIT $${params.length + 1}`,
-      [...params, n],
+         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, n, off],
     );
-    return rows.map((r: Record<string, unknown>) => ({
-      id: r.id as string,
-      actorEmail: (r.actor_email as string | null) ?? null,
-      action: r.action as string,
-      entityType: (r.entity_type as string | null) ?? null,
-      entityId: (r.entity_id as string | null) ?? null,
-      metadata:
-        (r.metadata as Record<string, unknown> | null) ?? null,
-      createdAt: r.created_at as Date,
-    }));
+    const count = await this.pool.query(
+      `SELECT count(*)::int AS n FROM audit_logs WHERE organization_id = $1 ${action ? 'AND action = $2' : ''}`,
+      action ? [orgId, action] : [orgId],
+    );
+    return {
+      total: (count.rows[0] as { n: number }).n,
+      items: rows.map((r: Record<string, unknown>) => ({
+        id: r.id as string,
+        actorEmail: (r.actor_email as string | null) ?? null,
+        action: r.action as string,
+        entityType: (r.entity_type as string | null) ?? null,
+        entityId: (r.entity_id as string | null) ?? null,
+        metadata:
+          (r.metadata as Record<string, unknown> | null) ?? null,
+        createdAt: r.created_at as Date,
+      })),
+    };
   }
 }

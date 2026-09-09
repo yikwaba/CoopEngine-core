@@ -4,6 +4,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { ENV } from './config/env';
 
 const API_PREFIX = 'api/v1';
 
@@ -23,6 +24,10 @@ async function bootstrap(): Promise<void> {
   });
 
   app.setGlobalPrefix(API_PREFIX);
+  app.enableCors({
+    origin: ENV.corsOrigins,
+    exposedHeaders: ['x-request-id', 'x-total-count'],
+  });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

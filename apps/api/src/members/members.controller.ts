@@ -62,11 +62,13 @@ export class MembersController {
     @Res({ passthrough: true }) res: Response,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @Query('q') q?: string,
   ) {
     const { items, total } = await this.membersService.list(
       principal.organizationId,
       limit ? Number(limit) : undefined,
       offset ? Number(offset) : undefined,
+      q,
     );
     res.setHeader('X-Total-Count', String(total));
     return items;

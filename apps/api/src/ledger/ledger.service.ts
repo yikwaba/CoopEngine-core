@@ -128,30 +128,41 @@ export class LedgerService {
   async listJournals(
     organizationId: string | null,
     status?: string,
-  ): Promise<JournalEntryRow[]> {
+    limit?: number,
+    offset?: number,
+  ): Promise<{ items: JournalEntryRow[]; total: number }> {
     const orgId = this.requireOrg(organizationId);
+    const pageLimit = Math.min(Math.max(limit ?? 200, 1), 500);
+    const pageOffset = Math.max(offset ?? 0, 0);
     return withTenant(this.pool, orgId, async (c) => {
-      const params: unknown[] = [orgId];
+      const params: unknown[] = [orgId, pageLimit, pageOffset];
       let where = `organization_id = $1`;
       if (status) {
-        params.push(status);
-        where += ` AND status = $${params.length}`;
+        params.splice(params.length - 2, 0, status); // keep limit/offset last
+        where += ` AND status = $2`;
       }
       const { rows } = await c.query(
         `SELECT id, entry_no, entry_date, description, source, status, created_by, created_at
-           FROM journal_entries WHERE ${where} ORDER BY created_at DESC LIMIT 200`,
+          FROM journal_entries WHERE ${where} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
         params,
       );
-      return rows.map((r) => ({
-        id: r.id as string,
-        entryNo: r.entry_no === null ? null : Number(r.entry_no),
-        entryDate: (r.entry_date as Date).toISOString().slice(0, 10),
-        description: r.description as string,
-        source: r.source as string,
-        status: r.status as JournalStatus,
-        createdBy: (r.created_by as string | null) ?? null,
-        createdAt: r.created_at as Date,
-      }));
+      const count = await c.query(
+        `SELECT count(*)::int AS n FROM journal_entries WHERE organization_id = $1 ${status ? 'AND status = $2' : ''}`,
+        status ? [orgId, status] : [orgId],
+      );
+      return {
+        total: (count.rows[0] as { n: number }).n,
+        items: rows.map((r) => ({
+          id: r.id as string,
+          entryNo: r.entry_no === null ? null : Number(r.entry_no),
+          entryDate: (r.entry_date as Date).toISOString().slice(0, 10),
+          description: r.description as string,
+          source: r.source as string,
+          status: r.status as JournalStatus,
+          createdBy: (r.created_by as string | null) ?? null,
+          createdAt: r.created_at as Date,
+        })),
+      };
     });
   }
 

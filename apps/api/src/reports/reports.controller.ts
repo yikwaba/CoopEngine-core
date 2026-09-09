@@ -4,9 +4,11 @@ import {
   Param,
   ParseUUIDPipe,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import type { Response } from 'express';
+import { IsNumber, IsOptional, IsString, MaxLength } from 'class-validator';
 import { ReportsService } from './reports.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -18,7 +20,12 @@ const REPORT_READ = ['reports.view', 'audit.view', 'settings.manage'];
 
 class AuditQueryDto {
   @IsOptional()
+  @IsNumber()
   limit?: number;
+
+  @IsOptional()
+  @IsNumber()
+  offset?: number;
 
   @IsOptional()
   @IsString()
@@ -90,14 +97,18 @@ export class ReportsController {
 
   @Get('audit-logs')
   @RequirePermissions('audit.view', 'settings.manage', 'reports.view')
-  auditLogs(
+  async auditLogs(
     @CurrentUser() principal: AuthPrincipal,
+    @Res({ passthrough: true }) res: Response,
     @Query() query: AuditQueryDto,
   ) {
-    return this.reportsService.auditLogs(
+    const { items, total } = await this.reportsService.auditLogs(
       principal.organizationId,
       query.limit,
       query.action,
+      query.offset,
     );
+    res.setHeader('X-Total-Count', String(total));
+    return items;
   }
 }

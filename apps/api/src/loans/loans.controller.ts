@@ -8,8 +8,10 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { LoansService } from './loans.service';
 import { CreateLoanDto, RejectLoanDto } from './dto/loans.dto';
 import {
@@ -79,11 +81,21 @@ export class LoansController {
 
   @Get()
   @RequirePermissions(...LOAN_READ)
-  list(
+  async list(
     @CurrentUser() principal: AuthPrincipal,
+    @Res({ passthrough: true }) res: Response,
     @Query('status') status?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
-    return this.loansService.list(principal.organizationId, status);
+    const { items, total } = await this.loansService.list(
+      principal.organizationId,
+      status,
+      limit ? Number(limit) : undefined,
+      offset ? Number(offset) : undefined,
+    );
+    res.setHeader('X-Total-Count', String(total));
+    return items;
   }
 
   @Get(':id')
