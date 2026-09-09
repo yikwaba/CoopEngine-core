@@ -173,6 +173,9 @@ export default function LoansPage() {
                   <td>{l.interestRatePa}%</td>
                   <td>{l.status}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
+                    <Link href={`/loans/${l.id}`} style={{ fontSize: 14, marginRight: 8 }}>
+                      Open →
+                    </Link>
                     {l.status === 'PENDING' && (
                       <>
                         <button className="btn" style={{ padding: '5px 10px', marginRight: 6 }} disabled={busy} onClick={() => void act(l, 'approve')}>

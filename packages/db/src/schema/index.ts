@@ -711,6 +711,7 @@ export const payrollBatches = pgTable(
       .notNull()
       .references(() => organizations.id, { onDelete: 'cascade' }),
     filename: varchar('filename', { length: 255 }).notNull(),
+    kind: varchar('kind', { length: 24 }).notNull().default('PAYROLL'), // PAYROLL|SHARE_PURCHASE|LOAN_REPAYMENT
     status: text('status').notNull().default('PENDING'), // PENDING|PREVIEWED|COMMITTED
     totalRows: bigint('total_rows', { mode: 'number' }).notNull().default(0),
     validRows: bigint('valid_rows', { mode: 'number' }).notNull().default(0),

@@ -771,6 +771,48 @@ export class LoansService {
     };
   }
 
+  /** Repayment events for a loan (journal-sourced, principal/interest split). */
+  async repaymentsHistory(
+    organizationId: string | null,
+    loanId: string,
+  ): Promise<
+    {
+      entryNo: number;
+      entryDate: string;
+      description: string;
+      principalPortion: number;
+      interestPortion: number;
+      postedAt: Date;
+    }[]
+  > {
+    const orgId = this.requireOrg(organizationId);
+    await this.getLoan(orgId, loanId); // 404 if not this tenant's loan
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT je.entry_no, je.entry_date, je.description, je.posted_at,
+                COALESCE(SUM(CASE WHEN a.code = '1020' THEN jl.credit ELSE 0 END), 0)::numeric AS principal_portion,
+                COALESCE(SUM(CASE WHEN a.code = '4000' THEN jl.credit ELSE 0 END), 0)::numeric AS interest_portion
+           FROM journal_entries je
+           JOIN journal_lines jl ON jl.journal_entry_id = je.id
+           JOIN chart_of_accounts a ON a.id = jl.account_id
+          WHERE je.organization_id = $1
+            AND je.source = 'LOAN_REPAYMENT'
+            AND je.source_id = $2
+          GROUP BY je.id
+          ORDER BY je.posted_at ASC`,
+        [orgId, loanId],
+      );
+      return rows.map((r: Record<string, unknown>) => ({
+        entryNo: Number(r.entry_no),
+        entryDate: (r.entry_date as Date).toISOString().slice(0, 10),
+        description: r.description as string,
+        principalPortion: Number(r.principal_portion),
+        interestPortion: Number(r.interest_portion),
+        postedAt: r.posted_at as Date,
+      }));
+    });
+  }
+
   /**
    * Disbursement journal: Dr Loan Receivables (1020) / Cr Cash at Bank (1000),
    * POSTED immediately with a sequential number, member-linked lines.

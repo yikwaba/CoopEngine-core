@@ -1,0 +1,1 @@
+ALTER TABLE "payroll_batches" ADD COLUMN "kind" varchar(24) DEFAULT 'PAYROLL' NOT NULL;

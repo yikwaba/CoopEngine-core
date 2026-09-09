@@ -13,6 +13,7 @@ import { MemberAuthModule } from './member-auth/member-auth.module';
 import { MemberSpaceModule } from './member-space/member-space.module';
 import { OrgUsersModule } from './org-users/org-users.module';
 import { PaymentsModule } from './payments/payments.module';
+import { BulkModule } from './bulk/bulk.module';
 import { DatabaseModule } from './database/database.module';
 
 @Module({
@@ -31,6 +32,7 @@ import { DatabaseModule } from './database/database.module';
     MemberSpaceModule,
     OrgUsersModule,
     PaymentsModule,
+    BulkModule,
     HealthModule,
   ],
 })

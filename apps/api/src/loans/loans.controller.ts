@@ -116,6 +116,15 @@ export class LoansController {
     return this.loansService.listGuarantors(principal.organizationId, loanId);
   }
 
+  @Get(':id/payments')
+  @RequirePermissions(...LOAN_READ)
+  payments(
+    @CurrentUser() principal: AuthPrincipal,
+    @Param('id', new ParseUUIDPipe()) loanId: string,
+  ) {
+    return this.loansService.repaymentsHistory(principal.organizationId, loanId);
+  }
+
   @Get(':id/schedule')
   @RequirePermissions(...LOAN_READ)
   schedule(
