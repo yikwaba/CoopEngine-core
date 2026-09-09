@@ -41,6 +41,8 @@ export interface LoanRow {
   status: LoanStatus;
   outstandingPrincipal: number;
   rejectionReason: string | null;
+  memberNo?: number;
+  memberName?: string | null;
   approvedAt: Date | null;
   disbursedAt: Date | null;
   createdAt: Date;
@@ -67,8 +69,11 @@ const ALLOWED_TRANSITIONS: Partial<Record<LoanStatus, LoanStatus[]>> = {
 
 const selectLoan = `SELECT l.id, l.member_id, l.principal, l.term_months, l.interest_rate_pa,
        l.interest_method, l.status, l.outstanding_principal, l.rejection_reason,
-       l.approved_at, l.disbursed_at, l.created_at, p.code AS product_code
-  FROM loans l JOIN loan_products p ON p.id = l.loan_product_id`;
+       l.approved_at, l.disbursed_at, l.created_at, p.code AS product_code,
+       m.member_no, m.first_name || ' ' || m.last_name AS member_name
+  FROM loans l
+  JOIN loan_products p ON p.id = l.loan_product_id
+  LEFT JOIN members m ON m.id = l.member_id`;
 
 @Injectable()
 export class LoansService {
@@ -758,6 +763,8 @@ export class LoansService {
       status: row.status as LoanStatus,
       outstandingPrincipal: Number(row.outstanding_principal),
       rejectionReason: (row.rejection_reason as string | null) ?? null,
+      memberNo: row.member_no === null || row.member_no === undefined ? undefined : Number(row.member_no),
+      memberName: (row.member_name as string | null | undefined) ?? null,
       approvedAt: (row.approved_at as Date | null) ?? null,
       disbursedAt: (row.disbursed_at as Date | null) ?? null,
       createdAt: row.created_at as Date,

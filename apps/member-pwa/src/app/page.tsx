@@ -56,6 +56,17 @@ export default function MemberDashboardPage() {
     };
   }, [router]);
 
+  function refresh(): void {
+    const token = readMemberToken();
+    if (!token) return;
+    setData(null);
+    void apiFetch<Dashboard>('/member/dashboard', token)
+      .then(setData)
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Refresh failed');
+      });
+  }
+
   function signOut(): void {
     clearMemberSession();
     router.replace('/login');
@@ -77,15 +88,20 @@ export default function MemberDashboardPage() {
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <p style={{ margin: 0, color: '#5b6772', fontSize: 13 }}>
-            Member #{(data?.member.memberNo ?? info?.memberNo) ?? '…'}
+            Member #{(data?.member.memberNo ?? info?.memberNo) ?? '…'} · Co-opEngine
           </p>
           <h1 style={{ margin: '2px 0 0', fontSize: 22 }}>
             {data ? `${data.member.firstName} ${data.member.lastName}` : 'Loading…'}
           </h1>
         </div>
-        <button className="btn secondary" onClick={signOut}>
-          Sign out
-        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button className="btn secondary" onClick={refresh} title="Refresh balances">
+            ↻ Refresh
+          </button>
+          <button className="btn secondary" onClick={signOut}>
+            Sign out
+          </button>
+        </div>
       </header>
 
       <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 18 }}>
@@ -132,8 +148,16 @@ export default function MemberDashboardPage() {
                   }}
                 >
                   <span>
-                    {t.type === 'DEPOSIT' ? 'Deposit' : t.type === 'WITHDRAWAL' ? 'Withdrawal' : t.type} —{' '}
-                    {t.description}
+                    {t.type === 'DEPOSIT'
+                      ? 'Deposit'
+                      : t.type === 'WITHDRAWAL'
+                        ? 'Withdrawal'
+                        : t.type === 'INTEREST'
+                          ? 'Interest earned'
+                          : t.type === 'CLOSING_PAYOUT'
+                            ? 'Closing payout'
+                            : t.type}{' '}
+                    — {t.description}
                   </span>
                   <span style={{ fontWeight: 600, color: t.signedAmount >= 0 ? '#067647' : '#b42318' }}>
                     {t.signedAmount >= 0 ? '+' : ''}
