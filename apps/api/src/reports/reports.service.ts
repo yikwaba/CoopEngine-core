@@ -307,6 +307,223 @@ export class ReportsService {
     });
   }
 
+  /**
+   * Contribution schedule: member DEPOSIT totals per calendar month
+   * (defaults to the last 6 months).
+   */
+  async contributionSchedule(
+    organizationId: string | null,
+    months = 6,
+  ): Promise<{
+    periodFrom: string;
+    periodTo: string;
+    totalContributed: number;
+    rows: { memberNo: number; member: string; period: string; contributed: number }[];
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    const n = Math.min(Math.max(months, 1), 24);
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT m.member_no,
+                m.first_name || ' ' || m.last_name AS member,
+                to_char(t.created_at, 'YYYY-MM') AS period,
+                COALESCE(SUM(t.signed_amount), 0)::numeric AS contributed
+           FROM savings_transactions t
+           JOIN member_savings_accounts a ON a.id = t.account_id
+           JOIN members m ON m.id = a.member_id
+          WHERE a.organization_id = $1
+            AND t.type = 'DEPOSIT'
+            AND t.created_at >= date_trunc('month', now()) - ($2 * interval '1 month')
+          GROUP BY m.member_no, m.first_name, m.last_name, period
+          ORDER BY period DESC, m.member_no`,
+        [orgId, n],
+      );
+      const data = rows.map((r: Record<string, unknown>) => ({
+        memberNo: Number(r.member_no),
+        member: r.member as string,
+        period: r.period as string,
+        contributed: Number(r.contributed),
+      }));
+      return {
+        periodFrom: `${data.at(-1)?.period ?? '—'}`,
+        periodTo: `${data[0]?.period ?? '—'}`,
+        totalContributed: Math.round(data.reduce((a, d) => a + d.contributed, 0) * 100) / 100,
+        rows: data,
+      };
+    });
+  }
+
+  /**
+   * Loan book aging: buckets based on the member's EARLIEST unpaid
+   * installment (days past due; <= 0 days = CURRENT).
+   */
+  async loansAging(organizationId: string | null): Promise<{
+    buckets: { bucket: string; count: number; outstanding: number }[];
+    rows: {
+      loanId: string;
+      memberNo: number;
+      member: string;
+      outstanding: number;
+      daysPastDue: number;
+      bucket: string;
+      nextDueDate: string | null;
+    }[];
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    const BUCKETS = ['CURRENT', '1-30', '31-60', '61-90', '90+'] as const;
+    const bucketFor = (days: number): string => {
+      if (days <= 0) return 'CURRENT';
+      if (days <= 30) return '1-30';
+      if (days <= 60) return '31-60';
+      if (days <= 90) return '61-90';
+      return '90+';
+    };
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT l.id AS loan_id, m.member_no, m.first_name || ' ' || m.last_name AS member,
+                l.outstanding_principal AS outstanding,
+                lr.due_date AS next_due,
+                GREATEST(0, (now()::date - lr.due_date))::int AS days_past_due
+           FROM loans l
+           JOIN members m ON m.id = l.member_id
+           LEFT JOIN LATERAL (
+             SELECT due_date FROM loan_repayments
+              WHERE loan_id = l.id
+                AND (paid_principal < principal_due OR paid_interest < interest_due)
+              ORDER BY due_date ASC LIMIT 1
+           ) lr ON true
+          WHERE l.organization_id = $1
+            AND l.status IN ('DISBURSED', 'DEFAULTED')
+          ORDER BY days_past_due DESC`,
+        [orgId],
+      );
+      const data = rows.map((r: Record<string, unknown>) => {
+        const daysPastDue = Number(r.days_past_due ?? 0);
+        return {
+          loanId: r.loan_id as string,
+          memberNo: Number(r.member_no),
+          member: r.member as string,
+          outstanding: Number(r.outstanding),
+          daysPastDue,
+          bucket: bucketFor(daysPastDue),
+          nextDueDate: r.next_due
+            ? (r.next_due as Date).toISOString().slice(0, 10)
+            : null,
+        };
+      });
+      const buckets = BUCKETS.map((bucket) => {
+        const inBucket = data.filter((d) => d.bucket === bucket);
+        return {
+          bucket,
+          count: inBucket.length,
+          outstanding: Math.round(
+            inBucket.reduce((a, d) => a + d.outstanding, 0) * 100,
+          ) / 100,
+        };
+      }).filter((b) => b.count > 0 || b.bucket === 'CURRENT');
+      return { buckets, rows: data };
+    });
+  }
+
+  /** Members who exited, with payout metadata from the audit trail. */
+  async exitedMembers(organizationId: string | null): Promise<{
+    count: number;
+    totalPaidOut: number;
+    rows: {
+      memberId: string;
+      memberNo: number;
+      member: string;
+      exitedAt: Date;
+      payout: number;
+      closedAccounts: number;
+      actor: string | null;
+    }[];
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT a.entity_id AS member_id, m.member_no,
+                m.first_name || ' ' || m.last_name AS member,
+                a.created_at AS exited_at,
+                COALESCE((a.metadata->>'payout')::numeric, 0) AS payout,
+                COALESCE((a.metadata->>'closedAccounts')::int, 0) AS closed_accounts,
+                u.email AS actor
+           FROM audit_logs a
+           JOIN members m ON m.id = a.entity_id
+           LEFT JOIN users u ON u.id = a.actor_user_id
+          WHERE a.organization_id = $1 AND a.action = 'member.status.exited'
+          ORDER BY a.created_at DESC
+          LIMIT 500`,
+        [orgId],
+      );
+      const data = rows.map((r: Record<string, unknown>) => ({
+        memberId: r.member_id as string,
+        memberNo: Number(r.member_no),
+        member: r.member as string,
+        exitedAt: r.exited_at as Date,
+        payout: Number(r.payout),
+        closedAccounts: Number(r.closed_accounts),
+        actor: (r.actor as string | null) ?? null,
+      }));
+      return {
+        count: data.length,
+        totalPaidOut:
+          Math.round(data.reduce((a, d) => a + d.payout, 0) * 100) / 100,
+        rows: data,
+      };
+    });
+  }
+
+  /**
+   * Savings interest preview (accrual stub — informative only, never posts):
+   * one month of interest on current balances at each product's rate.
+   */
+  async savingsInterestPreview(organizationId: string | null): Promise<{
+    rows: {
+      memberNo: number;
+      member: string;
+      productCode: string;
+      productName: string;
+      ratePa: number;
+      balance: number;
+      monthlyEstimate: number;
+    }[];
+    totalBalance: number;
+    totalMonthlyEstimate: number;
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT m.member_no, m.first_name || ' ' || m.last_name AS member,
+                p.code AS product_code, p.name AS product_name,
+                p.interest_rate_pa::numeric AS rate_pa,
+                a.current_balance::numeric AS balance,
+                round((a.current_balance * p.interest_rate_pa / 100 / 12)::numeric, 2) AS monthly_estimate
+           FROM member_savings_accounts a
+           JOIN members m ON m.id = a.member_id
+           JOIN savings_products p ON p.id = a.product_id
+          WHERE a.organization_id = $1 AND a.status = 'ACTIVE'
+          ORDER BY m.member_no`,
+        [orgId],
+      );
+      const data = rows.map((r: Record<string, unknown>) => ({
+        memberNo: Number(r.member_no),
+        member: r.member as string,
+        productCode: r.product_code as string,
+        productName: r.product_name as string,
+        ratePa: Number(r.rate_pa),
+        balance: Number(r.balance),
+        monthlyEstimate: Number(r.monthly_estimate),
+      }));
+      return {
+        rows: data,
+        totalBalance: Math.round(data.reduce((a, d) => a + d.balance, 0) * 100) / 100,
+        totalMonthlyEstimate:
+          Math.round(data.reduce((a, d) => a + d.monthlyEstimate, 0) * 100) / 100,
+      };
+    });
+  }
+
   /** Audit trail (system table, NOT RLS-scoped — org filter is explicit). */
   async auditLogs(
     organizationId: string | null,

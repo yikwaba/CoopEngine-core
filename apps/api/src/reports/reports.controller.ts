@@ -58,6 +58,36 @@ export class ReportsController {
     return this.reportsService.savingsReconciliation(principal.organizationId);
   }
 
+  @Get('contribution-schedule')
+  @RequirePermissions('reports.view', 'reports.export', 'settings.manage')
+  contributionSchedule(
+    @CurrentUser() principal: AuthPrincipal,
+    @Query('months') months?: string,
+  ) {
+    return this.reportsService.contributionSchedule(
+      principal.organizationId,
+      months ? Number(months) : undefined,
+    );
+  }
+
+  @Get('loans-aging')
+  @RequirePermissions('reports.view', 'reports.export', 'loans.approve')
+  loansAging(@CurrentUser() principal: AuthPrincipal) {
+    return this.reportsService.loansAging(principal.organizationId);
+  }
+
+  @Get('exited-members')
+  @RequirePermissions('reports.view', 'reports.export', 'settings.manage')
+  exitedMembers(@CurrentUser() principal: AuthPrincipal) {
+    return this.reportsService.exitedMembers(principal.organizationId);
+  }
+
+  @Get('savings-interest-preview')
+  @RequirePermissions('reports.view', 'reports.export', 'settings.manage')
+  savingsInterestPreview(@CurrentUser() principal: AuthPrincipal) {
+    return this.reportsService.savingsInterestPreview(principal.organizationId);
+  }
+
   @Get('audit-logs')
   @RequirePermissions('audit.view', 'settings.manage', 'reports.view')
   auditLogs(
