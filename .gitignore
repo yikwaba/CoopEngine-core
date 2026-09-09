@@ -29,3 +29,5 @@ pnpm-debug.log*
 
 # TypeScript build info
 *.tsbuildinfo
+.next/
+next-env.d.ts.timestamp
