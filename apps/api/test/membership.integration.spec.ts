@@ -166,7 +166,7 @@ describe('membership lifecycle', () => {
       .post(`/api/v1/members/${firstId}/exit`)
       .set('Authorization', `Bearer ${tokens.accessToken}`);
     expect(exited.status).toBe(200);
-    expect(exited.body.status).toBe('EXITED');
+    expect(exited.body.member.status).toBe('EXITED');
 
     // No further transitions from EXITED
     const afterExit = await request(app.getHttpServer())

@@ -69,6 +69,23 @@ export class SharesController {
     );
   }
 
+  @Post('member/:memberId/redemptions')
+  @RequirePermissions('shares.post')
+  redeem(
+    @CurrentUser() principal: AuthPrincipal,
+    @Param('memberId', new ParseUUIDPipe()) memberId: string,
+    @Body() dto: PurchaseDto,
+  ) {
+    return this.sharesService.redeem(
+      principal.organizationId,
+      principal.userId,
+      memberId,
+      dto.amount,
+      dto.description,
+      dto.idempotencyKey,
+    );
+  }
+
   @Get('member/:memberId/statement')
   @RequirePermissions(...SHARES_READ)
   statement(

@@ -73,6 +73,145 @@ export class SharesService {
     });
   }
 
+  /**
+   * Redeem share capital: Dr Member Share Capital (3000) / Cr Cash (1000).
+   * Redemption cannot exceed the member's share balance.
+   */
+  async redeem(
+    organizationId: string | null,
+    actorUserId: string,
+    memberId: string,
+    amount: number,
+    description?: string,
+    idempotencyKey?: string,
+  ): Promise<ShareAccountRow> {
+    const orgId = this.requireOrg(organizationId);
+    const value = round2(amount);
+    if (value <= 0) throw new BadRequestException('Invalid redemption amount');
+    await withTenant(this.pool, orgId, async (c) => {
+      const member = await c.query(
+        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2`,
+        [orgId, memberId],
+      );
+      const m = member.rows[0] as { id: string; status: string } | undefined;
+      if (!m) throw new NotFoundException('Member not found');
+      if (m.status !== 'ACTIVE') {
+        throw new ConflictException('Only ACTIVE members can redeem shares');
+      }
+      if (idempotencyKey) {
+        const dup = await c.query(
+          `SELECT 1 FROM journal_entries
+            WHERE organization_id = $1 AND idempotency_key = $2 LIMIT 1`,
+          [orgId, idempotencyKey],
+        );
+        if (dup.rows[0]) {
+          throw new ConflictException('idempotencyKey has already been used');
+        }
+      }
+      const existing = await c.query(
+        `SELECT id, current_balance FROM member_share_accounts
+          WHERE organization_id = $1 AND member_id = $2`,
+        [orgId, memberId],
+      );
+      const account = existing.rows[0] as
+        | { id: string; current_balance: string }
+        | undefined;
+      if (!account) throw new ConflictException('Member has no share account');
+      const balanceBefore = Number(account.current_balance);
+      if (value > balanceBefore) {
+        throw new BadRequestException(
+          `Insufficient share balance (available ${balanceBefore})`,
+        );
+      }
+      const accountId = account.id;
+
+      const period = await c.query(
+        `SELECT id FROM ledger_periods
+          WHERE organization_id = $1 AND status = 'OPEN'
+            AND now()::date BETWEEN start_date AND end_date
+          ORDER BY start_date DESC LIMIT 1`,
+        [orgId],
+      );
+      const periodId = (period.rows[0] as { id: string } | undefined)?.id;
+      if (!periodId) {
+        throw new ConflictException('No OPEN accounting period for today — cannot post');
+      }
+      const seq = await c.query(
+        `UPDATE org_counters SET journal_seq = journal_seq + 1, updated_at = now()
+          WHERE organization_id = $1 RETURNING journal_seq`,
+        [orgId],
+      );
+      const entryNo = Number(
+        (seq.rows[0] as { journal_seq: string | number }).journal_seq,
+      );
+      const entryId = randomUUID();
+      await c.query(
+        `INSERT INTO journal_entries
+           (id, organization_id, period_id, entry_date, description, source,
+            source_type, source_id, status, entry_no, idempotency_key, created_by, posted_by, posted_at)
+         VALUES ($1, $2, $3, now()::date, $4, 'SHARE_REDEMPTION', 'share_account', $5,
+                 'POSTED', $6, $7, $8, $8, now())`,
+        [
+          entryId,
+          orgId,
+          periodId,
+          description ?? `Share redemption ${String(value)}`,
+          accountId,
+          entryNo,
+          idempotencyKey ?? null,
+          actorUserId,
+        ],
+      );
+      const accRes = await c.query(
+        `SELECT id, code FROM chart_of_accounts
+          WHERE organization_id = $1 AND code = ANY($2::varchar[])`,
+        [orgId, ['1000', '3000']],
+      );
+      const idByCode = new Map<string, string>();
+      for (const r of accRes.rows as { id: string; code: string }[]) {
+        idByCode.set(r.code, r.id);
+      }
+      const missing = ['1000', '3000'].find((code) => !idByCode.has(code));
+      if (missing) throw new BadRequestException(`Unknown account code: ${missing}`);
+      // Dr 3000 (equity down) / Cr 1000 (cash out)
+      await c.query(
+        `INSERT INTO journal_lines (organization_id, journal_entry_id, account_id, debit, credit, member_id)
+         VALUES ($1, $2, $3, $4, '0', $5),
+                ($1, $2, $6, '0', $4, $5)`,
+        [
+          orgId,
+          entryId,
+          idByCode.get('3000'),
+          String(value),
+          memberId,
+          idByCode.get('1000'),
+        ],
+      );
+      const balance = round2(balanceBefore - value);
+      await c.query(
+        `UPDATE member_share_accounts SET current_balance = $1
+          WHERE organization_id = $2 AND id = $3`,
+        [String(balance), orgId, accountId],
+      );
+      await c.query(
+        `INSERT INTO share_transactions (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
+         VALUES ($1, $2, $3, 'REDEMPTION', $4, $5)`,
+        [orgId, accountId, entryId, String(-value), String(balance)],
+      );
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, 'journal.auto.posted', 'journal_entry', $3, $4)`,
+        [
+          orgId,
+          actorUserId,
+          entryId,
+          JSON.stringify({ source: 'SHARE_REDEMPTION', entryNo, value }),
+        ],
+      );
+    });
+    return this.getAccount(orgId, memberId);
+  }
+
   /** Purchase share capital: Dr Cash / Cr Member Share Capital (3000). */
   async purchase(
     organizationId: string | null,

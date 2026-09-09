@@ -649,6 +649,7 @@ export const memberShareAccounts = pgTable(
     openedAt: timestamp('opened_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

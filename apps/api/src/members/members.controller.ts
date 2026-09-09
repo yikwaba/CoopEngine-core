@@ -7,8 +7,11 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { MembersService, MemberRow, NextOfKinRow } from './members.service';
 import {
   MemberImportService,
@@ -54,8 +57,19 @@ export class MembersController {
 
   @Get()
   @RequirePermissions(...READ_PERMISSIONS)
-  list(@CurrentUser() principal: AuthPrincipal): Promise<MemberRow[]> {
-    return this.membersService.list(principal.organizationId);
+  async list(
+    @CurrentUser() principal: AuthPrincipal,
+    @Res({ passthrough: true }) res: Response,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    const { items, total } = await this.membersService.list(
+      principal.organizationId,
+      limit ? Number(limit) : undefined,
+      offset ? Number(offset) : undefined,
+    );
+    res.setHeader('X-Total-Count', String(total));
+    return items;
   }
 
   @Get(':id')
@@ -131,12 +145,11 @@ export class MembersController {
   exit(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) memberId: string,
-  ): Promise<MemberRow> {
-    return this.membersService.transition(
+  ) {
+    return this.membersService.exitMember(
       principal.organizationId,
       principal.userId,
       memberId,
-      'EXITED',
     );
   }
 

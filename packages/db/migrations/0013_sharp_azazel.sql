@@ -1,0 +1,1 @@
+ALTER TABLE "member_share_accounts" ADD COLUMN "closed_at" timestamp with time zone;
