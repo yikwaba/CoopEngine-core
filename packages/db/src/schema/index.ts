@@ -782,6 +782,42 @@ export const memberOtps = pgTable(
   ],
 );
 
+/** Savings interest period-end postings (one per org+period). */
+export const savingsInterestPostings = pgTable(
+  'savings_interest_postings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    periodCode: varchar('period_code', { length: 7 }).notNull(), // YYYY-MM
+    totalAmount: numeric('total_amount', { precision: 19, scale: 2 })
+      .notNull()
+      .default('0'),
+    entryId: uuid('entry_id').references(() => journalEntries.id, {
+      onDelete: 'set null',
+    }),
+    postedBy: uuid('posted_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    postedAt: timestamp('posted_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('interest_postings_org_period_uq').on(
+      table.organizationId,
+      table.periodCode,
+    ),
+  ],
+);
+
 /** Bulk member-import batches: validated preview rows awaiting commit. */
 export const importBatches = pgTable(
   'import_batches',
@@ -1089,6 +1125,8 @@ export type NewPayrollBatch = typeof payrollBatches.$inferInsert;
 export type OrgLookup = typeof orgLookups.$inferSelect;
 export type MemberOtp = typeof memberOtps.$inferSelect;
 export type NewMemberOtp = typeof memberOtps.$inferInsert;
+export type SavingsInterestPosting = typeof savingsInterestPostings.$inferSelect;
+export type NewSavingsInterestPosting = typeof savingsInterestPostings.$inferInsert;
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
 export type NextOfKin = typeof nextOfKin.$inferSelect;

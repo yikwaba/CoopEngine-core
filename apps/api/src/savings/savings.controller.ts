@@ -100,6 +100,29 @@ export class SavingsController {
     );
   }
 
+  @Get('interest/preview')
+  @RequirePermissions('savings.post', 'savings.withdraw', 'reports.view', 'settings.manage')
+  interestPreview(
+    @CurrentUser() principal: AuthPrincipal,
+    @Query('period') period?: string,
+  ) {
+    return this.savingsService.interestPreview(principal.organizationId, period);
+  }
+
+  @Post('interest/post')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('savings.post')
+  postInterest(
+    @CurrentUser() principal: AuthPrincipal,
+    @Body() body: { period?: string },
+  ) {
+    return this.savingsService.postInterest(
+      principal.organizationId,
+      principal.userId,
+      body.period,
+    );
+  }
+
   @Get('accounts/:id')
   @RequirePermissions(...SAVINGS_READ)
   account(

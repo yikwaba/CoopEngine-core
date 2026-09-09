@@ -38,6 +38,7 @@ const TABLES = [
   'share_transactions',
   'payroll_batches',
   'member_otps',
+  'savings_interest_postings',
 ];
 
 const BALANCED_JOURNAL_SQL = `

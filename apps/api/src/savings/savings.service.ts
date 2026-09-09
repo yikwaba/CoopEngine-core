@@ -515,4 +515,218 @@ export class SavingsService {
       ],
     );
   }
+
+  // ----------------------------------------------- savings interest engine
+
+  private currentPeriodCode(): string {
+    const d = new Date();
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
+  private validPeriodCode(periodCode?: string): string {
+    const code = periodCode ?? this.currentPeriodCode();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(code)) {
+      throw new BadRequestException('period must be in YYYY-MM format');
+    }
+    return code;
+  }
+
+  private accrualQuery(): string {
+    return `SELECT a.id AS account_id, a.member_id, m.member_no,
+                   m.first_name || ' ' || m.last_name AS member,
+                   p.code AS product_code, p.interest_rate_pa,
+                   a.current_balance,
+                   round((a.current_balance * p.interest_rate_pa / 100 / 12)::numeric, 2) AS amount
+              FROM member_savings_accounts a
+              JOIN members m ON m.id = a.member_id
+              JOIN savings_products p ON p.id = a.product_id
+             WHERE a.organization_id = $1 AND a.status = 'ACTIVE'
+               AND a.current_balance > 0.004 AND p.interest_rate_pa > 0`;
+  }
+
+  /** Preview one month of savings interest at current balances/rates. */
+  async interestPreview(
+    organizationId: string | null,
+    periodCode?: string,
+  ): Promise<{
+    period: string;
+    total: number;
+    rows: {
+      accountId: string;
+      memberNo: number;
+      member: string;
+      productCode: string;
+      ratePa: number;
+      balance: number;
+      amount: number;
+    }[];
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    const period = this.validPeriodCode(periodCode);
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(this.accrualQuery(), [orgId]);
+      const data = rows.map((r: Record<string, unknown>) => ({
+        accountId: r.account_id as string,
+        memberNo: Number(r.member_no),
+        member: r.member as string,
+        productCode: r.product_code as string,
+        ratePa: Number(r.interest_rate_pa),
+        balance: Number(r.current_balance),
+        amount: Number(r.amount),
+      }));
+      return {
+        period,
+        total: Math.round(data.reduce((a, d) => a + d.amount, 0) * 100) / 100,
+        rows: data,
+      };
+    });
+  }
+
+  /**
+   * Period-end interest posting (idempotent per org+period):
+   * one balanced journal — Dr 5000 Interest on Savings / Cr 2000 Member
+   * Savings Deposits per member — credited to balances and projections.
+   */
+  async postInterest(
+    organizationId: string | null,
+    actorUserId: string,
+    periodCode?: string,
+  ): Promise<{
+    period: string;
+    total: number;
+    accounts: number;
+    entryNo: number;
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    const period = this.validPeriodCode(periodCode);
+    const postId = randomUUID();
+    let entryNo = 0;
+    let total = 0;
+    let accounts = 0;
+    await withTenant(this.pool, orgId, async (c) => {
+      const already = await c.query(
+        `SELECT 1 FROM savings_interest_postings
+          WHERE organization_id = $1 AND period_code = $2`,
+        [orgId, period],
+      );
+      if (already.rows[0]) {
+        throw new ConflictException(`Interest already posted for ${period}`);
+      }
+      const periodRow = await c.query(
+        `SELECT id, status FROM ledger_periods
+          WHERE organization_id = $1 AND code = $2`,
+        [orgId, period],
+      );
+      const p = periodRow.rows[0] as { id: string; status: string } | undefined;
+      if (!p || p.status !== 'OPEN') {
+        throw new ConflictException(`Ledger period ${period} is not OPEN`);
+      }
+      const { rows } = await c.query(this.accrualQuery(), [orgId]);
+      const accruals = rows.map((r: Record<string, unknown>) => ({
+        accountId: r.account_id as string,
+        memberId: r.member_id as string,
+        amount: Number(r.amount),
+      })).filter((a) => a.amount > 0.004);
+      if (accruals.length === 0) {
+        throw new BadRequestException('No savings balances with a positive rate — nothing to post');
+      }
+      total = Math.round(accruals.reduce((a, x) => a + x.amount, 0) * 100) / 100;
+
+      const accRes = await c.query(
+        `SELECT id, code FROM chart_of_accounts
+          WHERE organization_id = $1 AND code = ANY($2::varchar[])`,
+        [orgId, ['2000', '5000']],
+      );
+      const idByCode = new Map<string, string>();
+      for (const r of accRes.rows as { id: string; code: string }[]) {
+        idByCode.set(r.code, r.id);
+      }
+      const missing = ['2000', '5000'].find((code) => !idByCode.has(code));
+      if (missing) throw new BadRequestException(`Unknown account code: ${missing}`);
+
+      const seq = await c.query(
+        `UPDATE org_counters SET journal_seq = journal_seq + 1, updated_at = now()
+          WHERE organization_id = $1 RETURNING journal_seq`,
+        [orgId],
+      );
+      entryNo = Number((seq.rows[0] as { journal_seq: string | number }).journal_seq);
+      const entryId = randomUUID();
+      await c.query(
+        `INSERT INTO journal_entries
+           (id, organization_id, period_id, entry_date, description, source,
+            source_type, source_id, status, entry_no, created_by, posted_by, posted_at)
+         VALUES ($1, $2, $3, now()::date, $4, 'SAVINGS_INTEREST', 'interest_posting', $5,
+                 'POSTED', $6, $7, $7, now())`,
+        [
+          entryId,
+          orgId,
+          p.id,
+          `Interest on savings ${period}`,
+          postId,
+          entryNo,
+          actorUserId,
+        ],
+      );
+
+      // Dr 5000 (expense) + Cr 2000 (liability) per member, one statement
+      const values: string[] = [];
+      const params: unknown[] = [];
+      const pushLine = (accountId: string, debit: string, credit: string, memberId: string) => {
+        const base = params.length;
+        values.push(
+          `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`,
+        );
+        params.push(orgId, entryId, accountId, debit, credit, memberId);
+      };
+      for (const a of accruals) {
+        const amount = String(a.amount);
+        pushLine(idByCode.get('5000')!, amount, '0', a.memberId);
+        pushLine(idByCode.get('2000')!, '0', amount, a.memberId);
+      }
+      await c.query(
+        `INSERT INTO journal_lines (organization_id, journal_entry_id, account_id, debit, credit, member_id)
+         VALUES ${values.join(', ')}`,
+        params,
+      );
+
+      // Credit balances + projections
+      for (const a of accruals) {
+        const bal = await c.query(
+          `SELECT current_balance FROM member_savings_accounts
+            WHERE organization_id = $1 AND id = $2`,
+          [orgId, a.accountId],
+        );
+        const before = Number((bal.rows[0] as { current_balance: string }).current_balance);
+        const after = Math.round((before + a.amount) * 100) / 100;
+        await c.query(
+          `UPDATE member_savings_accounts SET current_balance = $1
+            WHERE organization_id = $2 AND id = $3`,
+          [String(after), orgId, a.accountId],
+        );
+        await c.query(
+          `INSERT INTO savings_transactions (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
+           VALUES ($1, $2, $3, 'INTEREST', $4, $5)`,
+          [orgId, a.accountId, entryId, String(a.amount), String(after)],
+        );
+      }
+
+      await c.query(
+        `INSERT INTO savings_interest_postings (id, organization_id, period_code, total_amount, entry_id, posted_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [postId, orgId, period, String(total), entryId, actorUserId],
+      );
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, 'journal.auto.posted', 'journal_entry', $3, $4)`,
+        [
+          orgId,
+          actorUserId,
+          entryId,
+          JSON.stringify({ source: 'SAVINGS_INTEREST', period, entryNo, total }),
+        ],
+      );
+      accounts = accruals.length;
+    });
+    return { period, total, accounts, entryNo };
+  }
 }
