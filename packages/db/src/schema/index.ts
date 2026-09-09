@@ -818,6 +818,97 @@ export const savingsInterestPostings = pgTable(
   ],
 );
 
+/**
+ * Public virtual-account resolver (NO RLS by design): lets unauthenticated
+ * inbound payment webhooks resolve an account number to its organization
+ * before any tenant context exists. Maintained transactionally on create.
+ */
+export const virtualAccountLookups = pgTable('virtual_account_lookups', {
+  accountNumber: varchar('account_number', { length: 32 }).primaryKey(),
+  organizationId: uuid('organization_id')
+    .notNull()
+    .references(() => organizations.id, { onDelete: 'cascade' }),
+  memberId: uuid('member_id')
+    .notNull()
+    .references(() => members.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/** Monnify/dev virtual accounts per member (payment collection rails). */
+export const memberVirtualAccounts = pgTable(
+  'member_virtual_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    provider: varchar('provider', { length: 16 }).notNull().default('dev'), // monnify|dev
+    accountReference: varchar('account_reference', { length: 80 }).notNull(),
+    accountNumber: varchar('account_number', { length: 32 }).notNull(),
+    accountName: varchar('account_name', { length: 160 }).notNull(),
+    bankName: varchar('bank_name', { length: 120 }).notNull(),
+    status: text('status').notNull().default('ACTIVE'), // ACTIVE|CLOSED
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('virtual_accounts_number_uq').on(table.organizationId, table.accountNumber),
+    index('virtual_accounts_member_idx').on(table.memberId),
+  ],
+);
+
+/** Inbound payment notifications (Monnify webhooks / dev simulators). */
+export const paymentNotifications = pgTable(
+  'payment_notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    accountReference: varchar('account_reference', { length: 80 }).notNull(),
+    accountNumber: varchar('account_number', { length: 32 }).notNull(),
+    paymentReference: varchar('payment_reference', { length: 120 }).notNull(),
+    transactionReference: varchar('transaction_reference', { length: 120 }).notNull(),
+    amount: numeric('amount', { precision: 19, scale: 2 }).notNull(),
+    paidAt: timestamp('paid_at', { withTimezone: true }).notNull(),
+    status: text('status').notNull().default('POSTED'), // POSTED|FAILED
+    journalEntryId: uuid('journal_entry_id').references(() => journalEntries.id, {
+      onDelete: 'set null',
+    }),
+    raw: jsonb('raw').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('payment_notifications_ref_uq').on(
+      table.organizationId,
+      table.paymentReference,
+    ),
+  ],
+);
+
 /** Bulk member-import batches: validated preview rows awaiting commit. */
 export const importBatches = pgTable(
   'import_batches',
@@ -1127,6 +1218,11 @@ export type MemberOtp = typeof memberOtps.$inferSelect;
 export type NewMemberOtp = typeof memberOtps.$inferInsert;
 export type SavingsInterestPosting = typeof savingsInterestPostings.$inferSelect;
 export type NewSavingsInterestPosting = typeof savingsInterestPostings.$inferInsert;
+export type MemberVirtualAccount = typeof memberVirtualAccounts.$inferSelect;
+export type NewMemberVirtualAccount = typeof memberVirtualAccounts.$inferInsert;
+export type PaymentNotification = typeof paymentNotifications.$inferSelect;
+export type NewPaymentNotification = typeof paymentNotifications.$inferInsert;
+export type VirtualAccountLookup = typeof virtualAccountLookups.$inferSelect;
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
 export type NextOfKin = typeof nextOfKin.$inferSelect;

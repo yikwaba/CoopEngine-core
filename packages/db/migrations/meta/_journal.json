@@ -106,6 +106,20 @@
       "when": 1788928179509,
       "tag": "0014_easy_ultimatum",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1788933548150,
+      "tag": "0015_keen_northstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788933734284,
+      "tag": "0016_graceful_stick",
+      "breakpoints": true
     }
   ]
 }

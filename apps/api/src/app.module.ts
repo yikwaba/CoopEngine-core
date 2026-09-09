@@ -12,6 +12,7 @@ import { PayrollModule } from './payroll/payroll.module';
 import { MemberAuthModule } from './member-auth/member-auth.module';
 import { MemberSpaceModule } from './member-space/member-space.module';
 import { OrgUsersModule } from './org-users/org-users.module';
+import { PaymentsModule } from './payments/payments.module';
 import { DatabaseModule } from './database/database.module';
 
 @Module({
@@ -29,6 +30,7 @@ import { DatabaseModule } from './database/database.module';
     MemberAuthModule,
     MemberSpaceModule,
     OrgUsersModule,
+    PaymentsModule,
     HealthModule,
   ],
 })

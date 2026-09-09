@@ -3,13 +3,27 @@ import { randomUUID } from 'node:crypto';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { json } from 'express';
 import { AppModule } from './app.module';
 import { ENV } from './config/env';
 
 const API_PREFIX = 'api/v1';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+
+  // JSON body parsing with raw-bytes capture so Monnify webhook signatures
+  // can be verified over the exact payload that was received.
+  const captureRaw = (
+    req: { rawBody?: Buffer },
+    _res: unknown,
+    buf: Buffer,
+  ): void => {
+    req.rawBody = buf;
+  };
+  app.use(
+    json({ limit: '256kb', verify: captureRaw as never }) as never,
+  );
 
   // Request ID: accept inbound x-request-id or mint one; echo on the response.
   app.use((req: { headers: Record<string, unknown>; id?: string }, res: { setHeader: (k: string, v: string) => void }, next: () => void) => {

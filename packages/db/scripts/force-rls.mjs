@@ -39,6 +39,8 @@ const TABLES = [
   'payroll_batches',
   'member_otps',
   'savings_interest_postings',
+  'member_virtual_accounts',
+  'payment_notifications',
 ];
 
 const BALANCED_JOURNAL_SQL = `
