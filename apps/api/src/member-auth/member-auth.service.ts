@@ -63,20 +63,31 @@ export class MemberAuthService {
     organizationSlug: string,
     email: string,
   ): Promise<{ sent: boolean; devCode?: string; provider: string }> {
+    const provider: 'dev' | 'termii' =
+      (process.env.MEMBER_OTP_PROVIDER ?? 'dev').toLowerCase() === 'termii'
+        ? 'termii'
+        : 'dev';
     const orgId = await this.resolveOrgBySlug(organizationSlug);
     if (!orgId) {
-      return { sent: false, provider: DEV_PROVIDER ? 'dev' : 'production' };
+      return { sent: false, provider };
     }
     let devCode: string | undefined;
+    let phone: string | null = null;
+    let codeOut: string | undefined;
     await withTenant(this.pool, orgId, async (c) => {
       const member = await c.query(
-        `SELECT id, status FROM members
+        `SELECT id, status, phone FROM members
           WHERE organization_id = $1 AND lower(email) = lower($2)`,
         [orgId, email],
       );
-      const m = member.rows[0] as { id: string; status: string } | undefined;
+      const m = member.rows[0] as
+        | { id: string; status: string; phone: string | null }
+        | undefined;
       if (!m || m.status !== 'ACTIVE') {
         return; // generic response; no OTP stored
+      }
+      if (provider === 'termii' && !m.phone) {
+        return; // no delivery channel for this member
       }
       // Invalidate prior unused codes for this member
       await c.query(
@@ -91,13 +102,62 @@ export class MemberAuthService {
          VALUES ($1, $2, $3, $4)`,
         [orgId, m.id, hashCode(code), expires],
       );
-      devCode = code;
+      if (provider === 'dev') {
+        devCode = code;
+      } else {
+        phone = m.phone;
+        codeOut = code;
+      }
     });
+    if (provider === 'termii' && codeOut && phone) {
+      const delivered = await this.termiiDeliver(phone, codeOut);
+      return { sent: delivered, provider };
+    }
     return {
       sent: devCode !== undefined,
       devCode,
-      provider: DEV_PROVIDER ? 'dev' : 'production',
+      provider,
     };
+  }
+
+  /**
+   * Deliver the 6-digit code by SMS through Termii (generic channel).
+   * Requires TERMII_API_KEY + TERMII_SENDER_ID. Failures are logged and
+   * reported as not-sent — the caller keeps the response generic.
+   */
+  private async termiiDeliver(to: string, code: string): Promise<boolean> {
+    const apiKey = process.env.TERMII_API_KEY;
+    const senderId = process.env.TERMII_SENDER_ID;
+    if (!apiKey || !senderId) {
+      // eslint-disable-next-line no-console
+      console.error('MEMBER_OTP_PROVIDER=termii but TERMII_API_KEY/TERMII_SENDER_ID missing');
+      return false;
+    }
+    try {
+      const res = await fetch('https://api.ng.termii.com/api/sms/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_key: apiKey,
+          to,
+          from: senderId,
+          type: 'plain',
+          channel: 'generic',
+          message: `Your Co-opEngine verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes. Do not share it.`,
+        }),
+      });
+      if (!res.ok) {
+        // eslint-disable-next-line no-console
+        console.error(`Termii send failed: ${res.status} ${await res.text()}`);
+        return false;
+      }
+      const body = (await res.json()) as { message_id?: string };
+      return body.message_id !== undefined;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Termii send error:', err instanceof Error ? err.message : err);
+      return false;
+    }
   }
 
   /** Verify an OTP and issue a member-scoped access token (60 min). */
