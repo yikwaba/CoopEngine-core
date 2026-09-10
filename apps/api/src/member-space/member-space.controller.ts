@@ -2,10 +2,40 @@ import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Res, UseGuard
 import { IsBoolean, IsIn, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { MemberSpaceService } from './member-space.service';
 import { DocumentsService } from '../documents/documents.service';
+import { GoalsService } from '../goals/goals.service';
 import type { Response } from 'express';
 import { MemberJwtGuard } from '../common/guards/member-jwt.guard';
 import { CurrentMember } from '../common/decorators/current-member.decorator';
 import { MemberPrincipal } from '../common/guards/member-jwt.guard';
+
+class MemberGoalDto {
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  name!: string;
+
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(1)
+  targetAmount!: number;
+
+  @IsOptional()
+  @IsString()
+  targetDate?: string;
+}
+
+class MemberInstructionDto {
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(1)
+  amount!: number;
+
+  @IsIn(['WEEKLY', 'MONTHLY'])
+  frequency!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  note?: string;
+}
 
 class MemberDocumentDto {
   @IsIn(['ID_CARD', 'UTILITY_BILL', 'PASSPORT', 'SIGNATURE', 'OTHER'])
@@ -58,6 +88,7 @@ export class MemberSpaceController {
   constructor(
     private readonly memberSpaceService: MemberSpaceService,
     private readonly documentsService: DocumentsService,
+    private readonly goalsService: GoalsService,
   ) {}
 
   @Get('me')
@@ -102,6 +133,36 @@ export class MemberSpaceController {
       principal.memberId,
       dto,
       { byMember: true },
+    );
+  }
+
+  @Get('goals')
+  goals(@CurrentMember() principal: MemberPrincipal) {
+    return this.goalsService.listGoals(principal.organizationId, principal.memberId);
+  }
+
+  @Post('goals')
+  createGoal(@CurrentMember() principal: MemberPrincipal, @Body() dto: MemberGoalDto) {
+    return this.goalsService.createGoal(principal.organizationId, principal.memberId, dto);
+  }
+
+  @Get('standing-instructions')
+  instructions(@CurrentMember() principal: MemberPrincipal) {
+    return this.memberSpaceService.myInstructions(
+      principal.organizationId,
+      principal.memberId,
+    );
+  }
+
+  @Post('standing-instructions')
+  createInstruction(
+    @CurrentMember() principal: MemberPrincipal,
+    @Body() dto: MemberInstructionDto,
+  ) {
+    return this.goalsService.createInstruction(
+      principal.organizationId,
+      principal.memberId,
+      dto,
     );
   }
 

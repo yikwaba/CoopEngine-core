@@ -34,7 +34,7 @@ export const TENANT_GUC = 'app.tenant_id';
 
 /** Policy predicate: row belongs to the current tenant context. */
 const tenantScope = (orgColumn: unknown) =>
-  sql`${orgColumn} = current_setting('app.tenant_id', true)::uuid`;
+  sql`${orgColumn} = nullif(current_setting('app.tenant_id', true), '')::uuid`;
 
 export const organizations = pgTable(
   'organizations',
@@ -821,7 +821,66 @@ export const savingsInterestPostings = pgTable(
 );
 
 /**
- /** KYC / membership documents uploaded for a member. */
+ /** Member savings goals (target amount + optional target date). */
+export const savingsGoals = pgTable(
+  'savings_goals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 120 }).notNull(),
+    targetAmount: numeric('target_amount', { precision: 19, scale: 2 }).notNull(),
+    targetDate: date('target_date'),
+    startingBalance: numeric('starting_balance', { precision: 19, scale: 2 }).notNull(),
+    status: text('status').notNull().default('ACTIVE'), // ACTIVE|ACHIEVED|CANCELLED
+    achievedAt: timestamp('achieved_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+  ],
+);
+
+/** Standing contribution instructions (recorded mandates, reminder-driven). */
+export const standingInstructions = pgTable(
+  'standing_instructions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    amount: numeric('amount', { precision: 19, scale: 2 }).notNull(),
+    frequency: text('frequency').notNull().default('MONTHLY'), // WEEKLY|MONTHLY
+    nextRunDate: date('next_run_date').notNull(),
+    status: text('status').notNull().default('ACTIVE'), // ACTIVE|PAUSED|CANCELLED
+    note: varchar('note', { length: 255 }),
+    lastRemindedAt: timestamp('last_reminded_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+  ],
+);
+
+/** KYC / membership documents uploaded for a member. */
 export const memberDocuments = pgTable(
   'member_documents',
   {
@@ -1346,6 +1405,8 @@ export type NewMemberVirtualAccount = typeof memberVirtualAccounts.$inferInsert;
 export type PaymentNotification = typeof paymentNotifications.$inferSelect;
 export type NewPaymentNotification = typeof paymentNotifications.$inferInsert;
 export type VirtualAccountLookup = typeof virtualAccountLookups.$inferSelect;
+export type SavingsGoal = typeof savingsGoals.$inferSelect;
+export type StandingInstruction = typeof standingInstructions.$inferSelect;
 export type MemberDocument = typeof memberDocuments.$inferSelect;
 export type NewMemberDocument = typeof memberDocuments.$inferInsert;
 export type Notification = typeof notifications.$inferSelect;

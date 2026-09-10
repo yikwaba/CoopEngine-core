@@ -18,8 +18,15 @@ if [ -z "$TOKEN" ]; then
 fi
 PORT="${PORT:-3999}"
 
+# 1. Queue contribution reminders for due standing instructions
+sweep=$(curl -sS --max-time 60 -X POST "http://127.0.0.1:${PORT}/api/v1/internal/savings/sweep" \
+  -H "Content-Type: application/json" \
+  -H "x-internal-token: $TOKEN" -d '{}' || true)
+echo "contribution sweep: $sweep"
+
+# 2. Flush queued notifications per tenant
 total=0
-orgs=$(psql "$DATABASE_URL" -At -c "SELECT id FROM organizations ORDER BY created_at")
+orgs=$(psql "$DATABASE_URL" -At -c "BEGIN; SELECT set_config('app.internal_scan', 'on', true); SELECT id FROM organizations ORDER BY created_at; COMMIT;" | grep -E '^[0-9a-f-]{36}$')
 for org in $orgs; do
   result=$(curl -sS --max-time 60 -X POST "http://127.0.0.1:${PORT}/api/v1/internal/notifications/dispatch" \
     -H "Content-Type: application/json" \

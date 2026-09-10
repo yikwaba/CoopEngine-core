@@ -225,6 +225,58 @@ export class MemberSpaceService {
     });
   }
 
+  /** This member's savings goals (with live progress). */
+  async myGoals(organizationId: string, memberId: string): Promise<unknown[]> {
+    return withTenant(this.pool, organizationId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT g.id, g.name, g.target_amount, g.target_date, g.starting_balance, g.status,
+                (SELECT coalesce(sum(a.current_balance), 0)
+                   FROM member_savings_accounts a
+                  WHERE a.member_id = g.member_id AND a.status = 'ACTIVE') AS savings_total
+           FROM savings_goals g
+          WHERE g.member_id = $1 AND g.status <> 'CANCELLED'
+          ORDER BY g.created_at DESC`,
+        [memberId],
+      );
+      return rows.map((r) => {
+        const current = Number(r.savings_total);
+        const starting = Number(r.starting_balance);
+        const target = Number(r.target_amount);
+        const progress = Math.round(Math.max(current - starting, 0) * 100) / 100;
+        return {
+          id: r.id as string,
+          name: r.name as string,
+          targetAmount: target,
+          targetDate: (r.target_date as string | null) ?? null,
+          progress,
+          percent: target > 0 ? Math.min(Math.round((progress / target) * 100), 100) : 0,
+          status: r.status as string,
+        };
+      });
+    });
+  }
+
+  /** This member's standing contribution instructions. */
+  async myInstructions(organizationId: string, memberId: string): Promise<unknown[]> {
+    return withTenant(this.pool, organizationId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT id, amount, frequency, next_run_date, status, note
+           FROM standing_instructions
+          WHERE member_id = $1 AND status <> 'CANCELLED'
+          ORDER BY next_run_date`,
+        [memberId],
+      );
+      return rows.map((r) => ({
+        id: r.id as string,
+        amount: Number(r.amount),
+        frequency: r.frequency as string,
+        nextRunDate: r.next_run_date as string,
+        status: r.status as string,
+        note: (r.note as string | null) ?? null,
+      }));
+    });
+  }
+
   /** Documents in this member's own vault. */
   async myDocuments(
     organizationId: string,

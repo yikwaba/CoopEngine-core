@@ -41,8 +41,19 @@ export class NotificationsInternalController {
     if (dto.organizationId) {
       orgIds.push(dto.organizationId);
     } else {
-      const { rows } = await this.pool.query(`SELECT id FROM organizations ORDER BY created_at`);
-      for (const r of rows as { id: string }[]) orgIds.push(r.id);
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(`SELECT set_config('app.internal_scan', 'on', true)`);
+        const { rows } = await client.query(`SELECT id FROM organizations ORDER BY created_at`);
+        for (const r of rows as { id: string }[]) orgIds.push(r.id);
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
     }
     let attempted = 0;
     let sent = 0;

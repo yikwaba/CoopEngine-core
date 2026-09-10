@@ -19,6 +19,7 @@ import { DividendsModule } from './dividends/dividends.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { DocumentsModule } from './documents/documents.module';
 import { BranchesModule } from './branches/branches.module';
+import { GoalsModule } from './goals/goals.module';
 import { DatabaseModule } from './database/database.module';
 
 @Module({
@@ -43,6 +44,7 @@ import { DatabaseModule } from './database/database.module';
     NotificationsModule,
     DocumentsModule,
     BranchesModule,
+    GoalsModule,
     HealthModule,
   ],
 })

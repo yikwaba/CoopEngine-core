@@ -15,7 +15,7 @@ set -a; . "$ENV_FILE"; set +a
 : "${DATABASE_URL:?DATABASE_URL must be set}"
 
 total=0
-orgs=$(psql "$DATABASE_URL" -At -c "SELECT id FROM organizations ORDER BY created_at")
+orgs=$(psql "$DATABASE_URL" -At -c "BEGIN; SELECT set_config('app.internal_scan', 'on', true); SELECT id FROM organizations ORDER BY created_at; COMMIT;" | grep -E '^[0-9a-f-]{36}$')
 for org in $orgs; do
   marked=$(psql "$DATABASE_URL" -At -v ON_ERROR_STOP=1 \
     -c "SELECT set_config('app.tenant_id', '$org', false)" \

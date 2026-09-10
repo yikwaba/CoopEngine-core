@@ -25,6 +25,25 @@ interface Dashboard {
   }[];
 }
 
+interface MyGoal {
+  id: string;
+  name: string;
+  targetAmount: number;
+  targetDate: string | null;
+  progress: number;
+  percent: number;
+  status: string;
+}
+
+interface StandingInstruction {
+  id: string;
+  amount: number;
+  frequency: string;
+  nextRunDate: string;
+  status: string;
+  note: string | null;
+}
+
 interface MyDocument {
   id: string;
   docType: string;
@@ -76,6 +95,9 @@ export default function MemberDashboardPage() {
   const [dividends, setDividends] = useState<DividendPayout[]>([]);
   const [notes, setNotes] = useState<MemberNotification[]>([]);
   const [docs, setDocs] = useState<MyDocument[]>([]);
+  const [goals, setGoals] = useState<MyGoal[]>([]);
+  const [instructions, setInstructions] = useState<StandingInstruction[]>([]);
+  const [goalForm, setGoalForm] = useState({ name: '', target: '' });
   const [uploading, setUploading] = useState(false);
   const [docMsg, setDocMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -287,6 +309,85 @@ export default function MemberDashboardPage() {
                 .join(' ')}
             />
           </svg>
+        </section>
+      )}
+
+      <section className="card" style={{ marginTop: 14 }}>
+        <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Savings goals</h2>
+        {goals.map((g) => (
+          <div key={g.id} style={{ marginBottom: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+              <strong>{g.name}</strong>
+              <span>
+                ₦{g.progress.toLocaleString()} / ₦{g.targetAmount.toLocaleString()}
+              </span>
+            </div>
+            <div style={{ background: '#eef1f4', borderRadius: 6, height: 8, marginTop: 4 }}>
+              <div
+                style={{
+                  width: `${g.percent}%`,
+                  height: 8,
+                  borderRadius: 6,
+                  background: g.status === 'ACHIEVED' ? '#0a6c2e' : '#1d4ed8',
+                }}
+              />
+            </div>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#5b6772' }}>
+              {g.percent}% · {g.status}
+              {g.targetDate ? ` · by ${g.targetDate}` : ''}
+            </p>
+          </div>
+        ))}
+        {goals.length === 0 && <p style={{ fontSize: 13, color: '#5b6772' }}>No goals yet.</p>}
+        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+          <input
+            placeholder="Goal name (e.g. Rent)"
+            value={goalForm.name}
+            onChange={(e) => setGoalForm({ ...goalForm, name: e.target.value })}
+            style={{ flex: 1, padding: 8, borderRadius: 8, border: '1px solid #cfd6de' }}
+          />
+          <input
+            placeholder="Target ₦"
+            inputMode="decimal"
+            value={goalForm.target}
+            onChange={(e) => setGoalForm({ ...goalForm, target: e.target.value })}
+            style={{ width: 110, padding: 8, borderRadius: 8, border: '1px solid #cfd6de' }}
+          />
+          <button
+            disabled={!goalForm.name || !goalForm.target}
+            onClick={() => {
+              const token = readMemberToken();
+              if (!token) return;
+              void apiFetch('/member/goals', token, {
+                method: 'POST',
+                body: JSON.stringify({
+                  name: goalForm.name,
+                  targetAmount: Number(goalForm.target),
+                }),
+              })
+                .then(() => {
+                  setGoalForm({ name: '', target: '' });
+                  return refresh();
+                })
+                .catch(() => undefined);
+            }}
+          >
+            Add
+          </button>
+        </div>
+      </section>
+
+      {instructions.length > 0 && (
+        <section className="card" style={{ marginTop: 14 }}>
+          <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Standing contributions</h2>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {instructions.map((i) => (
+              <li key={i.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '4px 0' }}>
+                <span>{i.frequency.toLowerCase()} · ₦{i.amount.toLocaleString()}</span>
+                <span style={{ color: '#5b6772', fontSize: 13 }}>next {i.nextRunDate}</span>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 
