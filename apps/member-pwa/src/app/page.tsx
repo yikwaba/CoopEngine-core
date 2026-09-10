@@ -25,6 +25,12 @@ interface Dashboard {
   }[];
 }
 
+interface DividendPayout {
+  periodLabel: string;
+  amount: number;
+  postedAt: string;
+}
+
 interface VirtualAccount {
   id: string;
   provider: string;
@@ -50,6 +56,7 @@ export default function MemberDashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [vAccount, setVAccount] = useState<VirtualAccount | null>(null);
   const [funding, setFunding] = useState<MemberPayment[]>([]);
+  const [dividends, setDividends] = useState<DividendPayout[]>([]);
   const [error, setError] = useState<string | null>(null);
   const info = readMemberInfo();
 
@@ -184,6 +191,46 @@ export default function MemberDashboardPage() {
           <p style={{ margin: '2px 0', opacity: 0.9, fontSize: 13 }}>
             {vAccount.accountName} · funds credit your savings automatically
           </p>
+        </section>
+      )}
+
+      {dividends.length > 0 && (
+        <section className="card" style={{ marginTop: 14 }}>
+          <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Dividends received</h2>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {dividends.map((d) => (
+              <li
+                key={`${d.periodLabel}-${d.postedAt}`}
+                style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 14 }}
+              >
+                <span>{d.periodLabel} distribution</span>
+                <strong style={{ color: '#0a6c2e' }}>+₦{d.amount.toLocaleString()}</strong>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {data && data.recentTransactions.length > 1 && (
+        <section className="card" style={{ marginTop: 14 }}>
+          <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Savings trend</h2>
+          <svg viewBox="0 0 300 60" width="100%" height="60" role="img" aria-label="Savings balance trend">
+            <polyline
+              fill="none"
+              stroke="#0a6c2e"
+              strokeWidth="2"
+              points={data.recentTransactions
+                .slice()
+                .reverse()
+                .map((t, i, arr) => {
+                  const max = Math.max(...arr.map((x) => x.runningBalance), 1);
+                  const x = arr.length > 1 ? (i / (arr.length - 1)) * 296 + 2 : 150;
+                  const y = 58 - (t.runningBalance / max) * 54;
+                  return `${x},${y}`;
+                })
+                .join(' ')}
+            />
+          </svg>
         </section>
       )}
 

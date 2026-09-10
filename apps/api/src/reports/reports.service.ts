@@ -613,13 +613,182 @@ export class ReportsService {
     });
   }
 
+
+  /** One-click board pack: membership, books, collections, dividends, ledger. */
+  async boardPack(
+    organizationId: string | null,
+  ): Promise<{
+    membership: { active: number; pending: number; suspended: number; exited: number };
+    savings: { accounts: number; totalBalance: number };
+    shares: { holders: number; totalBalance: number };
+    loans: { open: number; disbursedTotal: number; outstanding: number };
+    collections: { count: number; total: number };
+    dividends: { runs: number; totalDistributed: number };
+    ledger: { entries: number; net: number };
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const one = async <T>(sql: string): Promise<T> => (await c.query(sql)).rows[0] as T;
+
+      const members = await one<{ active: string; pending: string; suspended: string; exited: string }>(
+        `SELECT count(*) FILTER (WHERE status = 'ACTIVE') AS active,
+                count(*) FILTER (WHERE status = 'PENDING') AS pending,
+                count(*) FILTER (WHERE status = 'SUSPENDED') AS suspended,
+                count(*) FILTER (WHERE status = 'EXITED') AS exited
+           FROM members`,
+      );
+      const savings = await one<{ accounts: string; total: string }>(
+        `SELECT count(*) AS accounts, coalesce(sum(current_balance), 0) AS total
+           FROM member_savings_accounts WHERE status = 'ACTIVE'`,
+      );
+      const shares = await one<{ holders: string; total: string }>(
+        `SELECT count(*) AS holders, coalesce(sum(current_balance), 0) AS total
+           FROM member_share_accounts WHERE status = 'ACTIVE'`,
+      );
+      const loans = await one<{ open: string; disbursed: string; outstanding: string }>(
+        `SELECT count(*) FILTER (WHERE status IN ('DISBURSED','DEFAULTED')) AS open,
+                coalesce(sum(principal) FILTER (WHERE disbursed_at IS NOT NULL), 0) AS disbursed,
+                coalesce(sum(outstanding_principal) FILTER (WHERE status IN ('DISBURSED','DEFAULTED')), 0) AS outstanding
+           FROM loans`,
+      );
+      const collections = await one<{ count: string; total: string }>(
+        `SELECT count(*) AS count, coalesce(sum(amount), 0) AS total FROM payment_notifications
+          WHERE status = 'POSTED'`,
+      );
+      const dividends = await one<{ runs: string; total: string }>(
+        `SELECT count(*) AS runs, coalesce(sum(distributable_amount), 0) AS total FROM dividend_runs`,
+      );
+      const ledger = await one<{ entries: string; net: string }>(
+        `SELECT (SELECT count(*) FROM journal_entries WHERE status = 'POSTED') AS entries,
+                (SELECT coalesce(sum(debit - credit), 0) FROM journal_lines) AS net`,
+      );
+
+      return {
+        membership: {
+          active: Number(members.active),
+          pending: Number(members.pending),
+          suspended: Number(members.suspended),
+          exited: Number(members.exited),
+        },
+        savings: { accounts: Number(savings.accounts), totalBalance: Number(savings.total) },
+        shares: { holders: Number(shares.holders), totalBalance: Number(shares.total) },
+        loans: {
+          open: Number(loans.open),
+          disbursedTotal: Number(loans.disbursed),
+          outstanding: Number(loans.outstanding),
+        },
+        collections: { count: Number(collections.count), total: Number(collections.total) },
+        dividends: { runs: Number(dividends.runs), totalDistributed: Number(dividends.total) },
+        ledger: { entries: Number(ledger.entries), net: Number(ledger.net) },
+      };
+    });
+  }
+
+  /** Portfolio analytics: monthly disbursements/collections + PAR by product. */
+  async portfolioAnalytics(
+    organizationId: string | null,
+    months = 6,
+  ): Promise<{
+    months: { month: string; disbursed: number; collected: number }[];
+    parByProduct: {
+      productCode: string;
+      productName: string;
+      loans: number;
+      outstanding: number;
+      par30: number;
+      par90: number;
+    }[];
+    totals: { outstanding: number; par30: number; par90: number };
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    const span = Math.min(Math.max(Math.trunc(months) || 6, 1), 24);
+    return withTenant(this.pool, orgId, async (c) => {
+      const disb = await c.query(
+        `SELECT to_char(date_trunc('month', disbursed_at), 'YYYY-MM') AS month,
+                coalesce(sum(principal), 0) AS total
+           FROM loans
+          WHERE disbursed_at IS NOT NULL
+            AND disbursed_at >= date_trunc('month', now()) - ($1::int - 1) * interval '1 month'
+          GROUP BY 1 ORDER BY 1`,
+        [span],
+      );
+      const coll = await c.query(
+        `SELECT to_char(date_trunc('month', entry_date), 'YYYY-MM') AS month,
+                coalesce(sum(debit), 0) AS total
+           FROM journal_entries e
+           JOIN journal_lines l ON l.journal_entry_id = e.id
+          WHERE e.source = 'LOAN_REPAYMENT'
+            AND e.entry_date >= date_trunc('month', now()) - ($1::int - 1) * interval '1 month'
+          GROUP BY 1 ORDER BY 1`,
+        [span],
+      );
+      const disbMap = new Map<string, number>();
+      for (const r of disb.rows as { month: string; total: string }[]) {
+        disbMap.set(r.month, Number(r.total));
+      }
+      const collMap = new Map<string, number>();
+      for (const r of coll.rows as { month: string; total: string }[]) {
+        collMap.set(r.month, Number(r.total));
+      }
+      const monthKeys: string[] = [];
+      const now = new Date();
+      for (let i = span - 1; i >= 0; i -= 1) {
+        const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+        monthKeys.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`);
+      }
+      const par = await c.query(
+        `SELECT p.code, p.name,
+                count(l.id) AS loans,
+                coalesce(sum(l.outstanding_principal), 0) AS outstanding,
+                coalesce(sum(l.outstanding_principal) FILTER (WHERE overdue.days_late >= 30), 0) AS par30,
+                coalesce(sum(l.outstanding_principal) FILTER (WHERE overdue.days_late >= 90), 0) AS par90
+           FROM loan_products p
+           JOIN loans l ON l.loan_product_id = p.id AND l.status IN ('DISBURSED','DEFAULTED')
+           LEFT JOIN LATERAL (
+             SELECT max((now()::date - r.due_date)) AS days_late
+               FROM loan_repayments r
+              WHERE r.loan_id = l.id AND r.status <> 'PAID' AND r.due_date < now()::date
+           ) AS overdue ON true
+          GROUP BY p.code, p.name
+          ORDER BY p.code`,
+      );
+      const parByProduct = (par.rows as Record<string, unknown>[]).map((r) => ({
+        productCode: r.code as string,
+        productName: r.name as string,
+        loans: Number(r.loans),
+        outstanding: Number(r.outstanding),
+        par30: Number(r.par30),
+        par90: Number(r.par90),
+      }));
+      return {
+        months: monthKeys.map((m) => ({
+          month: m,
+          disbursed: disbMap.get(m) ?? 0,
+          collected: collMap.get(m) ?? 0,
+        })),
+        parByProduct,
+        totals: {
+          outstanding: parByProduct.reduce((a, x) => a + x.outstanding, 0),
+          par30: parByProduct.reduce((a, x) => a + x.par30, 0),
+          par90: parByProduct.reduce((a, x) => a + x.par90, 0),
+        },
+      };
+    });
+  }
+
   /**
    * CSV export of a report. `kind` maps to an existing report query; rows are
    * flattened into RFC-4180-ish CSV with quote/escape handling.
    */
   async exportCsv(
     organizationId: string | null,
-    kind: 'savings-book' | 'loan-book' | 'contribution-schedule' | 'audit-logs' | 'member-statement',
+    kind:
+      | 'savings-book'
+      | 'loan-book'
+      | 'contribution-schedule'
+      | 'audit-logs'
+      | 'member-statement'
+      | 'board-pack',
     memberId?: string,
   ): Promise<string> {
     const orgId = this.requireOrg(organizationId);
@@ -629,6 +798,31 @@ export class ReportsService {
     };
     const csv = (rows: unknown[][]): string =>
       rows.map((r) => r.map(escape).join(',')).join('\n') + '\n';
+
+    if (kind === 'board-pack') {
+      const pack = await this.boardPack(orgId);
+      const rows: unknown[][] = [
+        ['section', 'metric', 'value'],
+        ['membership', 'active', pack.membership.active],
+        ['membership', 'pending', pack.membership.pending],
+        ['membership', 'suspended', pack.membership.suspended],
+        ['membership', 'exited', pack.membership.exited],
+        ['savings', 'accounts', pack.savings.accounts],
+        ['savings', 'totalBalance', pack.savings.totalBalance.toFixed(2)],
+        ['shares', 'holders', pack.shares.holders],
+        ['shares', 'totalBalance', pack.shares.totalBalance.toFixed(2)],
+        ['loans', 'open', pack.loans.open],
+        ['loans', 'disbursedTotal', pack.loans.disbursedTotal.toFixed(2)],
+        ['loans', 'outstanding', pack.loans.outstanding.toFixed(2)],
+        ['collections', 'count', pack.collections.count],
+        ['collections', 'total', pack.collections.total.toFixed(2)],
+        ['dividends', 'runs', pack.dividends.runs],
+        ['dividends', 'totalDistributed', pack.dividends.totalDistributed.toFixed(2)],
+        ['ledger', 'entries', pack.ledger.entries],
+        ['ledger', 'net', pack.ledger.net.toFixed(2)],
+      ];
+      return csv(rows);
+    }
 
     if (kind === 'member-statement') {
       if (!memberId) throw new BadRequestException('memberId is required for member-statement');

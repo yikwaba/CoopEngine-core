@@ -62,6 +62,14 @@ export class MemberSpaceController {
     );
   }
 
+  @Get('dividends')
+  dividends(@CurrentMember() principal: MemberPrincipal) {
+    return this.memberSpaceService.myDividends(
+      principal.organizationId,
+      principal.memberId,
+    );
+  }
+
   @Get('guarantor-requests')
   guarantorRequests(@CurrentMember() principal: MemberPrincipal) {
     return this.memberSpaceService.myGuarantorRequests(

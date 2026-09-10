@@ -225,6 +225,28 @@ export class MemberSpaceService {
     });
   }
 
+  /** Dividend payouts received by this member. */
+  async myDividends(
+    organizationId: string,
+    memberId: string,
+  ): Promise<{ periodLabel: string; amount: number; postedAt: Date }[]> {
+    return withTenant(this.pool, organizationId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT run.period_label, a.amount, run.created_at
+           FROM dividend_allocations a
+           JOIN dividend_runs run ON run.id = a.run_id
+          WHERE a.member_id = $1
+          ORDER BY run.period_label DESC`,
+        [memberId],
+      );
+      return rows.map((r) => ({
+        periodLabel: r.period_label as string,
+        amount: Number(r.amount),
+        postedAt: r.created_at as Date,
+      }));
+    });
+  }
+
   /** Guarantor requests addressed to this member (their own consent queue). */
   async myGuarantorRequests(
     organizationId: string,

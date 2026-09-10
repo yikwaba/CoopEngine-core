@@ -96,6 +96,21 @@ export class ReportsController {
     return this.reportsService.savingsInterestPreview(principal.organizationId);
   }
 
+  @Get('board-pack')
+  @RequirePermissions('reports.view', 'settings.manage')
+  boardPack(@CurrentUser() principal: AuthPrincipal) {
+    return this.reportsService.boardPack(principal.organizationId);
+  }
+
+  @Get('portfolio-analytics')
+  @RequirePermissions('reports.view', 'settings.manage')
+  portfolioAnalytics(
+    @CurrentUser() principal: AuthPrincipal,
+    @Query('months') months?: string,
+  ) {
+    return this.reportsService.portfolioAnalytics(principal.organizationId, Number(months ?? 6));
+  }
+
   @Get('member/:memberId/statement')
   @RequirePermissions('reports.view', 'members.lookup')
   memberStatement(
@@ -119,6 +134,7 @@ export class ReportsController {
       'contribution-schedule',
       'audit-logs',
       'member-statement',
+      'board-pack',
     ];
     if (!allowed.includes(kind)) {
       throw new BadRequestException(`Unknown export kind: ${kind}`);
@@ -130,7 +146,8 @@ export class ReportsController {
         | 'loan-book'
         | 'contribution-schedule'
         | 'audit-logs'
-        | 'member-statement',
+        | 'member-statement'
+        | 'board-pack',
       memberId,
     );
     const stamp = new Date().toISOString().slice(0, 10);

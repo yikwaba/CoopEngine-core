@@ -270,5 +270,58 @@ describe('dividends, statements and guarantor consent', () => {
       .set(auth);
     expect(approved.status).toBe(200);
   });
-});
 
+  it('produces a board pack, portfolio analytics and member dividend history', async () => {
+    const coop = await onboardCoop('bp');
+    const auth = { Authorization: `Bearer ${coop.tokens.accessToken}` };
+
+    const a = await createActiveMember(coop, 'BP1');
+    const b = await createActiveMember(coop, 'BP2');
+    for (const [memberId, amount] of [
+      [a.id, 20000],
+      [b.id, 20000],
+    ] as [string, number][]) {
+      const buy = await request(app.getHttpServer())
+        .post(`/api/v1/shares/member/${memberId}/purchases`)
+        .set(auth)
+        .send({ amount, idempotencyKey: randomUUID() });
+      expect([200, 201]).toContain(buy.status);
+    }
+    const posted = await request(app.getHttpServer())
+      .post('/api/v1/dividends/post')
+      .set(auth)
+      .send({ periodLabel: '2026', distributableAmount: 50000 });
+    expect(posted.status).toBe(201);
+
+    const pack = await request(app.getHttpServer()).get('/api/v1/reports/board-pack').set(auth);
+    expect(pack.status).toBe(200);
+    expect(pack.body.membership.active).toBe(2);
+    expect(pack.body.shares.totalBalance).toBe(40000);
+    expect(pack.body.dividends.totalDistributed).toBe(50000);
+    expect(pack.body.savings.totalBalance).toBe(50000);
+    expect(pack.body.ledger.net).toBe(0);
+
+    const csv = await request(app.getHttpServer())
+      .get('/api/v1/reports/export/board-pack')
+      .set(auth);
+    expect(csv.status).toBe(200);
+    expect(csv.text).toContain('section,metric,value');
+    expect(csv.text).toContain('dividends,totalDistributed');
+
+    const analytics = await request(app.getHttpServer())
+      .get('/api/v1/reports/portfolio-analytics?months=6')
+      .set(auth);
+    expect(analytics.status).toBe(200);
+    expect(analytics.body.months).toHaveLength(6);
+    expect(Array.isArray(analytics.body.parByProduct)).toBe(true);
+    expect(typeof analytics.body.totals.outstanding).toBe('number');
+
+    const token = await memberLogin(coop, a.email);
+    const mine = await request(app.getHttpServer())
+      .get('/api/v1/member/dividends')
+      .set({ Authorization: `Bearer ${token}` });
+    expect(mine.status).toBe(200);
+    expect(mine.body[0].amount).toBe(25000);
+    expect(mine.body[0].periodLabel).toBe('2026');
+  });
+});
