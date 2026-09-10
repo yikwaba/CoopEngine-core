@@ -1,9 +1,16 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
-import { IsBoolean, IsNumber, IsUUID, Max, Min } from 'class-validator';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { IsBoolean, IsNumber, IsOptional, IsUUID, Max, Min } from 'class-validator';
 import { MemberSpaceService } from './member-space.service';
+import type { Response } from 'express';
 import { MemberJwtGuard } from '../common/guards/member-jwt.guard';
 import { CurrentMember } from '../common/decorators/current-member.decorator';
 import { MemberPrincipal } from '../common/guards/member-jwt.guard';
+
+class NotificationReadDto {
+  @IsOptional()
+  @IsUUID()
+  id?: string;
+}
 
 class GuarantorResponseDto {
   @IsBoolean()
@@ -59,6 +66,38 @@ export class MemberSpaceController {
     return this.memberSpaceService.myPayments(
       principal.organizationId,
       principal.memberId,
+    );
+  }
+
+  @Get('notifications')
+  notifications(
+    @CurrentMember() principal: MemberPrincipal,
+    @Res({ passthrough: true }) res: Response,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.memberSpaceService
+      .listMyNotifications(
+        principal.organizationId,
+        principal.memberId,
+        limit ? Number(limit) : 50,
+        offset ? Number(offset) : 0,
+      )
+      .then((r) => {
+        res.setHeader('X-Total-Count', String(r.total));
+        return r;
+      });
+  }
+
+  @Post('notifications/read')
+  notificationsRead(
+    @CurrentMember() principal: MemberPrincipal,
+    @Body() dto: NotificationReadDto,
+  ) {
+    return this.memberSpaceService.markNotificationRead(
+      principal.organizationId,
+      principal.memberId,
+      dto.id,
     );
   }
 

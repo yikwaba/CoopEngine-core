@@ -134,6 +134,13 @@
       "when": 1789053241290,
       "tag": "0018_colorful_manta",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789057029091,
+      "tag": "0019_clean_masked_marvel",
+      "breakpoints": true
     }
   ]
 }

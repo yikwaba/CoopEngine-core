@@ -820,7 +820,39 @@ export const savingsInterestPostings = pgTable(
 );
 
 /**
- /** Dividend (surplus distribution) runs — one per org + period. */
+ /** Member / staff notification records (in-app, SMS, email). */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id').references(() => members.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    type: varchar('type', { length: 40 }).notNull(),
+    title: varchar('title', { length: 160 }).notNull(),
+    body: text('body').notNull(),
+    channels: text('channels').array().notNull().default(['IN_APP']),
+    status: text('status').notNull().default('PENDING'), // PENDING|SENT|FAILED
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    externalRef: varchar('external_ref', { length: 120 }),
+    error: text('error'),
+    metadata: jsonb('metadata').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+  ],
+);
+
+/** Dividend (surplus distribution) runs — one per org + period. */
  export const dividendRuns = pgTable(
    'dividend_runs',
    {
@@ -1278,6 +1310,8 @@ export type NewMemberVirtualAccount = typeof memberVirtualAccounts.$inferInsert;
 export type PaymentNotification = typeof paymentNotifications.$inferSelect;
 export type NewPaymentNotification = typeof paymentNotifications.$inferInsert;
 export type VirtualAccountLookup = typeof virtualAccountLookups.$inferSelect;
+export type Notification = typeof notifications.$inferSelect;
+export type NewNotification = typeof notifications.$inferInsert;
 export type DividendRun = typeof dividendRuns.$inferSelect;
 export type NewDividendRun = typeof dividendRuns.$inferInsert;
 export type DividendAllocation = typeof dividendAllocations.$inferSelect;

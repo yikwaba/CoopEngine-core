@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
+import { enqueueNotification, outboundChannels } from '../notifications/enqueue';
 
 export interface DividendAllocationPreview {
   memberId: string;
@@ -287,6 +288,15 @@ export class DividendsService {
            VALUES ($1, $2, $3, 'DIVIDEND', $4, $5)`,
           [orgId, accountId, entryId, String(a.amount), String(after)],
         );
+        await enqueueNotification(c, {
+          organizationId: orgId,
+          memberId: a.memberId,
+          type: 'DIVIDEND_PAID',
+          title: `Dividend credited (${period})`,
+          body: `Your ${period} dividend of ${a.amount.toFixed(2)} has been credited to your savings.`,
+          channels: outboundChannels(),
+          metadata: { period, amount: a.amount },
+        });
         await c.query(
           `INSERT INTO dividend_allocations (id, organization_id, run_id, member_id, share_balance, amount)
            VALUES ($1, $2, $3, $4, $5, $6)`,

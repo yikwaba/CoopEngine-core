@@ -1,0 +1,17 @@
+{
+  "name": "Co-opEngine Member",
+  "short_name": "Co-opEngine",
+  "description": "Your cooperative account: savings, shares, loans and dividends.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0a6c2e",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -225,6 +225,60 @@ export class MemberSpaceService {
     });
   }
 
+  /** Notifications addressed to this member. */
+  async listMyNotifications(
+    organizationId: string,
+    memberId: string,
+    limit = 50,
+    offset = 0,
+  ): Promise<{ items: unknown[]; total: number }> {
+    return withTenant(this.pool, organizationId, async (c) => {
+      const take = Math.min(Math.max(limit, 1), 200);
+      const skip = Math.max(offset, 0);
+      const total = await c.query(
+        `SELECT count(*) AS n FROM notifications WHERE member_id = $1`,
+        [memberId],
+      );
+      const rows = await c.query(
+        `SELECT id, type, title, body, read_at, created_at
+           FROM notifications WHERE member_id = $1
+          ORDER BY created_at DESC LIMIT ${take} OFFSET ${skip}`,
+        [memberId],
+      );
+      return {
+        items: rows.rows.map((r) => ({
+          id: r.id as string,
+          type: r.type as string,
+          title: r.title as string,
+          body: r.body as string,
+          readAt: (r.read_at as Date | null) ?? null,
+          createdAt: r.created_at as Date,
+        })),
+        total: Number((total.rows[0] as { n: string | number }).n),
+      };
+    });
+  }
+
+  /** Mark one (or all) of this member's notifications as read. */
+  async markNotificationRead(
+    organizationId: string,
+    memberId: string,
+    notificationId?: string,
+  ): Promise<{ updated: number }> {
+    return withTenant(this.pool, organizationId, async (c) => {
+      const res = notificationId
+        ? await c.query(
+            `UPDATE notifications SET read_at = now() WHERE id = $1 AND member_id = $2`,
+            [notificationId, memberId],
+          )
+        : await c.query(
+            `UPDATE notifications SET read_at = now() WHERE member_id = $1 AND read_at IS NULL`,
+            [memberId],
+          );
+      return { updated: res.rowCount ?? 0 };
+    });
+  }
+
   /** Dividend payouts received by this member. */
   async myDividends(
     organizationId: string,

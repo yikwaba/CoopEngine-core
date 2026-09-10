@@ -30,6 +30,8 @@ const PERMISSIONS = {
     ['saas.platform.health', 'Platform health and ops'],
   ],
   org: [
+    ['notifications.view', 'View the notification log'],
+    ['notifications.manage', 'Dispatch queued notifications'],
     ['dividends.view', 'View dividend runs'],
     ['dividends.post', 'Post dividend distributions'],
     ['products.view', 'View savings/loan products'],
@@ -78,6 +80,8 @@ const ROLE_TEMPLATES = {
     'reports.view',
   ],
   COOP_ADMIN: [
+    'notifications.view',
+    'notifications.manage',
     'dividends.view',
     'dividends.post',
     'products.view',
@@ -242,7 +246,7 @@ async function main() {
        SELECT r.id, p.id FROM roles r, permissions p
         WHERE r.code = $1 AND r.scope = 'org' AND p.code = ANY($2::varchar[])
        ON CONFLICT DO NOTHING`,
-      [roleCode, ['products.view', 'dividends.view']],
+      [roleCode, ['products.view', 'dividends.view', 'notifications.view']],
     );
   }
 

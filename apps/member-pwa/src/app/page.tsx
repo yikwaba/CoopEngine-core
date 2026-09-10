@@ -25,6 +25,15 @@ interface Dashboard {
   }[];
 }
 
+interface MemberNotification {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  readAt: string | null;
+  createdAt: string;
+}
+
 interface DividendPayout {
   periodLabel: string;
   amount: number;
@@ -57,6 +66,7 @@ export default function MemberDashboardPage() {
   const [vAccount, setVAccount] = useState<VirtualAccount | null>(null);
   const [funding, setFunding] = useState<MemberPayment[]>([]);
   const [dividends, setDividends] = useState<DividendPayout[]>([]);
+  const [notes, setNotes] = useState<MemberNotification[]>([]);
   const [error, setError] = useState<string | null>(null);
   const info = readMemberInfo();
 
@@ -231,6 +241,44 @@ export default function MemberDashboardPage() {
                 .join(' ')}
             />
           </svg>
+        </section>
+      )}
+
+      {notes.length > 0 && (
+        <section className="card" style={{ marginTop: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Notifications</h2>
+            <button
+              style={{ fontSize: 12, padding: '4px 8px' }}
+              onClick={() => {
+                const token = readMemberToken();
+                if (!token) return;
+                void apiFetch('/member/notifications/read', token, {
+                  method: 'POST',
+                  body: JSON.stringify({}),
+                })
+                  .then(() => refresh())
+                  .catch(() => undefined);
+              }}
+            >
+              Mark all read
+            </button>
+          </div>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {notes.slice(0, 5).map((n) => (
+              <li
+                key={n.id}
+                style={{
+                  padding: '8px 0',
+                  borderBottom: '1px solid #eef1f4',
+                  opacity: n.readAt ? 0.6 : 1,
+                }}
+              >
+                <strong style={{ fontSize: 14 }}>{n.title}</strong>
+                <p style={{ margin: '2px 0 0', fontSize: 13, color: '#5b6772' }}>{n.body}</p>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 

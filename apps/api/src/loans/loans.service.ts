@@ -9,6 +9,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
+import { enqueueNotification, outboundChannels } from '../notifications/enqueue';
 import { DB_POOL } from '../database/database.module';
 import { CreateLoanDto } from './dto/loans.dto';
 
@@ -439,6 +440,20 @@ export class LoansService {
           JSON.stringify({ from: current.status, to: target, reason: reason ?? null }),
         ],
       );
+      if (target === 'APPROVED' || target === 'DISBURSED') {
+        await enqueueNotification(c, {
+          organizationId: orgId,
+          memberId: current.member_id,
+          type: target === 'APPROVED' ? 'LOAN_APPROVED' : 'LOAN_DISBURSED',
+          title: target === 'APPROVED' ? 'Loan approved' : 'Loan disbursed',
+          body:
+            target === 'APPROVED'
+              ? 'Your loan application has been approved and is awaiting disbursement.'
+              : 'Your loan has been disbursed. Check your schedule for repayment dates.',
+          channels: outboundChannels(),
+          metadata: { loanId, status: target },
+        });
+      }
       void current;
     });
     return this.getLoan(orgId, loanId);
@@ -884,6 +899,15 @@ export class LoansService {
           WHERE organization_id = $2 AND id = $3`,
         [String(outstanding), orgId, loanId],
       );
+      await enqueueNotification(c, {
+        organizationId: orgId,
+        memberId: loanRow.member_id,
+        type: 'REPAYMENT_RECEIVED',
+        title: 'Repayment received',
+        body: `We received your repayment. New outstanding balance: ${outstanding}.`,
+        channels: outboundChannels(),
+        metadata: { loanId },
+      });
       await c.query(
         `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
          VALUES ($1, $2, 'loan.repayment', 'loan', $3, $4)`,
