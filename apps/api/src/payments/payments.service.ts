@@ -115,17 +115,26 @@ export class PaymentsService {
         throw new ConflictException('Account number collision — retry');
       }
       const id = randomUUID();
-      await c.query(
-        `INSERT INTO member_virtual_accounts
-           (id, organization_id, member_id, provider, account_reference, account_number, account_name, bank_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [id, orgId, memberId, this.provider, providerAccountRef, accountNumber, fullName, bankName],
-      );
-      await c.query(
-        `INSERT INTO virtual_account_lookups (account_number, organization_id, member_id)
-         VALUES ($1, $2, $3)`,
-        [accountNumber, orgId, memberId],
-      );
+      try {
+        await c.query(
+          `INSERT INTO member_virtual_accounts
+             (id, organization_id, member_id, provider, account_reference, account_number, account_name, bank_name)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [id, orgId, memberId, this.provider, providerAccountRef, accountNumber, fullName, bankName],
+        );
+        await c.query(
+          `INSERT INTO virtual_account_lookups (account_number, organization_id, member_id)
+           VALUES ($1, $2, $3)`,
+          [accountNumber, orgId, memberId],
+        );
+      } catch (err) {
+        if ((err as { code?: string }).code === '23505') {
+          throw new ConflictException(
+            'Account number is already registered to another member — retry',
+          );
+        }
+        throw err;
+      }
       return {
         id,
         memberId,
@@ -396,6 +405,24 @@ export class PaymentsService {
     });
   }
 
+  /** fetch with a bounded timeout for provider calls. */
+  private async monnifyFetch(url: string, init: RequestInit): Promise<Response> {
+    const timeoutMs = Number(process.env.MONNIFY_TIMEOUT_MS ?? 10_000);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[monnify] request error: ${err instanceof Error ? err.name : 'unknown'}`,
+      );
+      throw new BadRequestException('Monnify request failed');
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private async monnifyReserveAccount(
     orgId: string,
     memberId: string,
@@ -410,7 +437,8 @@ export class PaymentsService {
         'MONNIFY_PROVIDER=monnify requires MONNIFY_API_KEY, MONNIFY_SECRET_KEY, MONNIFY_CONTRACT_CODE',
       );
     }
-    const authRes = await fetch(`${baseUrl}/api/v1/auth/login`, {
+    const authRes = await this.monnifyFetch(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST', // Monnify requires POST for the auth/login endpoint
       headers: { Authorization: `Basic ${Buffer.from(`${apiKey}:${secretKey}`).toString('base64')}` },
     });
     const authBody = (await authRes.json()) as { requestSuccessful?: boolean; responseBody?: { accessToken?: string } };
@@ -418,7 +446,7 @@ export class PaymentsService {
     if (!authRes.ok || !token) {
       throw new BadRequestException('Monnify authentication failed');
     }
-    const reserveRes = await fetch(`${baseUrl}/api/v1/bank-transfer/reserved-accounts`, {
+    const reserveRes = await this.monnifyFetch(`${baseUrl}/api/v1/bank-transfer/reserved-accounts`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

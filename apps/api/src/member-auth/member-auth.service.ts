@@ -128,35 +128,45 @@ export class MemberAuthService {
   private async termiiDeliver(to: string, code: string): Promise<boolean> {
     const apiKey = process.env.TERMII_API_KEY;
     const senderId = process.env.TERMII_SENDER_ID;
+    const baseUrl = (process.env.TERMII_BASE_URL ?? 'https://api.ng.termii.com').replace(/\/$/, '');
+    const channel = process.env.TERMII_CHANNEL ?? 'generic';
+    const timeoutMs = Number(process.env.TERMII_TIMEOUT_MS ?? 8000);
     if (!apiKey || !senderId) {
       // eslint-disable-next-line no-console
       console.error('MEMBER_OTP_PROVIDER=termii but TERMII_API_KEY/TERMII_SENDER_ID missing');
       return false;
     }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch('https://api.ng.termii.com/api/sms/send', {
+      const res = await fetch(`${baseUrl}/api/sms/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           api_key: apiKey,
           to,
           from: senderId,
           type: 'plain',
-          channel: 'generic',
+          channel,
           message: `Your Co-opEngine verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes. Do not share it.`,
         }),
       });
       if (!res.ok) {
         // eslint-disable-next-line no-console
-        console.error(`Termii send failed: ${res.status} ${await res.text()}`);
+        console.error(`[termii] send failed: HTTP ${res.status}`);
         return false;
       }
-      const body = (await res.json()) as { message_id?: string };
-      return body.message_id !== undefined;
+      const body = (await res.json()) as { message_id?: string; code?: string };
+      return body.message_id !== undefined || body.code === 'ok';
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.error('Termii send error:', err instanceof Error ? err.message : err);
+      console.error(
+        `[termii] send error: ${err instanceof Error ? err.name : 'unknown'}`,
+      );
       return false;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

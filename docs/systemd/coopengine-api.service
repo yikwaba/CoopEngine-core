@@ -18,6 +18,7 @@ Wants=postgresql.service
 Type=simple
 WorkingDirectory=/root/CoopEngine-core/apps/api
 EnvironmentFile=/root/coopengine/api.env
+EnvironmentFile=-/root/coopengine/providers.env
 ExecStart=/usr/bin/env node /root/CoopEngine-core/apps/api/dist/main.js
 Restart=on-failure
 RestartSec=3
