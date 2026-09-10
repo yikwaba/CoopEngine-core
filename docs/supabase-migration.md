@@ -51,3 +51,46 @@ intact. Local dev stays on `127.0.0.1`; this checklist is the staged path.
 ## 6. Standing rotation reminders (unchanged from docs/deploy.md)
 GitHub fine-grained PATs · Composio project/CLI keys · himalaya Gmail app
 password · dev-only secrets (seeded admin password, dev JWT, local Postgres).
+
+---
+
+## Executed — 2026-09-10 (beta project)
+
+**Project:** `coopengine-beta` · ref `bvulnlywvsgbbmhwjhav` · region `eu-west-2`
+(London) · Postgres 17.6 (the pre-existing personal project in the account was
+left untouched).
+
+**What was done (all verified):**
+1. Dedicated **NOSUPERUSER app role** `coopengine_app` (super=false,
+   createdb=false, createrole=false) with CREATE on `public` — migrations,
+   tests and the app all run as this role, so FORCE RLS actually applies.
+2. `pnpm db:migrate` → 18 migrations applied; `pnpm db:force-rls` → **25 tables
+   FORCE RLS + balanced-journal trigger**; `pnpm db:seed` → 13 roles,
+   35 permissions.
+3. Isolation probe as the app role: **0 rows visible without tenant context**.
+4. **Full API integration suite against Supabase: 35/35 across 18 files.**
+5. **E2E demo against Supabase via the pooled URL** (`supabase-demo.sh`):
+   onboard → payroll ₦35k → savings/shares → loan ₦40k → repayment → 
+   reconciliation 3/3 → trial balance net ₦0 → member OTP dashboard.
+6. **Restore drill**: `pg_dump` (277 KB) → restored into a local scratch DB:
+   35 tables, 25 FORCE-RLS tables, roles/permissions parity.
+7. Cloud SaaS admin password rotated (root-only
+   `/root/coopengine/supabase-admin-password`).
+
+**Operational notes / gotchas hit:**
+- **TLS**: node-postgres ≥8.16 verifies certs; pin Supabase's CA
+  (`supabase-pin-ca.sh` → `/root/coopengine/supabase-ca.crt`, Supabase Root 2021)
+  and set `NODE_EXTRA_CA_CERTS` for node, `PGSSLROOTCERT` for psql/`pg_dump`.
+  Use `sslmode=verify-full` in URLs.
+- **Latency**: cloud round-trips exceed vitest's 5 s default — the integration
+  config now uses `VITEST_TEST_TIMEOUT`/`VITEST_HOOK_TIMEOUT` (default 30 s).
+- **pg_dump version**: server is PG17; local client was PG16 → installed
+  `postgresql-client-17` from PGDG (`install-pg17-client.sh`).
+- **Supabase `postgres` is not a superuser** — `ALTER ROLE postgres` is denied;
+  rotate its password from the dashboard/Management API, not SQL.
+- Scripts: `supabase-provision.sh`, `supabase-migrate.sh`, `supabase-verify.sh`,
+  `supabase-tests.sh`, `supabase-demo.sh`, `supabase-restore-drill.sh`,
+  `supabase-pin-ca.sh`, `supabase-admin-rotate.sh` (in `/root/coopengine/`).
+- Secrets live in `/root/coopengine/supabase.env` (chmod 600; app-role URLs,
+  direct + pooled). `supabase-provision.sh` / `-restore-drill.sh` now read the
+  admin password from `$SUPABASE_ADMIN_PW`.
