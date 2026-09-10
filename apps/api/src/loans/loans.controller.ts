@@ -18,11 +18,17 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
   MinLength,
 } from 'class-validator';
+
+class GuarantorDto {
+  @IsUUID()
+  memberId!: string;
+}
 
 class RepaymentDto {
   @IsNumber({ maxDecimalPlaces: 2 })
@@ -149,6 +155,22 @@ export class LoansController {
       dto.amount,
       dto.description,
       dto.idempotencyKey,
+    );
+  }
+
+  @Post(':id/guarantors')
+  @HttpCode(HttpStatus.CREATED)
+  @RequirePermissions('loans.review')
+  addGuarantor(
+    @CurrentUser() principal: AuthPrincipal,
+    @Param('id', new ParseUUIDPipe()) loanId: string,
+    @Body() dto: GuarantorDto,
+  ) {
+    return this.loansService.addGuarantor(
+      principal.organizationId,
+      principal.userId,
+      loanId,
+      dto.memberId,
     );
   }
 

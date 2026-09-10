@@ -1,4 +1,11 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
@@ -215,6 +222,165 @@ export class MemberSpaceService {
         nextDue,
         recentTransactions,
       };
+    });
+  }
+
+  /** ACTIVE loan products a member may apply for. */
+  async loanProducts(
+    organizationId: string,
+  ): Promise<
+    {
+      id: string;
+      code: string;
+      name: string;
+      interestRatePa: number;
+      interestMethod: string;
+      multiplier: number;
+      minPrincipal: number;
+      maxPrincipal: number | null;
+    }[]
+  > {
+    return withTenant(this.pool, organizationId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT id, code, name, interest_rate_pa, interest_method, multiplier,
+                min_principal, max_principal
+           FROM loan_products WHERE status = 'ACTIVE' ORDER BY code`,
+      );
+      return rows.map((r) => ({
+        id: r.id as string,
+        code: r.code as string,
+        name: r.name as string,
+        interestRatePa: Number(r.interest_rate_pa),
+        interestMethod: r.interest_method as string,
+        multiplier: Number(r.multiplier),
+        minPrincipal: Number(r.min_principal),
+        maxPrincipal: r.max_principal === null ? null : Number(r.max_principal),
+      }));
+    });
+  }
+
+  /** Member-initiated loan application (creates a PENDING loan). */
+  async applyForLoan(
+    organizationId: string,
+    memberId: string,
+    input: { loanProductId: string; principal: number; termMonths: number },
+  ): Promise<{ id: string; status: string }> {
+    if (!Number.isFinite(input.principal) || input.principal <= 0) {
+      throw new BadRequestException('Invalid principal');
+    }
+    if (!Number.isInteger(input.termMonths) || input.termMonths < 1 || input.termMonths > 60) {
+      throw new BadRequestException('termMonths must be 1..60');
+    }
+    return withTenant(this.pool, organizationId, async (c) => {
+      const member = await c.query(`SELECT status FROM members WHERE id = $1`, [memberId]);
+      const m = member.rows[0] as { status: string } | undefined;
+      if (!m) throw new NotFoundException('Member not found');
+      if (m.status !== 'ACTIVE') throw new ConflictException('Member is not active');
+
+      const open = await c.query(
+        `SELECT 1 FROM loans
+          WHERE member_id = $1 AND status IN ('PENDING','APPROVED','DISBURSED','DEFAULTED')`,
+        [memberId],
+      );
+      if (open.rows.length > 0) throw new ConflictException('You already have an open loan');
+
+      const prod = await c.query(
+        `SELECT id, interest_rate_pa, interest_method, multiplier, min_principal, max_principal, status
+           FROM loan_products WHERE id = $1`,
+        [input.loanProductId],
+      );
+      const p = prod.rows[0] as
+        | {
+            id: string; interest_rate_pa: string; interest_method: string; multiplier: string;
+            min_principal: string; max_principal: string | null; status: string;
+          }
+        | undefined;
+      if (!p) throw new NotFoundException('Loan product not found');
+      if (p.status !== 'ACTIVE') throw new ConflictException('Loan product is not available');
+      if (input.principal < Number(p.min_principal)) {
+        throw new BadRequestException(`Minimum principal is ${Number(p.min_principal)}`);
+      }
+      if (p.max_principal !== null && input.principal > Number(p.max_principal)) {
+        throw new BadRequestException(`Maximum principal is ${Number(p.max_principal)}`);
+      }
+
+      const savings = await c.query(
+        `SELECT coalesce(sum(current_balance), 0) AS total
+           FROM member_savings_accounts WHERE member_id = $1 AND status = 'ACTIVE'`,
+        [memberId],
+      );
+      const savingsTotal = Number((savings.rows[0] as { total: string }).total);
+      const cap = savingsTotal * Number(p.multiplier);
+      if (input.principal > cap) {
+        throw new BadRequestException(
+          `Principal exceeds ${Number(p.multiplier)}x your savings (max ${cap.toFixed(2)})`,
+        );
+      }
+
+      const id = randomUUID();
+      await c.query(
+        `INSERT INTO loans (id, organization_id, member_id, loan_product_id, principal,
+                            term_months, interest_rate_pa, interest_method, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING')`,
+        [id, organizationId, memberId, p.id, String(input.principal), input.termMonths,
+         p.interest_rate_pa, p.interest_method],
+      );
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, 'loan.applied', 'loan', $2, $3)`,
+        [organizationId, id, JSON.stringify({ via: 'member-self-service', ...input })],
+      );
+      return { id, status: 'PENDING' };
+    });
+  }
+
+  /** The member's own loans with next due installment. */
+  async myLoans(
+    organizationId: string,
+    memberId: string,
+  ): Promise<
+    {
+      id: string;
+      productCode: string;
+      productName: string;
+      principal: number;
+      outstandingPrincipal: number;
+      termMonths: number;
+      status: string;
+      appliedAt: Date;
+      nextDueDate: string | null;
+      nextDueAmount: number;
+    }[]
+  > {
+    return withTenant(this.pool, organizationId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT l.id, l.principal, l.outstanding_principal, l.term_months, l.status, l.created_at,
+                p.code AS product_code, p.name AS product_name,
+                (SELECT min(r.due_date) FROM loan_repayments r
+                  WHERE r.loan_id = l.id AND r.status <> 'PAID') AS next_due_date,
+                (SELECT (r.principal_due - coalesce(r.paid_principal, 0))
+                       + (r.interest_due - coalesce(r.paid_interest, 0))
+                   FROM loan_repayments r
+                  WHERE r.loan_id = l.id AND r.status <> 'PAID'
+                  ORDER BY r.seq LIMIT 1) AS next_due_amount
+           FROM loans l
+           JOIN loan_products p ON p.id = l.loan_product_id
+          WHERE l.member_id = $1
+          ORDER BY l.created_at DESC`,
+        [memberId],
+      );
+      return rows.map((r) => ({
+        id: r.id as string,
+        productCode: r.product_code as string,
+        productName: r.product_name as string,
+        principal: Number(r.principal),
+        outstandingPrincipal: Number(r.outstanding_principal),
+        termMonths: Number(r.term_months),
+        status: r.status as string,
+        appliedAt: r.created_at as Date,
+        nextDueDate: (r.next_due_date as string | null) ?? null,
+        nextDueAmount: r.next_due_amount === null ? 0 : Number(r.next_due_amount),
+      }));
     });
   }
 }

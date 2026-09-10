@@ -30,6 +30,8 @@ const PERMISSIONS = {
     ['saas.platform.health', 'Platform health and ops'],
   ],
   org: [
+    ['products.view', 'View savings/loan products'],
+    ['products.manage', 'Create and edit products'],
     ['members.create', 'Create member records'],
     ['members.edit', 'Edit member records'],
     ['members.approve', 'Approve membership'],
@@ -74,6 +76,8 @@ const ROLE_TEMPLATES = {
     'reports.view',
   ],
   COOP_ADMIN: [
+    'products.view',
+    'products.manage',
     'users.manage',
     'settings.manage',
     'members.create',
@@ -217,6 +221,25 @@ async function main() {
       );
     }
     console.log('seeded saas role: SAAS_ADMIN');
+  }
+
+  // 3b. Read-only product visibility for operational roles
+  for (const roleCode of [
+    'CHAIRMAN',
+    'SECRETARY',
+    'TREASURER',
+    'ACCOUNTANT',
+    'LOAN_OFFICER',
+    'CREDIT_COMMITTEE',
+    'AUDITOR',
+  ]) {
+    await pool.query(
+      `INSERT INTO role_permissions (role_id, permission_id)
+       SELECT r.id, p.id FROM roles r, permissions p
+        WHERE r.code = $1 AND r.scope = 'org' AND p.code = 'products.view'
+       ON CONFLICT DO NOTHING`,
+      [roleCode],
+    );
   }
 
   // 4. Dev SaaS admin user

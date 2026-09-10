@@ -281,6 +281,56 @@ export class LoansService {
     });
   }
 
+  /** Attach a guarantor to a PENDING loan (staff, with consent recorded). */
+  async addGuarantor(
+    organizationId: string | null,
+    actorUserId: string,
+    loanId: string,
+    memberId: string,
+  ): Promise<{ id: string }> {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const loan = await c.query(
+        `SELECT id, status FROM loans WHERE organization_id = $1 AND id = $2`,
+        [orgId, loanId],
+      );
+      const l = loan.rows[0] as { id: string; status: string } | undefined;
+      if (!l) throw new NotFoundException('Loan not found');
+      if (l.status !== 'PENDING') {
+        throw new ConflictException('Guarantors can only be added while the loan is PENDING');
+      }
+      const member = await c.query(
+        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2`,
+        [orgId, memberId],
+      );
+      const m = member.rows[0] as { id: string; status: string } | undefined;
+      if (!m) throw new NotFoundException('Guarantor member not found');
+      if (m.status !== 'ACTIVE') throw new ConflictException('Guarantor must be an ACTIVE member');
+      const dup = await c.query(
+        `SELECT 1 FROM loan_guarantors WHERE organization_id = $1 AND loan_id = $2 AND member_id = $3`,
+        [orgId, loanId, memberId],
+      );
+      if (dup.rows.length > 0) throw new ConflictException('Member is already a guarantor');
+      const count = await c.query(
+        `SELECT count(*) AS n FROM loan_guarantors WHERE organization_id = $1 AND loan_id = $2`,
+        [orgId, loanId],
+      );
+      if (Number(count.rows[0].n) >= 5) throw new ConflictException('Guarantor limit reached');
+      const id = randomUUID();
+      await c.query(
+        `INSERT INTO loan_guarantors (id, organization_id, loan_id, member_id, status)
+         VALUES ($1, $2, $3, $4, 'PENDING')`,
+        [id, orgId, loanId, memberId],
+      );
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, 'loan.guarantor.added', 'loan', $3, $4)`,
+        [orgId, actorUserId, loanId, JSON.stringify({ memberId })],
+      );
+      return { id };
+    });
+  }
+
   async transition(
     organizationId: string | null,
     actorUserId: string,
@@ -310,6 +360,16 @@ export class LoansService {
       }
 
       if (target === 'APPROVED') {
+        const g = await c.query(
+          `SELECT count(*) AS n FROM loan_guarantors
+            WHERE organization_id = $1 AND loan_id = $2`,
+          [orgId, loanId],
+        );
+        if (Number(g.rows[0].n) < MIN_GUARANTORS) {
+          throw new ConflictException(
+            `At least ${MIN_GUARANTORS} guarantors are required before approval`,
+          );
+        }
         await c.query(
           `UPDATE loans SET status = 'APPROVED', approved_by = $1, approved_at = now()
             WHERE id = $2`,

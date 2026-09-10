@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   apiFetch,
@@ -130,10 +131,13 @@ export default function MemberDashboardPage() {
           </h1>
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
-          <button className="btn secondary" onClick={refresh} title="Refresh balances">
-            ↻ Refresh
+          <Link href="/loans" style={{ fontSize: 13, padding: '6px 10px', background: '#eef4ff', borderRadius: 8, color: '#123a6b' }}>
+            Loans
+          </Link>
+          <button onClick={refresh} style={{ fontSize: 13, padding: '6px 10px' }}>
+            ↻
           </button>
-          <button className="btn secondary" onClick={signOut}>
+          <button onClick={signOut} style={{ fontSize: 13, padding: '6px 10px' }}>
             Sign out
           </button>
         </div>
