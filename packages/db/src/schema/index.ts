@@ -104,6 +104,7 @@ export const members = pgTable(
     lastName: varchar('last_name', { length: 120 }).notNull(),
     email: varchar('email', { length: 320 }),
     phone: varchar('phone', { length: 32 }),
+    branchId: uuid('branch_id').references(() => branches.id, { onDelete: 'set null' }),
     gender: varchar('gender', { length: 16 }),
     dateOfBirth: date('date_of_birth'),
     status: text('status').notNull().default('PENDING'),
@@ -820,7 +821,42 @@ export const savingsInterestPostings = pgTable(
 );
 
 /**
- /** Member / staff notification records (in-app, SMS, email). */
+ /** KYC / membership documents uploaded for a member. */
+export const memberDocuments = pgTable(
+  'member_documents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    docType: varchar('doc_type', { length: 32 }).notNull(), // ID_CARD|UTILITY_BILL|PASSPORT|SIGNATURE|OTHER
+    fileName: varchar('file_name', { length: 255 }).notNull(),
+    mimeType: varchar('mime_type', { length: 100 }).notNull(),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    storagePath: text('storage_path').notNull(),
+    status: text('status').notNull().default('PENDING'), // PENDING|VERIFIED|REJECTED
+    uploadedByMember: boolean('uploaded_by_member').notNull().default(false),
+    reviewerUserId: uuid('reviewer_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    reviewNotes: text('review_notes'),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+  ],
+);
+
+/** Member / staff notification records (in-app, SMS, email). */
 export const notifications = pgTable(
   'notifications',
   {
@@ -1310,6 +1346,8 @@ export type NewMemberVirtualAccount = typeof memberVirtualAccounts.$inferInsert;
 export type PaymentNotification = typeof paymentNotifications.$inferSelect;
 export type NewPaymentNotification = typeof paymentNotifications.$inferInsert;
 export type VirtualAccountLookup = typeof virtualAccountLookups.$inferSelect;
+export type MemberDocument = typeof memberDocuments.$inferSelect;
+export type NewMemberDocument = typeof memberDocuments.$inferInsert;
 export type Notification = typeof notifications.$inferSelect;
 export type NewNotification = typeof notifications.$inferInsert;
 export type DividendRun = typeof dividendRuns.$inferSelect;

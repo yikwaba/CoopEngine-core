@@ -25,6 +25,14 @@ interface Dashboard {
   }[];
 }
 
+interface MyDocument {
+  id: string;
+  docType: string;
+  fileName: string;
+  status: string;
+  createdAt: string;
+}
+
 interface MemberNotification {
   id: string;
   type: string;
@@ -67,6 +75,9 @@ export default function MemberDashboardPage() {
   const [funding, setFunding] = useState<MemberPayment[]>([]);
   const [dividends, setDividends] = useState<DividendPayout[]>([]);
   const [notes, setNotes] = useState<MemberNotification[]>([]);
+  const [docs, setDocs] = useState<MyDocument[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [docMsg, setDocMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const info = readMemberInfo();
 
@@ -100,6 +111,41 @@ export default function MemberDashboardPage() {
       cancelled = true;
     };
   }, [router]);
+
+
+  async function uploadDocument(file: File): Promise<void> {
+    const token = readMemberToken();
+    if (!token) return;
+    setUploading(true);
+    setDocMsg(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i] as number);
+      const contentBase64 = window.btoa(binary);
+      const docType = /pdf$/i.test(file.name)
+        ? 'UTILITY_BILL'
+        : /(id|nin|licen)/i.test(file.name)
+          ? 'ID_CARD'
+          : 'OTHER';
+      await apiFetch('/member/documents', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          docType,
+          fileName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          contentBase64,
+        }),
+      });
+      setDocMsg('Document uploaded — awaiting verification.');
+      await refresh();
+    } catch (e) {
+      setDocMsg(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  }
 
   function refresh(): void {
     const token = readMemberToken();
@@ -243,6 +289,33 @@ export default function MemberDashboardPage() {
           </svg>
         </section>
       )}
+
+      <section className="card" style={{ marginTop: 14 }}>
+        <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>My documents (KYC)</h2>
+        <input
+          type="file"
+          accept="image/jpeg,image/png,image/webp,application/pdf"
+          disabled={uploading}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) void uploadDocument(file);
+          }}
+        />
+        {docMsg && <p style={{ fontSize: 13, color: '#5b6772' }}>{docMsg}</p>}
+        <ul style={{ listStyle: 'none', padding: 0, margin: '8px 0 0' }}>
+          {docs.map((d) => (
+            <li key={d.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '4px 0' }}>
+              <span>
+                {d.docType} · {d.fileName}
+              </span>
+              <strong style={{ color: d.status === 'VERIFIED' ? '#0a6c2e' : d.status === 'REJECTED' ? '#b42318' : '#8a6d00' }}>
+                {d.status}
+              </strong>
+            </li>
+          ))}
+          {docs.length === 0 && <li style={{ fontSize: 13, color: '#5b6772' }}>No documents uploaded yet.</li>}
+        </ul>
+      </section>
 
       {notes.length > 0 && (
         <section className="card" style={{ marginTop: 14 }}>

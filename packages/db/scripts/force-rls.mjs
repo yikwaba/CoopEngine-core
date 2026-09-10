@@ -44,6 +44,7 @@ const TABLES = [
   'dividend_runs',
   'dividend_allocations',
   'notifications',
+  'member_documents',
 ];
 
 const BALANCED_JOURNAL_SQL = `

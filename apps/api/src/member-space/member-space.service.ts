@@ -225,6 +225,30 @@ export class MemberSpaceService {
     });
   }
 
+  /** Documents in this member's own vault. */
+  async myDocuments(
+    organizationId: string,
+    memberId: string,
+  ): Promise<
+    { id: string; docType: string; fileName: string; status: string; createdAt: Date }[]
+  > {
+    return withTenant(this.pool, organizationId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT id, doc_type, file_name, status, created_at
+           FROM member_documents WHERE member_id = $1
+          ORDER BY created_at DESC`,
+        [memberId],
+      );
+      return rows.map((r) => ({
+        id: r.id as string,
+        docType: r.doc_type as string,
+        fileName: r.file_name as string,
+        status: r.status as string,
+        createdAt: r.created_at as Date,
+      }));
+    });
+  }
+
   /** Notifications addressed to this member. */
   async listMyNotifications(
     organizationId: string,

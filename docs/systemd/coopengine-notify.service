@@ -1,0 +1,7 @@
+[Unit]
+Description=Co-opEngine nightly notification dispatch (queued member messages)
+After=network.target coopengine-api.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/CoopEngine-core/scripts/notify-dispatch-cron.sh

@@ -1,10 +1,30 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Res, UseGuards } from '@nestjs/common';
-import { IsBoolean, IsNumber, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { MemberSpaceService } from './member-space.service';
+import { DocumentsService } from '../documents/documents.service';
 import type { Response } from 'express';
 import { MemberJwtGuard } from '../common/guards/member-jwt.guard';
 import { CurrentMember } from '../common/decorators/current-member.decorator';
 import { MemberPrincipal } from '../common/guards/member-jwt.guard';
+
+class MemberDocumentDto {
+  @IsIn(['ID_CARD', 'UTILITY_BILL', 'PASSPORT', 'SIGNATURE', 'OTHER'])
+  docType!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  fileName!: string;
+
+  @IsString()
+  @MinLength(3)
+  @MaxLength(100)
+  mimeType!: string;
+
+  @IsString()
+  @MinLength(4)
+  contentBase64!: string;
+}
 
 class NotificationReadDto {
   @IsOptional()
@@ -35,7 +55,10 @@ class LoanApplyDto {
 @Controller('member')
 @UseGuards(MemberJwtGuard)
 export class MemberSpaceController {
-  constructor(private readonly memberSpaceService: MemberSpaceService) {}
+  constructor(
+    private readonly memberSpaceService: MemberSpaceService,
+    private readonly documentsService: DocumentsService,
+  ) {}
 
   @Get('me')
   me(@CurrentMember() principal: MemberPrincipal) {
@@ -67,6 +90,24 @@ export class MemberSpaceController {
       principal.organizationId,
       principal.memberId,
     );
+  }
+
+  @Post('documents')
+  uploadDocument(
+    @CurrentMember() principal: MemberPrincipal,
+    @Body() dto: MemberDocumentDto,
+  ) {
+    return this.documentsService.upload(
+      principal.organizationId,
+      principal.memberId,
+      dto,
+      { byMember: true },
+    );
+  }
+
+  @Get('documents')
+  documents(@CurrentMember() principal: MemberPrincipal) {
+    return this.memberSpaceService.myDocuments(principal.organizationId, principal.memberId);
   }
 
   @Get('notifications')

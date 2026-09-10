@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Co-opEngine notification dispatch every night at 06:30
+
+[Timer]
+OnCalendar=*-*-* 06:30:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
+import { createTransport } from 'nodemailer';
 import { DB_POOL } from '../database/database.module';
 
 export interface NotificationRow {
@@ -197,6 +198,12 @@ export class NotificationsService {
           (row.phone as string | null) ?? '',
           `${row.title as string}: ${row.body as string}`,
         );
+      } else if (channels.includes('EMAIL') && process.env.SMTP_HOST && row.email) {
+        outcome = await this.sendEmail(
+          row.email as string,
+          row.title as string,
+          row.body as string,
+        );
       } else {
         // Dev adapter — records the attempt without contacting a provider
         outcome = { ok: true, ref: `dev:${String(row.id).slice(0, 8)}` };
@@ -224,6 +231,39 @@ export class NotificationsService {
       });
     }
     return { attempted: rows.length, sent, failed };
+  }
+
+  /**
+   * SMTP email delivery via nodemailer. Activated by SMTP_HOST + SMTP_USER +
+   * SMTP_PASS in providers.env; never throws.
+   */
+  private async sendEmail(
+    to: string,
+    subject: string,
+    text: string,
+  ): Promise<{ ok: boolean; ref?: string; error?: string }> {
+    try {
+      const port = Number(process.env.SMTP_PORT ?? 587);
+      const transport = createTransport({
+        host: process.env.SMTP_HOST,
+        port,
+        secure: port === 465,
+        auth:
+          process.env.SMTP_USER && process.env.SMTP_PASS
+            ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+            : undefined,
+        connectionTimeout: Number(process.env.SMTP_TIMEOUT_MS ?? 10000),
+      });
+      const info = await transport.sendMail({
+        from: process.env.SMTP_FROM ?? process.env.SMTP_USER ?? 'no-reply@coopengine.local',
+        to,
+        subject,
+        text,
+      });
+      return { ok: true, ref: info.messageId ?? 'smtp' };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : 'smtp send failed' };
+    }
   }
 
   /** Termii SMS delivery (bounded timeout, never throws). */

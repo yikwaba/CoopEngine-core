@@ -17,6 +17,8 @@ import { BulkModule } from './bulk/bulk.module';
 import { ProductsModule } from './products/products.module';
 import { DividendsModule } from './dividends/dividends.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { DocumentsModule } from './documents/documents.module';
+import { BranchesModule } from './branches/branches.module';
 import { DatabaseModule } from './database/database.module';
 
 @Module({
@@ -39,6 +41,8 @@ import { DatabaseModule } from './database/database.module';
     ProductsModule,
     DividendsModule,
     NotificationsModule,
+    DocumentsModule,
+    BranchesModule,
     HealthModule,
   ],
 })
