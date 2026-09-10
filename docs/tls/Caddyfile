@@ -1,0 +1,47 @@
+{
+	email yikwab.a@gmail.com
+}
+
+# Public hostnames are nip.io names bound to this VPS's address, so Let's
+# Encrypt can validate them over HTTP-01 without waiting for a custom domain.
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		-Server
+	}
+}
+
+api.169.58.196.141.nip.io {
+	encode zstd gzip
+	import security_headers
+	reverse_proxy 127.0.0.1:3999
+	log {
+		output file /var/log/caddy/api-access.log
+		format json
+	}
+}
+
+app.169.58.196.141.nip.io {
+	encode zstd gzip
+	import security_headers
+	reverse_proxy 127.0.0.1:3100
+	log {
+		output file /var/log/caddy/app-access.log
+		format json
+	}
+}
+
+member.169.58.196.141.nip.io {
+	encode zstd gzip
+	import security_headers
+	reverse_proxy 127.0.0.1:3200
+	log {
+		output file /var/log/caddy/member-access.log
+		format json
+	}
+}

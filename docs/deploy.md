@@ -151,3 +151,72 @@ API_BASE=https://api.example.com/api/v1 scripts/seed-demo.sh
 Creates a fresh cooperative (unique slug) with members, deposits, share
 purchases, a full loan lifecycle, a dividend run and the reconciliation +
 trial-balance checks, then prints the logins to use in the portal and PWA.
+
+---
+
+## Phase E — TLS proxy and launch (executed 2026-09-10)
+
+### Topology
+
+```
+Internet ──▶ Caddy (:80/:443, Let's Encrypt) ──▶ 127.0.0.1 services
+   api.<host>     → API        :3999   (systemd user unit coopengine-api)
+   app.<host>     → portal     :3100   (coopengine-portal)
+   member.<host>  → member PWA :3200   (coopengine-pwa)
+```
+
+Units and the proxy config live in `docs/systemd/` and `docs/tls/Caddyfile`;
+the installed copies are `/etc/caddy/Caddyfile` and `~/.config/systemd/user/`.
+
+### Public hostnames
+
+The beta runs on `nip.io` hostnames bound to this VPS address — real Let's
+Encrypt certificates with no domain purchase, and a one-line change to swap in a
+custom domain later (only the Caddyfile site addresses and `CORS_ORIGINS`):
+
+| Role | URL |
+| --- | --- |
+| API (+ Swagger at `/docs`) | https://api.169.58.196.141.nip.io/api/v1 |
+| Staff portal | https://app.169.58.196.141.nip.io |
+| Member PWA | https://member.169.58.196.141.nip.io |
+
+### Steps that were run
+
+```bash
+# 1. Caddy
+apt-get install -y caddy            # official Cloudsmith repo
+mkdir -p /var/log/caddy && chown -R caddy:caddy /var/log/caddy
+install -m 644 docs/tls/Caddyfile /etc/caddy/Caddyfile
+caddy validate --config /etc/caddy/Caddyfile
+systemctl restart caddy
+
+# 2. Web apps as user services (linger is enabled, so they survive logout/reboot)
+NEXT_PUBLIC_API_URL=https://api.169.58.196.141.nip.io/api/v1 pnpm --dir apps/portal build
+NEXT_PUBLIC_API_URL=https://api.169.58.196.141.nip.io/api/v1 pnpm --dir apps/member-pwa build
+systemctl --user enable --now coopengine-portal coopengine-pwa coopengine-api
+```
+
+`NEXT_PUBLIC_API_URL` is **inlined at build time** — rebuild the web apps after
+changing the API hostname, then restart their units.
+
+### Verified
+
+* Let's Encrypt certificates issued for all three hosts (valid ~90 days, renewed
+  automatically by Caddy) — verified with `openssl s_client`/`x509 -dates`
+* `https://api…/health` → `{"status":"ok"}`; Swagger `/docs/` → 200
+* All 8 portal routes and all member routes → **200** over HTTPS
+* Security headers present: HSTS (1 year, includeSubDomains), `X-Content-Type-Options`,
+  `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`; `Server` stripped
+* CORS preflight from the portal origin → **204**; real admin login over HTTPS → **200** with a token
+* Plain HTTP → **308** redirect to HTTPS
+
+### Remaining operational tasks
+
+1. **Provider keys** (`providers.env`): Termii + Monnify live values; the SMS and
+   payment paths are already wired and mock-proven.
+2. **Custom domain** when you have one (optional): point DNS at this VPS, change the
+   three site addresses in the Caddyfile + `CORS_ORIGINS`, rebuild the web apps.
+3. **One-month gate**: keep local Postgres as a warm fallback until a full month of
+   ledger operations reconciles at 0 mismatches, then retire it.
+4. Optional hardening: a fail2ban jail over the Caddy access logs, and offsite
+   copies of the nightly database dumps and `DOCUMENTS_DIR`.

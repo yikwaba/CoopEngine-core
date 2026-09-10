@@ -1,0 +1,15 @@
+[Unit]
+Description=Co-opEngine staff portal (Next.js)
+After=coopengine-api.service
+Wants=coopengine-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/CoopEngine-core/apps/portal
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env pnpm start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
