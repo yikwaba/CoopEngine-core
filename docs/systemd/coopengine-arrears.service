@@ -1,0 +1,8 @@
+[Unit]
+Description=Co-opEngine nightly arrears automation (auto-default 90+ days late)
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/CoopEngine-core/scripts/arrears-cron.sh 90

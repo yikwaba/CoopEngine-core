@@ -444,6 +444,194 @@ export class LoansService {
     return this.getLoan(orgId, loanId);
   }
 
+
+  /**
+   * Restructure a loan: replace UNPAID installments with a fresh schedule over
+   * the remaining outstanding principal, keeping payment history intact.
+   */
+  async restructure(
+    organizationId: string | null,
+    actorUserId: string,
+    loanId: string,
+    newTermMonths: number,
+    reason: string,
+  ): Promise<{ loanId: string; outstanding: number; newTermMonths: number; schedule: unknown }> {
+    const orgId = this.requireOrg(organizationId);
+    if (!Number.isInteger(newTermMonths) || newTermMonths < 1 || newTermMonths > 60) {
+      throw new BadRequestException('newTermMonths must be 1..60');
+    }
+    if (!reason?.trim() || reason.trim().length < 5) {
+      throw new BadRequestException('A restructuring reason is required');
+    }
+    let outstandingValue = 0;
+    await withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT id, status, outstanding_principal, interest_rate_pa, interest_method
+           FROM loans WHERE id = $1`,
+        [loanId],
+      );
+      const l = rows[0] as
+        | {
+            id: string;
+            status: string;
+            outstanding_principal: string;
+            interest_rate_pa: string;
+            interest_method: string;
+          }
+        | undefined;
+      if (!l) throw new NotFoundException('Loan not found');
+      if (!['DISBURSED', 'DEFAULTED'].includes(l.status)) {
+        throw new ConflictException('Only disbursed or defaulted loans can be restructured');
+      }
+      const outstanding = Number(l.outstanding_principal);
+      outstandingValue = outstanding;
+      if (outstanding <= 0) throw new ConflictException('Loan has no outstanding balance');
+
+      const paid = await c.query(
+        `SELECT coalesce(max(seq), 0) AS max_seq, count(*) AS paid_count
+           FROM loan_repayments WHERE loan_id = $1 AND status = 'PAID'`,
+        [loanId],
+      );
+      const maxSeq = Number((paid.rows[0] as { max_seq: string | number }).max_seq);
+      const removed = await c.query(
+        `DELETE FROM loan_repayments WHERE loan_id = $1 AND status <> 'PAID'`,
+        [loanId],
+      );
+
+      await this.generateSchedule(
+        c,
+        orgId,
+        loanId,
+        newTermMonths,
+        outstanding,
+        Number(l.interest_rate_pa),
+        l.interest_method,
+        maxSeq,
+      );
+      await c.query(
+        `UPDATE loans SET status = 'DISBURSED', term_months = $2 WHERE id = $1`,
+        [loanId, maxSeq + newTermMonths],
+      );
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, 'loan.restructured', 'loan', $3, $4)`,
+        [
+          orgId,
+          actorUserId,
+          loanId,
+          JSON.stringify({
+            outstanding,
+            newTermMonths,
+            paidInstallments: maxSeq,
+            replacedInstallments: removed.rowCount ?? 0,
+            reason: reason.trim(),
+          }),
+        ],
+      );
+    });
+    const schedule = await this.listSchedule(orgId, loanId);
+    return { loanId, outstanding: outstandingValue, newTermMonths, schedule };
+  }
+
+  /** Overdue installments (arrears list) with aging buckets and contact info. */
+  async arrears(
+    organizationId: string | null,
+  ): Promise<{
+    buckets: { bucket: string; count: number; amount: number }[];
+    rows: {
+      loanId: string;
+      memberNo: number;
+      member: string;
+      phone: string | null;
+      seq: number;
+      dueDate: string;
+      daysLate: number;
+      amount: number;
+      loanStatus: string;
+    }[];
+    total: number;
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT l.id AS loan_id, m.member_no, (m.first_name || ' ' || m.last_name) AS member,
+                m.phone, r.seq, r.due_date, (now()::date - r.due_date) AS days_late,
+                (r.principal_due - coalesce(r.paid_principal, 0))
+                  + (r.interest_due - coalesce(r.paid_interest, 0)) AS amount,
+                l.status AS loan_status
+           FROM loan_repayments r
+           JOIN loans l ON l.id = r.loan_id
+           JOIN members m ON m.id = l.member_id
+          WHERE r.status <> 'PAID' AND r.due_date < now()::date
+          ORDER BY r.due_date`,
+      );
+      const list = rows.map((r) => ({
+        loanId: r.loan_id as string,
+        memberNo: Number(r.member_no),
+        member: r.member as string,
+        phone: (r.phone as string | null) ?? null,
+        seq: Number(r.seq),
+        dueDate: r.due_date as string,
+        daysLate: Number(r.days_late),
+        amount: Number(r.amount),
+        loanStatus: r.loan_status as string,
+      }));
+      const mk = (label: string, min: number, max: number | null) => {
+        const sel = list.filter(
+          (x) => x.daysLate > min && (max === null || x.daysLate <= max),
+        );
+        return {
+          bucket: label,
+          count: sel.length,
+          amount: round2(sel.reduce((a, x) => a + x.amount, 0)),
+        };
+      };
+      return {
+        buckets: [
+          mk('1-30', 0, 30),
+          mk('31-60', 30, 60),
+          mk('61-90', 60, 90),
+          mk('90+', 90, null),
+        ],
+        rows: list,
+        total: round2(list.reduce((a, x) => a + x.amount, 0)),
+      };
+    });
+  }
+
+  /**
+   * Arrears automation: mark DISBURSED loans as DEFAULTED once any unpaid
+   * installment is more than `daysLate` past due (default 90).
+   */
+  async markDefaults(
+    organizationId: string | null,
+    actorUserId: string,
+    daysLate = 90,
+  ): Promise<{ defaulted: number; loanIds: string[] }> {
+    const orgId = this.requireOrg(organizationId);
+    const threshold = Math.min(Math.max(Math.trunc(daysLate) || 90, 31), 365);
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT DISTINCT l.id
+           FROM loans l
+           JOIN loan_repayments r ON r.loan_id = l.id
+          WHERE l.status = 'DISBURSED' AND r.status <> 'PAID'
+            AND (now()::date - r.due_date) > $1`,
+        [threshold],
+      );
+      const ids = rows.map((r) => (r as { id: string }).id);
+      for (const id of ids) {
+        await c.query(`UPDATE loans SET status = 'DEFAULTED' WHERE id = $1`, [id]);
+        await c.query(
+          `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+           VALUES ($1, $2, 'loan.status.defaulted', 'loan', $3, $4)`,
+          [orgId, actorUserId, id, JSON.stringify({ reason: `auto: arrears over ${threshold} days` })],
+        );
+      }
+      return { defaulted: ids.length, loanIds: ids };
+    });
+  }
+
   // ------------------------------------------------------------- helpers
 
   /**
@@ -458,6 +646,7 @@ export class LoansService {
     principal: number,
     interestRatePa: number,
     interestMethod: string,
+    seqOffset = 0,
   ): Promise<void> {
     if (interestMethod !== 'FLAT') {
       throw new BadRequestException(
@@ -472,14 +661,15 @@ export class LoansService {
     let remainingP = principal;
     let remainingI = totalInterest;
     const today = new Date();
-    for (let seq = 1; seq <= termMonths; seq += 1) {
-      const last = seq === termMonths;
+    for (let step = 1; step <= termMonths; step += 1) {
+      const seq = step + seqOffset;
+      const last = step === termMonths;
       const p = last ? round2(remainingP) : Math.min(basePrincipal, round2(remainingP));
       const i = last ? round2(remainingI) : Math.min(baseInterest, round2(remainingI));
       remainingP = round2(remainingP - p);
       remainingI = round2(remainingI - i);
       const due = new Date(today);
-      due.setUTCMonth(due.getUTCMonth() + seq);
+      due.setUTCMonth(due.getUTCMonth() + step);
       const base = params.length;
       values.push(
         `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}::date, $${base + 6}, $${base + 7})`,

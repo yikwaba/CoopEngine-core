@@ -47,6 +47,13 @@ interface GuarantorRow {
 
 const naira = (n: number): string => `₦${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
+async function restructureLoan(loanId: string, months: number, reason: string, token: string) {
+  await apiFetch(`/loans/${loanId}/restructure`, token, {
+    method: 'POST',
+    body: JSON.stringify({ newTermMonths: months, reason }),
+  });
+}
+
 export default function LoanDetailPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
@@ -149,6 +156,23 @@ export default function LoanDetailPage() {
             {naira(loan.principal)} over {loan.termMonths} months @ {loan.interestRatePa}%
           </h1>
         </div>
+        {['DISBURSED', 'DEFAULTED'].includes(loan.status) && (
+          <button
+            onClick={() => {
+              const monthsRaw = window.prompt('New term (months, 1-60):', '6');
+              if (!monthsRaw) return;
+              const reason = window.prompt('Reason for restructuring (min 5 chars):');
+              if (!reason) return;
+              const token = readToken();
+              if (!token) return;
+              void restructureLoan(loanId, Number(monthsRaw), reason, token)
+                .then(() => load())
+                .catch((e) => setError(e instanceof Error ? e.message : 'Restructure failed'));
+            }}
+          >
+            Restructure
+          </button>
+        )}
         <Link href="/loans" style={{ fontSize: 14 }}>
           ← Loans
         </Link>

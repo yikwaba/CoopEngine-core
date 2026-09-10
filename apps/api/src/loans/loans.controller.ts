@@ -25,6 +25,26 @@ import {
   MinLength,
 } from 'class-validator';
 
+class ArrearsMarkDto {
+  @IsOptional()
+  @IsNumber()
+  @Min(31)
+  @Max(365)
+  daysLate?: number;
+}
+
+class RestructureDto {
+  @IsNumber()
+  @Min(1)
+  @Max(60)
+  newTermMonths!: number;
+
+  @IsString()
+  @MinLength(5)
+  @MaxLength(255)
+  reason!: string;
+}
+
 class GuarantorDto {
   @IsUUID()
   memberId!: string;
@@ -104,6 +124,23 @@ export class LoansController {
     return items;
   }
 
+  @Get('arrears')
+  @RequirePermissions(...LOAN_READ)
+  arrears(@CurrentUser() principal: AuthPrincipal) {
+    return this.loansService.arrears(principal.organizationId);
+  }
+
+  @Post('arrears/mark')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('loans.review')
+  markDefaults(@CurrentUser() principal: AuthPrincipal, @Body() dto: ArrearsMarkDto) {
+    return this.loansService.markDefaults(
+      principal.organizationId,
+      principal.userId,
+      dto.daysLate ?? 90,
+    );
+  }
+
   @Get(':id')
   @RequirePermissions(...LOAN_READ)
   get(
@@ -155,6 +192,23 @@ export class LoansController {
       dto.amount,
       dto.description,
       dto.idempotencyKey,
+    );
+  }
+
+  @Post(':id/restructure')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('loans.restructure')
+  restructure(
+    @CurrentUser() principal: AuthPrincipal,
+    @Param('id', new ParseUUIDPipe()) loanId: string,
+    @Body() dto: RestructureDto,
+  ) {
+    return this.loansService.restructure(
+      principal.organizationId,
+      principal.userId,
+      loanId,
+      dto.newTermMonths,
+      dto.reason,
     );
   }
 

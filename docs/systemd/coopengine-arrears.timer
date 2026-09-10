@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Co-opEngine arrears automation every night at 06:15
+
+[Timer]
+OnCalendar=*-*-* 06:15:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
