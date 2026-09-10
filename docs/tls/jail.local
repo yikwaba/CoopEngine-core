@@ -1,0 +1,29 @@
+# fail2ban — Co-opEngine VPS
+# Ban hosts that repeatedly fail SSH auth (the box was under active
+# brute-force attack; legit users are unaffected at these thresholds).
+[DEFAULT]
+bantime = 1h
+findtime = 10m
+maxretry = 5
+banaction = iptables-multiport
+# The server's own public address is included so our own health checks and
+# curl probes through the public hostname can never ban the box itself.
+ignoreip = 127.0.0.1/8 ::1 169.58.196.141
+
+[sshd]
+enabled = true
+port = ssh
+logpath = /var/log/auth.log
+backend = auto
+
+# Brute-force protection for the API authentication endpoints, reading Caddy's
+# JSON access logs (401/403/429 on /api/v1/auth/*).
+[caddy-auth]
+enabled = true
+port = http,https
+filter = caddy-coopengine-auth
+logpath = /var/log/caddy/api-access.log
+maxretry = 8
+findtime = 10m
+bantime = 2h
+backend = auto

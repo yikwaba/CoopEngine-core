@@ -1,0 +1,8 @@
+[Unit]
+Description=Co-opEngine offsite backup (encrypted dumps + KYC uploads)
+After=coopengine-backup.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/root/coopengine/offsite.env
+ExecStart=/root/CoopEngine-core/scripts/offsite-backup.sh

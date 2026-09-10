@@ -220,3 +220,60 @@ changing the API hostname, then restart their units.
    ledger operations reconciles at 0 mismatches, then retire it.
 4. Optional hardening: a fail2ban jail over the Caddy access logs, and offsite
    copies of the nightly database dumps and `DOCUMENTS_DIR`.
+
+---
+
+## Hardening pass (executed 2026-09-10)
+
+### 1. Brute-force protection for the API (`fail2ban`)
+
+Caddy writes structured JSON access logs; a filter turns failed authentication
+into bans without touching the application:
+
+* `docs/tls/filter-caddy-coopengine-auth.conf` → `/etc/fail2ban/filter.d/`
+* `docs/tls/jail.local` → `/etc/fail2ban/jail.local` (`[caddy-auth]` jail:
+  `maxretry = 8`, `findtime = 10m`, `bantime = 2h`, action `iptables-multiport`
+  on `http,https`)
+
+The filter matches `"remote_ip":"<HOST>" … "uri":"/api/v1/auth/…" … "status":401|403|429`
+and reads the epoch timestamp from the JSON `ts` field (`datepattern = "ts":{EPOCH}`).
+The server's own public address is in `ignoreip` so self-checks can never lock the
+box out.
+
+Verified: 11 replayed failures produced a ban, an `f2b-caddy-auth` REJECT rule
+appeared in iptables, and both the ban and the rule were removed cleanly
+(`scripts/prove-caddy-jail.sh` pattern). Production jails: `sshd`, `caddy-auth`.
+
+### 2. Encrypted offsite backups (`scripts/offsite-backup.sh`)
+
+Nightly at **03:10** (`coopengine-offsite.timer`), after the 02:17 dump:
+
+* stages the two newest dumps + the whole KYC `uploads/` tree with a manifest
+* **encrypts with AES-256 (gpg symmetric)** before anything leaves the box
+* writes a SHA-256 sidecar and **verifies the copy** at the destination
+* prunes local archives, keeping the newest `KEEP` (default 14)
+* logs every run to `/root/coopengine/logs/offsite-backup.log`
+
+Destination is configuration, not code: set `OFFSITE_DIR=/mnt/backups` (mounted
+volume, NFS, USB disk) and/or `OFFSITE_RCLONE=remote:path` in
+`/root/coopengine/offsite.env`. Without `OFFSITE_DIR` it stages locally and says
+so in the log.
+
+**The passphrase lives at `/root/coopengine/offsite-passphrase` (mode 600) and is
+the only way to restore an archive — copy it somewhere safe and offline.** An
+archive is useless without it; that is the point.
+
+Rehearsed end to end: encrypted archive produced, destination checksum matched,
+archive decrypted and inspected (dumps + manifest intact).
+
+### Restoring from an offsite archive
+
+```bash
+gpg --batch --decrypt --passphrase-file /root/coopengine/offsite-passphrase \
+  coopengine-<stamp>.tar.gz.gpg > /tmp/restore.tar.gz
+tar -xzf /tmp/restore.tar.gz -C /tmp/restore
+# database
+sudo -u postgres pg_restore -d coopengine_restore /tmp/restore/payload/database/coopengine_<stamp>.dump
+# documents
+rsync -a /tmp/restore/payload/uploads/ /root/coopengine/uploads/
+```
