@@ -96,3 +96,58 @@ rotated when convenient:
 - CI (GitHub Actions) runs quality + integration against a real Postgres 16
   service container with a NOSUPERUSER app role.
 - E2E demo: `node scripts/demo.mjs` against a running API.
+
+
+---
+
+## Operations update — 2026-09-10
+
+### Environment variables added since the first draft
+
+| Variable | Where | Purpose |
+| --- | --- | --- |
+| `INTERNAL_CRON_TOKEN` | `api.env` (root-only) | Shared secret for the machine endpoints (`/api/v1/internal/notifications/dispatch`, `/api/v1/internal/savings/sweep`). Generated with `openssl rand -hex 24`. |
+| `DOCUMENTS_DIR` | service env (default `/root/coopengine/uploads`) | On-disk root for the KYC document vault (per-tenant subfolders). Back this up with the database. |
+| `DOCUMENTS_MAX_BYTES` | optional (default 5 MB) | Upload cap for member documents. |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | `providers.env` | Switches the notification EMAIL channel from the dev adapter to real SMTP (nodemailer). Port 465 ⇒ implicit TLS. |
+| `TERMII_BASE_URL` / `TERMII_CHANNEL` / `TERMII_TIMEOUT_MS` | `providers.env` | Termii SMS overrides (defaults: `https://api.ng.termii.com`, `generic`, 8000 ms). |
+| `MONNIFY_BASE_URL` / `MONNIFY_TIMEOUT_MS` | `providers.env` | Monnify endpoint override (sandbox vs live) and request timeout. |
+| `SEED_ADMIN_PASSWORD` | shell when reseeding | Overrides the seeded SaaS-admin password; the integration suite also reads it. |
+
+`providers.env` is optional and loaded with `EnvironmentFile=-/root/coopengine/providers.env`.
+
+### Nightly timers (systemd user units, installed and armed)
+
+| Timer | Schedule | What it does |
+| --- | --- | --- |
+| `coopengine-backup.timer` | 02:17 | `pg_dump` as the local `postgres` superuser → `/var/lib/postgresql/backups` (7-dump retention). |
+| `coopengine-arrears.timer` | 06:15 | Marks DISBURSED loans as DEFAULTED when any unpaid installment is 90+ days late (per tenant, RLS GUC set, audited). |
+| `coopengine-notify.timer` | 06:30 | Sweeps due standing-contribution instructions (queues reminders) and flushes pending notifications (Termii SMS / SMTP email / dev adapter). |
+
+Check with `XDG_RUNTIME_DIR=/run/user/0 systemctl --user list-timers | grep coopengine`.
+
+### RLS lessons that matter in production
+
+1. **Never rely on `SECURITY DEFINER` to bypass RLS.** A function owned by a role
+   that is itself subject to FORCE RLS still sees nothing. Cron workers enumerate
+   tenants through a narrow, `SELECT`-only `internal_scan` policy on
+   `organizations` that only matches when the transaction-local flag
+   `app.internal_scan = 'on'` is set (migration `0025`).
+2. **Predicates must tolerate a blank GUC.** All tenant policies now use
+   `nullif(current_setting('app.tenant_id', true), '')::uuid` so a missing or
+   empty setting means "no rows" instead of
+   `invalid input syntax for type uuid: ""` (migration `0024`).
+3. **Custom migrations are the supported path** for raw SQL:
+   `pnpm exec drizzle-kit generate --custom --name=...` then `pnpm db:migrate`.
+   `db:force-rls` only enforces the RLS flag; it does not rewrite predicates.
+
+### One-command demo tenant
+
+```bash
+scripts/seed-demo.sh            # against http://localhost:3999
+API_BASE=https://api.example.com/api/v1 scripts/seed-demo.sh
+```
+
+Creates a fresh cooperative (unique slug) with members, deposits, share
+purchases, a full loan lifecycle, a dividend run and the reconciliation +
+trial-balance checks, then prints the logins to use in the portal and PWA.

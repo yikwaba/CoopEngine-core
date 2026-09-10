@@ -94,3 +94,34 @@ left untouched).
 - Secrets live in `/root/coopengine/supabase.env` (chmod 600; app-role URLs,
   direct + pooled). `supabase-provision.sh` / `-restore-drill.sh` now read the
   admin password from `$SUPABASE_ADMIN_PW`.
+
+
+---
+
+## Verification against the cloud database (2026-09-10)
+
+Migration numbers that matter for the cloud cut-over:
+
+* `0023` – `0024` – `0025`: custom SQL migrations. `0024` rebuilds every tenant
+  policy with `nullif(current_setting('app.tenant_id', true), '')::uuid`;
+  `0025` adds the narrow `internal_scan` SELECT policy on `organizations` used by
+  the nightly cron workers (a `SECURITY DEFINER` helper cannot work there,
+  because a function owned by an RLS-bound role still sees zero rows).
+* Postgres **17** server vs Postgres **16** client on the VPS: install
+  `postgresql-client-17` (PGDG) before running `pg_dump`, otherwise the dump
+  aborts with "server version mismatch".
+* TLS: `pg` >= 8.16 verifies certificates, so `sslmode=verify-full` requires the
+  pinned Supabase root CA (`/root/coopengine/supabase-ca.crt`, exported as
+  `NODE_EXTRA_CA_CERTS`; `PGSSLROOTCERT` for libpq/psql).
+* Cloud latency: the integration suite runs with a 30 s per-test timeout against
+  Supabase (Lagos → London round-trips); local runs are unaffected.
+* Cloud isolation proof: with the app role (`coopengine_app`, NOSUPERUSER) the
+  tenant probe sees **0 rows** without a tenant context, and the full suite
+  passes on the cloud database.
+
+### Acceptance run
+
+`/root/coopengine/acceptance-run.sh` performs the full rehearsal on the live
+stack: migrate + seed the cloud database, boot a dedicated API against the
+**pooled** URL, walk the entire money loop, start the portal and PWA, probe every
+route, and write evidence to `/root/coopengine/acceptance-<timestamp>.log`.
