@@ -34,9 +34,11 @@ export async function ensureRbacSeeded(pool: Pool): Promise<void> {
   }
 }
 
-// Admin credentials: local runs read the rotated password from the root-only
-// file; CI (fresh seed) falls back to the seed.mjs default.
+// Admin credentials: SEED_ADMIN_PASSWORD env wins (e.g. when testing against a
+// cloud DB seeded with defaults), else local runs read the rotated password
+// from the root-only file; CI (fresh seed) falls back to the seed.mjs default.
 export const ADMIN_PASSWORD: string = (() => {
+  if (process.env.SEED_ADMIN_PASSWORD) return process.env.SEED_ADMIN_PASSWORD;
   try {
     return require('fs').readFileSync('/root/coopengine/admin-password', 'utf8').trim();
   } catch {
