@@ -152,3 +152,33 @@ role) · E2E demo green · nightly backups armed.
 - [ ] Nightly backup verified restoring into a scratch DB
 - [ ] One month of ledger ops with savings-reconciliation = 0 mismatches
       before retiring the local warm-fallback database
+
+---
+
+# Coverage v4 — Sprints 25–31 (2026-09-10)
+
+| Sprint | Delivered | Verified |
+| --- | --- | --- |
+| **25** | Product administration (savings + loan product CRUD, rate/multiplier guards, deactivation blocked while in use, usage counts) · member self-service **loan applications** with savings-multiple cap · **guarantor workflow** with a 2-guarantor approval gate · portal Products page · PWA Loans page | integration suite green |
+| **26** | **Dividend / surplus distribution engine** (`dividend_runs`, `dividend_allocations`): pro-rata preview with exact totals, idempotent posting (409 on replay), one balanced journal (Dr 3100 / Cr 2000 per member), savings credits + DIVIDEND projections · **member statements** (JSON + CSV export) · **guarantor self-acceptance** in the PWA | 75,000/25,000 split exact; replay blocked; books net 0 |
+| **27** | **Board pack** (membership, savings, shares, loans, collections, dividends, trial balance) + CSV export · **portfolio analytics** (monthly disbursements vs collections, **PAR30/PAR90 by product**) · member dividend history + savings sparkline | board pack totals matched; PAR computed from overdue installments |
+| **28** | **Loan restructuring** (replaces unpaid installments over the remaining principal, history preserved, audited) · **arrears register** with 1-30/31-60/61-90/90+ aging and contact details · **auto-default run** (`/loans/arrears/mark` + nightly timer at 06:15) · portal restructure action + arrears table | restructured 30,000 → 6 installments (principal sums exactly); 90+ day loan auto-defaulted; books net 0 |
+| **29** | **Notification centre** (schema v19): transactional enqueue on loan decisions, repayments and dividends; delivery adapters (**Termii SMS**, **SMTP email**, dev), read tracking, staff log with filters + dispatch · **offline-ready PWA** (manifest, icon, service worker that never caches API traffic) | events recorded, member read flow, dispatch 0 failed, dividend fan-out |
+| **30** | **KYC document vault** (schema v20): doc-type/MIME/size validation, per-tenant disk storage, byte-accurate download, verify/reject with audit, member self-upload, staff queue · **branch management** (schema v21 adds `members.branch_id`, single-headquarters rule, member counts, assignment) · SMTP email + nightly dispatch timer (06:30) | cross-tenant download → 404; HQ switch keeps exactly one; 29 FORCE-RLS tables |
+| **31** | **Savings goals** (progress + percent, auto-ACHIEVED with notification) · **standing contribution instructions** (WEEKLY/MONTHLY, nightly sweep queues reminders and advances the schedule) · CSV onboarding confirmed as a true dry-run · **RLS hardening** (migrations 0024/0025) | goal 40% → 100% ACHIEVED; sweep advanced next run + queued CONTRIBUTION_DUE; dry-run left counts unchanged |
+
+## Beta posture after Sprint 31
+
+* **31 FORCE-RLS tables**, every tenant predicate null-safe
+  (`nullif(current_setting('app.tenant_id', true), '')::uuid`)
+* **48 integration tests across 25 files**, plus unit + build across 5 workspaces
+* **Three nightly timers**: backup 02:17 · arrears 06:15 · notify + contribution sweep 06:30
+* **Two delivery adapters** (Termii SMS, SMTP email) activate from `providers.env`; dev adapters otherwise
+* **Cloud-verified**: full schema, isolation probe (0 rows without tenant context) and the complete money loop run against the Supabase beta database; restore drill and acceptance rehearsal documented
+
+## Known gaps (deliberate, tracked)
+
+1. Termii / Monnify **live keys** — code paths proven against local mocks; switch flips them on.
+2. **Restructuring capitalises no arrears interest**; penalty interest is not implemented (policy decision pending).
+3. **Standing instructions are reminders only** — no silent debits (no direct-debit rail yet).
+4. Email domain reputation / SPF setup is an operational task once SMTP credentials exist.
