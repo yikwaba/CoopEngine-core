@@ -1,51 +1,78 @@
 #!/usr/bin/env bash
 # Co-opEngine provider preflight — validates Termii + Monnify credentials
-# WITHOUT printing any secret. Safe to run anytime; exits non-zero on failure.
+# WITHOUT ever printing a secret. Exits non-zero when something is wrong.
 #
-# Usage:
-#   SUPABASE_UNUSED=1 bash scripts/provider-preflight.sh
-#   ENV_FILE=/root/coopengine/providers.env bash scripts/provider-preflight.sh
+#   scripts/provider-preflight.sh              # validate whatever is configured
+#   scripts/provider-preflight.sh --require    # fail if any credential is missing
+#   ENV_FILE=/path/providers.env scripts/provider-preflight.sh
 #
-# Reads variables from $ENV_FILE (default /root/coopengine/providers.env):
+# Reads from $ENV_FILE (default /root/coopengine/providers.env):
 #   TERMII_API_KEY, TERMII_SENDER_ID, TERMII_TEST_PHONE (optional)
 #   MONNIFY_API_KEY, MONNIFY_SECRET_KEY, MONNIFY_CONTRACT_CODE,
 #   MONNIFY_BASE_URL (default https://api.monnify.com)
+#
+# Exit codes: 0 ok (skips allowed) · 1 validation failure · 2 missing credentials with --require
 set -uo pipefail
+
 ENV_FILE="${ENV_FILE:-/root/coopengine/providers.env}"
+REQUIRE=0
+[ "${1:-}" = "--require" ] && REQUIRE=1
+
+TERMII_BASE_DEFAULT="https://api.ng.termii.com"
+MONNIFY_BASE_DEFAULT="https://api.monnify.com"
 FAILED=0
+MISSING=0
+
+mask() { # mask a secret, showing only outer characters
+  local v="$1"
+  local n=${#v}
+  if [ "$n" -le 8 ]; then printf '****'; else printf '%s…%s' "${v:0:4}" "${v: -4}"; fi
+}
 
 if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
   set -a; . "$ENV_FILE"; set +a
-  echo "env file loaded: $ENV_FILE"
+  echo "env file: $ENV_FILE (root-only)"
 else
-  echo "env file missing: $ENV_FILE (nothing to validate yet)"
+  echo "env file: $ENV_FILE missing — nothing configured yet"
 fi
 
-mask() { printf '%s' "$1" | sed -E 's/^(....).*(....)$/\1…\2/'; }
+TERMII_BASE="${TERMII_BASE_URL:-$TERMII_BASE_DEFAULT}"
+MONNIFY_BASE="${MONNIFY_BASE_URL:-$MONNIFY_BASE_DEFAULT}"
 
-# ---------------------------------------------------------------- Termii
 echo
-echo "== Termii =="
-if [ -z "${TERMII_API_KEY:-}" ]; then
-  echo "  SKIP: TERMII_API_KEY not set"
+echo "== Termii (SMS OTP) =="
+if [ -z "${TERMII_API_KEY:-}" ] || [ -z "${TERMII_SENDER_ID:-}" ]; then
+  echo "  MISSING: TERMII_API_KEY and/or TERMII_SENDER_ID"
+  MISSING=1
 else
-  echo "  key: $(mask "$TERMII_API_KEY")  sender: ${TERMII_SENDER_ID:-<unset>}"
-  BAL=$(curl -sS --max-time 15 "https://api.ng.termii.com/api/get-balance?api_key=${TERMII_API_KEY}" 2>/dev/null || echo '')
-  if printf '%s' "$BAL" | grep -qi 'balance'; then
-    echo "  auth: OK  ($(printf '%s' "$BAL" | tr -d '\n' | head -c 120))"
+  echo "  api key: $(mask "$TERMII_API_KEY")   sender id: ${TERMII_SENDER_ID}   base: ${TERMII_BASE}"
+  BAL="$(curl -sS --max-time 15 "${TERMII_BASE}/api/get-balance?api_key=${TERMII_API_KEY}" 2>/dev/null || true)"
+  if printf '%s' "$BAL" | grep -qiE 'balance'; then
+    echo "  auth: OK"
   else
-    echo "  auth: FAILED (response did not look like a balance payload)"
+    echo "  auth: FAILED (no balance payload returned)"
     FAILED=1
   fi
   if [ -n "${TERMII_TEST_PHONE:-}" ]; then
-    SEND=$(curl -sS --max-time 20 -X POST https://api.ng.termii.com/api/sms/send \
+    SEND="$(curl -sS --max-time 20 -X POST "${TERMII_BASE}/api/sms/send" \
       -H 'Content-Type: application/json' \
-      -d "{\"api_key\":\"${TERMII_API_KEY}\",\"to\":\"${TERMII_TEST_PHONE}\",\"from\":\"${TERMII_SENDER_ID:-CoopEngine}\",\"type\":\"plain\",\"channel\":\"generic\",\"message\":\"Co-opEngine connectivity test — please ignore.\"}" 2>/dev/null || echo '')
-    if printf '%s' "$SEND" | grep -qi 'message_id'; then
+      --data-binary "$(python3 - "$TERMII_API_KEY" "$TERMII_TEST_PHONE" "$TERMII_SENDER_ID" <<'PY'
+import json, sys
+print(json.dumps({
+    "api_key": sys.argv[1],
+    "to": sys.argv[2],
+    "from": sys.argv[3],
+    "type": "plain",
+    "channel": "generic",
+    "message": "Co-opEngine connectivity test — please ignore.",
+}))
+PY
+)" 2>/dev/null || true)"
+    if printf '%s' "$SEND" | grep -qiE 'message_id|"code":"ok"'; then
       echo "  test SMS: SENT to ${TERMII_TEST_PHONE}"
     else
-      echo "  test SMS: FAILED ($(printf '%s' "$SEND" | head -c 120))"
+      echo "  test SMS: FAILED (no message id returned)"
       FAILED=1
     fi
   else
@@ -53,29 +80,39 @@ else
   fi
 fi
 
-# --------------------------------------------------------------- Monnify
 echo
-echo "== Monnify =="
-BASE="${MONNIFY_BASE_URL:-https://api.monnify.com}"
-if [ -z "${MONNIFY_API_KEY:-}" ] || [ -z "${MONNIFY_SECRET_KEY:-}" ]; then
-  echo "  SKIP: MONNIFY_API_KEY / MONNIFY_SECRET_KEY not set"
+echo "== Monnify (virtual accounts) =="
+if [ -z "${MONNIFY_API_KEY:-}" ] || [ -z "${MONNIFY_SECRET_KEY:-}" ] || [ -z "${MONNIFY_CONTRACT_CODE:-}" ]; then
+  echo "  MISSING: MONNIFY_API_KEY / MONNIFY_SECRET_KEY / MONNIFY_CONTRACT_CODE"
+  MISSING=1
 else
-  echo "  base: $BASE"
-  echo "  api key: $(mask "$MONNIFY_API_KEY")  contract: ${MONNIFY_CONTRACT_CODE:-<unset>}"
-  AUTH=$(curl -sS --max-time 20 -X POST "${BASE}/api/v1/auth/login" \
-    -H "Authorization: Basic $(printf '%s:%s' "$MONNIFY_API_KEY" "$MONNIFY_SECRET_KEY" | base64 -w0)" 2>/dev/null || echo '')
+  echo "  api key: $(mask "$MONNIFY_API_KEY")   contract: $(mask "$MONNIFY_CONTRACT_CODE")   base: ${MONNIFY_BASE}"
+  # Basic auth header built in-process; the secret never reaches the shell history.
+  AUTH_HEADER="$(python3 - "$MONNIFY_API_KEY" "$MONNIFY_SECRET_KEY" <<'PY'
+import base64, sys
+print('Basic ' + base64.b64encode(f'{sys.argv[1]}:{sys.argv[2]}'.encode()).decode())
+PY
+)"
+  AUTH="$(curl -sS --max-time 20 -X POST "${MONNIFY_BASE}/api/v1/auth/login" \
+    -H "Authorization: ${AUTH_HEADER}" \
+    -H 'Content-Type: application/json' 2>/dev/null || true)"
+  unset AUTH_HEADER
   if printf '%s' "$AUTH" | grep -q 'accessToken'; then
     echo "  auth: OK (access token received)"
   else
-    echo "  auth: FAILED"
+    echo "  auth: FAILED (no access token — check the key/secret pair and base URL)"
     FAILED=1
   fi
 fi
 
 echo
-if [ "$FAILED" -eq 0 ]; then
-  echo "preflight: no failures (skips are not failures)"
-else
-  echo "preflight: FAILURES present — fix before switching providers"
+if [ "$REQUIRE" -eq 1 ] && [ "$MISSING" -eq 1 ]; then
+  echo "preflight: credentials MISSING (--require)"
+  exit 2
 fi
-exit "$FAILED"
+if [ "$FAILED" -ne 0 ]; then
+  echo "preflight: FAILURES present — fix them before switching providers"
+  exit 1
+fi
+echo "preflight: OK (skips are allowed unless --require is used)"
+exit 0

@@ -111,6 +111,17 @@ export class MemberAuthService {
     });
     if (provider === 'termii' && codeOut && phone) {
       const delivered = await this.termiiDeliver(phone, codeOut);
+      if (!delivered) {
+        // Operational visibility without leaking anything about the member:
+        // the audit entry records the failure, never the code or the number.
+        await withTenant(this.pool, orgId, async (c) => {
+          await c.query(
+            `INSERT INTO audit_logs (organization_id, action, entity_type, metadata)
+             VALUES ($1, 'member.otp.delivery_failed', 'member', $2)`,
+            [orgId, JSON.stringify({ provider: 'termii' })],
+          );
+        });
+      }
       return { sent: delivered, provider };
     }
     return {

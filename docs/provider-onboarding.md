@@ -98,3 +98,65 @@ test-transfer tooling).
 Set `MEMBER_OTP_PROVIDER=dev` / `MONNIFY_PROVIDER=dev` (or remove the vars) and
 restart — the dev providers have no external dependencies, so the platform keeps
 working while provider issues are sorted out.
+
+---
+
+## Deployment checklist (run these the day the keys exist)
+
+Everything below is rehearsed end-to-end with dummy credentials — the guards,
+the rollback, the failure path and the dev-provider recovery are all proven.
+
+### 1. Store the credentials (never pasted into chat)
+
+```bash
+cd /root/CoopEngine-core
+scripts/provider-set-key.sh TERMII_SENDER_ID      # approved sender ID (<= 11 chars)
+scripts/provider-set-key.sh TERMII_API_KEY        # hidden prompt, trimmed, masked confirmation
+scripts/provider-set-key.sh MONNIFY_API_KEY
+scripts/provider-set-key.sh MONNIFY_SECRET_KEY
+scripts/provider-set-key.sh MONNIFY_CONTRACT_CODE
+# optional: TERMII_TEST_PHONE to have the preflight send one real SMS
+scripts/provider-switch.sh status                 # shows flags + masked credentials + warnings
+```
+
+The entry script reads from a hidden prompt (or piped stdin), strips CR/whitespace
+from Windows pastes, validates length/shape, writes atomically to the root-only
+`providers.env` (mode 600) and prints only a masked confirmation.
+
+### 2. Validate before switching
+
+```bash
+scripts/provider-preflight.sh            # exits 1 on a bad credential, 0 with skips
+scripts/provider-preflight.sh --require  # exits 2 if anything is still missing (the gate)
+```
+
+It calls Termii's balance endpoint and Monnify's `POST /api/v1/auth/login`
+(the real auth verb), building the Basic header in-process so the secret never
+appears in the shell history, and optionally sends one test SMS.
+
+### 3. Switch and verify
+
+```bash
+scripts/provider-switch.sh termii    # or monnify | both
+#   * refuses to enable a provider whose credentials are missing (exit 3)
+#   * keeps providers.env.bak, restarts coopengine-api, checks /health, prints status
+scripts/provider-switch.sh status
+scripts/provider-switch.sh rollback  # one-command revert to the previous file
+```
+
+### 4. Watch it
+
+* Member OTP: with Termii on and `sent:false`, the response stays generic (no code
+  ever leaks) and an `audit_logs` entry `member.otp.delivery_failed` is written —
+  query it to see delivery trouble at a glance.
+* Notifications: the nightly 06:30 timer flushes queued messages; `POST
+  /api/v1/notifications/dispatch` does it on demand and reports `sent`/`failed`.
+* Virtual accounts: enable Monnify, then check a member's collection account in
+  the portal; the payment webhook path is signature-checked and audited.
+
+### 5. Sandbox → live
+
+`MONNIFY_BASE_URL` selects the environment (`https://sandbox.monnify.com` vs
+`https://api.monnify.com`). Re-run the preflight and the demo after switching
+bases — `scripts/seed-demo.sh` walks the whole money loop and asserts a ₦0 trial
+balance, which catches contract/credential mismatches immediately.
