@@ -16,6 +16,16 @@ interface LoanProduct {
   maxPrincipal: number | null;
 }
 
+interface GuarantorRequest {
+  id: string;
+  loanId: string;
+  borrowerName: string;
+  principal: number;
+  termMonths: number;
+  loanStatus: string;
+  status: string;
+}
+
 interface MyLoan {
   id: string;
   productCode: string;
@@ -35,6 +45,7 @@ export default function LoansPage() {
   const router = useRouter();
   const [products, setProducts] = useState<LoanProduct[]>([]);
   const [myLoans, setMyLoans] = useState<MyLoan[]>([]);
+  const [requests, setRequests] = useState<GuarantorRequest[]>([]);
   const [productId, setProductId] = useState('');
   const [principal, setPrincipal] = useState('');
   const [termMonths, setTermMonths] = useState('3');
@@ -49,12 +60,14 @@ export default function LoansPage() {
       return;
     }
     try {
-      const [p, l] = await Promise.all([
+      const [p, l, g] = await Promise.all([
         apiFetch<LoanProduct[]>('/member/loan-products', token),
         apiFetch<MyLoan[]>('/member/loans', token),
+        apiFetch<GuarantorRequest[]>('/member/guarantor-requests', token),
       ]);
       setProducts(p);
       setMyLoans(l);
+      setRequests(g);
       const first = p[0];
       if (!productId && first) setProductId(first.id);
     } catch (e) {
@@ -96,6 +109,27 @@ export default function LoansPage() {
     }
   }
 
+  async function respond(requestId: string, accept: boolean) {
+    const token = readMemberToken();
+    if (!token) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await apiFetch(`/member/guarantor-requests/${requestId}/respond`, token, {
+        method: 'POST',
+        body: JSON.stringify({ accept }),
+      });
+      setMessage(accept ? 'Guarantor request accepted.' : 'Guarantor request declined.');
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not respond to the request');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const pendingRequests = requests.filter((r) => r.status === 'PENDING' && r.loanStatus === 'PENDING');
   const selected = products.find((p) => p.id === productId);
 
   return (
@@ -163,6 +197,35 @@ export default function LoansPage() {
           {busy ? 'Submitting…' : 'Submit application'}
         </button>
       </section>
+
+      {pendingRequests.length > 0 && (
+        <section style={{ marginTop: 18 }}>
+          <h2 style={{ fontSize: 15 }}>Guarantor requests</h2>
+          {pendingRequests.map((r) => (
+            <div key={r.id} style={{ border: '1px solid #e2e6eb', borderRadius: 12, padding: 12, marginBottom: 10 }}>
+              <p style={{ margin: 0, fontSize: 14 }}>
+                <strong>{r.borrowerName}</strong> asks you to guarantee {money(r.principal)} over {r.termMonths} months
+              </p>
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button
+                  disabled={busy}
+                  onClick={() => void respond(r.id, true)}
+                  style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#0a6c2e', color: '#fff' }}
+                >
+                  Accept
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={() => void respond(r.id, false)}
+                  style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #cfd6de', background: '#fff' }}
+                >
+                  Decline
+                </button>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
 
       <section style={{ marginTop: 18 }}>
         <h2 style={{ fontSize: 15 }}>My loans</h2>

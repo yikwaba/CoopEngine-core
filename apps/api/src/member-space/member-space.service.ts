@@ -225,6 +225,80 @@ export class MemberSpaceService {
     });
   }
 
+  /** Guarantor requests addressed to this member (their own consent queue). */
+  async myGuarantorRequests(
+    organizationId: string,
+    memberId: string,
+  ): Promise<
+    {
+      id: string;
+      loanId: string;
+      borrowerName: string;
+      principal: number;
+      termMonths: number;
+      loanStatus: string;
+      status: string;
+      requestedAt: Date;
+    }[]
+  > {
+    return withTenant(this.pool, organizationId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT g.id, g.loan_id, g.status, g.created_at,
+                l.principal, l.term_months, l.status AS loan_status,
+                (b.first_name || ' ' || b.last_name) AS borrower_name
+           FROM loan_guarantors g
+           JOIN loans l ON l.id = g.loan_id
+           JOIN members b ON b.id = l.member_id
+          WHERE g.member_id = $1
+          ORDER BY g.created_at DESC`,
+        [memberId],
+      );
+      return rows.map((r) => ({
+        id: r.id as string,
+        loanId: r.loan_id as string,
+        borrowerName: r.borrower_name as string,
+        principal: Number(r.principal),
+        termMonths: Number(r.term_months),
+        loanStatus: r.loan_status as string,
+        status: r.status as string,
+        requestedAt: r.created_at as Date,
+      }));
+    });
+  }
+
+  /** Accept or decline a guarantor request (own requests only, PENDING loans). */
+  async respondGuarantor(
+    organizationId: string,
+    memberId: string,
+    requestId: string,
+    accept: boolean,
+  ): Promise<{ id: string; status: string }> {
+    return withTenant(this.pool, organizationId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT g.id, g.status, g.loan_id, l.status AS loan_status
+           FROM loan_guarantors g
+           JOIN loans l ON l.id = g.loan_id
+          WHERE g.id = $1 AND g.member_id = $2`,
+        [requestId, memberId],
+      );
+      const g = rows[0] as
+        | { id: string; status: string; loan_id: string; loan_status: string }
+        | undefined;
+      if (!g) throw new NotFoundException('Guarantor request not found');
+      if (g.loan_status !== 'PENDING') {
+        throw new ConflictException('This loan is no longer awaiting guarantors');
+      }
+      const status = accept ? 'APPROVED' : 'REJECTED';
+      await c.query(`UPDATE loan_guarantors SET status = $1 WHERE id = $2`, [status, requestId]);
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, 'loan.guarantor.responded', 'loan', $2, $3)`,
+        [organizationId, g.loan_id, JSON.stringify({ guarantorId: requestId, memberId, status })],
+      );
+      return { id: requestId, status };
+    });
+  }
+
   /** ACTIVE loan products a member may apply for. */
   async loanProducts(
     organizationId: string,

@@ -15,6 +15,7 @@ import { OrgUsersModule } from './org-users/org-users.module';
 import { PaymentsModule } from './payments/payments.module';
 import { BulkModule } from './bulk/bulk.module';
 import { ProductsModule } from './products/products.module';
+import { DividendsModule } from './dividends/dividends.module';
 import { DatabaseModule } from './database/database.module';
 
 @Module({
@@ -35,6 +36,7 @@ import { DatabaseModule } from './database/database.module';
     PaymentsModule,
     BulkModule,
     ProductsModule,
+    DividendsModule,
     HealthModule,
   ],
 })

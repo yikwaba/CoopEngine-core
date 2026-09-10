@@ -1,9 +1,14 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
-import { IsNumber, IsUUID, Max, Min } from 'class-validator';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
+import { IsBoolean, IsNumber, IsUUID, Max, Min } from 'class-validator';
 import { MemberSpaceService } from './member-space.service';
 import { MemberJwtGuard } from '../common/guards/member-jwt.guard';
 import { CurrentMember } from '../common/decorators/current-member.decorator';
 import { MemberPrincipal } from '../common/guards/member-jwt.guard';
+
+class GuarantorResponseDto {
+  @IsBoolean()
+  accept!: boolean;
+}
 
 class LoanApplyDto {
   @IsUUID()
@@ -54,6 +59,28 @@ export class MemberSpaceController {
     return this.memberSpaceService.myPayments(
       principal.organizationId,
       principal.memberId,
+    );
+  }
+
+  @Get('guarantor-requests')
+  guarantorRequests(@CurrentMember() principal: MemberPrincipal) {
+    return this.memberSpaceService.myGuarantorRequests(
+      principal.organizationId,
+      principal.memberId,
+    );
+  }
+
+  @Post('guarantor-requests/:id/respond')
+  respondGuarantor(
+    @CurrentMember() principal: MemberPrincipal,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: GuarantorResponseDto,
+  ) {
+    return this.memberSpaceService.respondGuarantor(
+      principal.organizationId,
+      principal.memberId,
+      id,
+      dto.accept,
     );
   }
 

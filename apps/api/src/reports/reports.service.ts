@@ -524,13 +524,103 @@ export class ReportsService {
     });
   }
 
+
+  /** Consolidated member statement across savings, shares, loans, dividends. */
+  async memberStatement(
+    organizationId: string | null,
+    memberId: string,
+  ): Promise<{
+    member: { id: string; memberNo: number; name: string };
+    savingsTransactions: { type: string; signedAmount: number; createdAt: Date }[];
+    shareTransactions: { type: string; signedAmount: number; createdAt: Date }[];
+    loanRepayments: {
+      loanId: string;
+      seq: number;
+      dueDate: string;
+      status: string;
+      paidAmount: number;
+    }[];
+    dividends: { periodLabel: string; amount: number }[];
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const member = await c.query(
+        `SELECT id, member_no, (first_name || ' ' || last_name) AS name
+           FROM members WHERE id = $1`,
+        [memberId],
+      );
+      const m = member.rows[0] as { id: string; member_no: number; name: string } | undefined;
+      if (!m) throw new NotFoundException('Member not found');
+
+      const savings = await c.query(
+        `SELECT t.type, t.signed_amount, t.created_at
+           FROM savings_transactions t
+           JOIN member_savings_accounts a ON a.id = t.account_id
+          WHERE a.member_id = $1
+          ORDER BY t.created_at`,
+        [memberId],
+      );
+      const shares = await c.query(
+        `SELECT t.type, t.signed_amount, t.created_at
+           FROM share_transactions t
+           JOIN member_share_accounts a ON a.id = t.account_id
+          WHERE a.member_id = $1
+          ORDER BY t.created_at`,
+        [memberId],
+      );
+      const repayments = await c.query(
+        `SELECT r.loan_id, r.seq, r.due_date, r.status,
+                (coalesce(r.paid_principal, 0) + coalesce(r.paid_interest, 0)) AS paid_amount
+           FROM loan_repayments r
+           JOIN loans l ON l.id = r.loan_id
+          WHERE l.member_id = $1
+          ORDER BY r.due_date`,
+        [memberId],
+      );
+      const dividends = await c.query(
+        `SELECT run.period_label, a.amount
+           FROM dividend_allocations a
+           JOIN dividend_runs run ON run.id = a.run_id
+          WHERE a.member_id = $1
+          ORDER BY run.period_label`,
+        [memberId],
+      );
+
+      return {
+        member: { id: m.id, memberNo: Number(m.member_no), name: m.name },
+        savingsTransactions: savings.rows.map((r) => ({
+          type: r.type as string,
+          signedAmount: Number(r.signed_amount),
+          createdAt: r.created_at as Date,
+        })),
+        shareTransactions: shares.rows.map((r) => ({
+          type: r.type as string,
+          signedAmount: Number(r.signed_amount),
+          createdAt: r.created_at as Date,
+        })),
+        loanRepayments: repayments.rows.map((r) => ({
+          loanId: r.loan_id as string,
+          seq: Number(r.seq),
+          dueDate: r.due_date as string,
+          status: r.status as string,
+          paidAmount: Number(r.paid_amount),
+        })),
+        dividends: dividends.rows.map((r) => ({
+          periodLabel: r.period_label as string,
+          amount: Number(r.amount),
+        })),
+      };
+    });
+  }
+
   /**
    * CSV export of a report. `kind` maps to an existing report query; rows are
    * flattened into RFC-4180-ish CSV with quote/escape handling.
    */
   async exportCsv(
     organizationId: string | null,
-    kind: 'savings-book' | 'loan-book' | 'contribution-schedule' | 'audit-logs',
+    kind: 'savings-book' | 'loan-book' | 'contribution-schedule' | 'audit-logs' | 'member-statement',
+    memberId?: string,
   ): Promise<string> {
     const orgId = this.requireOrg(organizationId);
     const escape = (v: unknown): string => {
@@ -539,6 +629,39 @@ export class ReportsService {
     };
     const csv = (rows: unknown[][]): string =>
       rows.map((r) => r.map(escape).join(',')).join('\n') + '\n';
+
+    if (kind === 'member-statement') {
+      if (!memberId) throw new BadRequestException('memberId is required for member-statement');
+      const statement = await this.memberStatement(orgId, memberId);
+      const rows: unknown[][] = [
+        ['section', 'date', 'description', 'amount'],
+        ...statement.savingsTransactions.map((t) => [
+          'savings',
+          new Date(t.createdAt).toISOString().slice(0, 10),
+          t.type,
+          t.signedAmount.toFixed(2),
+        ]),
+        ...statement.shareTransactions.map((t) => [
+          'shares',
+          new Date(t.createdAt).toISOString().slice(0, 10),
+          t.type,
+          t.signedAmount.toFixed(2),
+        ]),
+        ...statement.loanRepayments.map((r) => [
+          'loan',
+          r.dueDate,
+          `installment ${r.seq} (${r.status})`,
+          r.paidAmount.toFixed(2),
+        ]),
+        ...statement.dividends.map((d) => [
+          'dividend',
+          d.periodLabel,
+          'dividend allocation',
+          d.amount.toFixed(2),
+        ]),
+      ];
+      return csv(rows);
+    }
 
     if (kind === 'savings-book') {
       const data = await this.savingsBook(orgId);

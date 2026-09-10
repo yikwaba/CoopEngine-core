@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken } from '../../../lib/api';
+import { apiFetch, clearSession, readToken, API_BASE } from '../../../lib/api';
 
 interface Member360 {
   member: { id: string; memberNo: number; firstName: string; lastName: string; email: string | null; status: string };
@@ -15,6 +15,25 @@ interface Member360 {
 }
 
 const naira = (n: number): string => `₦${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+
+async function downloadStatement(memberId: string, memberNo: number): Promise<void> {
+  const token = readToken();
+  if (!token) return;
+  const res = await fetch(
+    `${API_BASE}/reports/export/member-statement?memberId=${memberId}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) throw new Error(`Statement download failed (${res.status})`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `statement-member-${memberNo}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 export default function MemberDetailPage() {
   const router = useRouter();
@@ -106,9 +125,21 @@ export default function MemberDetailPage() {
           </h1>
           <p style={{ margin: '4px 0 0', color: '#5b6772' }}>{m.email ?? 'No email'}</p>
         </div>
-        <Link href="/members" style={{ fontSize: 14 }}>
-          ← Members
-        </Link>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button
+            onClick={() => {
+              void downloadStatement(m.id, m.memberNo).catch((e) =>
+                setError(e instanceof Error ? e.message : 'Statement download failed'),
+              );
+            }}
+            style={{ fontSize: 14 }}
+          >
+            Download statement (CSV)
+          </button>
+          <Link href="/members" style={{ fontSize: 14 }}>
+            ← Members
+          </Link>
+        </div>
       </div>
 
       {error && (

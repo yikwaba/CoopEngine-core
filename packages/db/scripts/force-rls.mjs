@@ -41,6 +41,8 @@ const TABLES = [
   'savings_interest_postings',
   'member_virtual_accounts',
   'payment_notifications',
+  'dividend_runs',
+  'dividend_allocations',
 ];
 
 const BALANCED_JOURNAL_SQL = `

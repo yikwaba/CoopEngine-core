@@ -30,6 +30,8 @@ const PERMISSIONS = {
     ['saas.platform.health', 'Platform health and ops'],
   ],
   org: [
+    ['dividends.view', 'View dividend runs'],
+    ['dividends.post', 'Post dividend distributions'],
     ['products.view', 'View savings/loan products'],
     ['products.manage', 'Create and edit products'],
     ['members.create', 'Create member records'],
@@ -76,6 +78,8 @@ const ROLE_TEMPLATES = {
     'reports.view',
   ],
   COOP_ADMIN: [
+    'dividends.view',
+    'dividends.post',
     'products.view',
     'products.manage',
     'users.manage',
@@ -236,9 +240,9 @@ async function main() {
     await pool.query(
       `INSERT INTO role_permissions (role_id, permission_id)
        SELECT r.id, p.id FROM roles r, permissions p
-        WHERE r.code = $1 AND r.scope = 'org' AND p.code = 'products.view'
+        WHERE r.code = $1 AND r.scope = 'org' AND p.code = ANY($2::varchar[])
        ON CONFLICT DO NOTHING`,
-      [roleCode],
+      [roleCode, ['products.view', 'dividends.view']],
     );
   }
 

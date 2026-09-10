@@ -362,7 +362,7 @@ export class LoansService {
       if (target === 'APPROVED') {
         const g = await c.query(
           `SELECT count(*) AS n FROM loan_guarantors
-            WHERE organization_id = $1 AND loan_id = $2`,
+            WHERE organization_id = $1 AND loan_id = $2 AND status <> 'REJECTED'`,
           [orgId, loanId],
         );
         if (Number(g.rows[0].n) < MIN_GUARANTORS) {

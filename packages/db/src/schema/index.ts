@@ -820,7 +820,61 @@ export const savingsInterestPostings = pgTable(
 );
 
 /**
- * Public virtual-account resolver (NO RLS by design): lets unauthenticated
+ /** Dividend (surplus distribution) runs — one per org + period. */
+ export const dividendRuns = pgTable(
+   'dividend_runs',
+   {
+     id: uuid('id').primaryKey().defaultRandom(),
+     organizationId: uuid('organization_id')
+       .notNull()
+       .references(() => organizations.id, { onDelete: 'cascade' }),
+     periodLabel: varchar('period_label', { length: 16 }).notNull(), // e.g. '2026'
+     distributableAmount: numeric('distributable_amount', { precision: 19, scale: 2 }).notNull(),
+     status: text('status').notNull().default('POSTED'), // POSTED (preview is computed on the fly)
+     journalEntryId: uuid('journal_entry_id'),
+     memberCount: bigint('member_count', { mode: 'number' }).notNull().default(0),
+     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+   },
+   (table) => [
+     pgPolicy('tenant_isolation', {
+       as: 'permissive',
+       for: 'all',
+       using: tenantScope(table.organizationId),
+       withCheck: tenantScope(table.organizationId),
+     }),
+   ],
+ );
+
+ /** Per-member dividend allocation for a run. */
+ export const dividendAllocations = pgTable(
+   'dividend_allocations',
+   {
+     id: uuid('id').primaryKey().defaultRandom(),
+     organizationId: uuid('organization_id')
+       .notNull()
+       .references(() => organizations.id, { onDelete: 'cascade' }),
+     runId: uuid('run_id')
+       .notNull()
+       .references(() => dividendRuns.id, { onDelete: 'cascade' }),
+     memberId: uuid('member_id')
+       .notNull()
+       .references(() => members.id, { onDelete: 'cascade' }),
+     shareBalance: numeric('share_balance', { precision: 19, scale: 2 }).notNull(),
+     amount: numeric('amount', { precision: 19, scale: 2 }).notNull(),
+     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+   },
+   (table) => [
+     pgPolicy('tenant_isolation', {
+       as: 'permissive',
+       for: 'all',
+       using: tenantScope(table.organizationId),
+       withCheck: tenantScope(table.organizationId),
+     }),
+   ],
+ );
+
+ /** Public virtual-account resolver (NO RLS by design): lets unauthenticated
  * inbound payment webhooks resolve an account number to its organization
  * before any tenant context exists. Maintained transactionally on create.
  */
@@ -1224,6 +1278,10 @@ export type NewMemberVirtualAccount = typeof memberVirtualAccounts.$inferInsert;
 export type PaymentNotification = typeof paymentNotifications.$inferSelect;
 export type NewPaymentNotification = typeof paymentNotifications.$inferInsert;
 export type VirtualAccountLookup = typeof virtualAccountLookups.$inferSelect;
+export type DividendRun = typeof dividendRuns.$inferSelect;
+export type NewDividendRun = typeof dividendRuns.$inferInsert;
+export type DividendAllocation = typeof dividendAllocations.$inferSelect;
+export type NewDividendAllocation = typeof dividendAllocations.$inferInsert;
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
 export type NextOfKin = typeof nextOfKin.$inferSelect;
