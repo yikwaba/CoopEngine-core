@@ -403,3 +403,45 @@ rehearsal, not assumed).
 **Lifecycle rule.** B2 keeps file versions, so a deleted archive leaves hidden
 versions behind. `scripts/setup-b2-lifecycle.sh --days 30` expires noncurrent
 versions after 30 days — keep that comfortably above the retention period too.
+
+### 6. Domain switchover (nip.io → real domain)
+
+`scripts/switch-domain.sh <domain>` moves the stack to a real domain in one
+command: it preflights DNS and the services, rewrites the Caddyfile (keeping the
+nip.io names as aliases), updates `CORS_ORIGINS`, rebuilds portal + PWA against
+the new API host, restarts everything, waits for certificate issuance and then
+verifies the routes. `--dry-run` checks prerequisites only; `--revert` goes back.
+
+**Two layers — do not confuse them:**
+
+| Layer | Where | What lives there |
+| --- | --- | --- |
+| Registration + nameservers | the registrar (set at NiRA) | who owns the name, and which nameservers are authoritative |
+| DNS records (A/TXT/…) | the nameservers — i.e. Cloudflare | `@`, `www`, `api`, `app`, `member` → the VPS |
+
+If the domain is delegated to Cloudflare, **the registrar hosts no DNS zone** —
+that is correct, not a fault. Records are created in Cloudflare with
+**Proxy status: DNS only** so member and staff traffic goes straight to the VPS
+(no third party inside the TLS path).
+
+**A newly registered domain can stay NXDOMAIN at public resolvers** for up to the
+parent zone's SOA minimum TTL (commonly an hour) because the earlier NXDOMAIN is
+negatively cached. The registry is already correct in the meantime — verify with
+RDAP rather than DNS:
+
+```bash
+curl -s -H 'accept: application/rdap+json' \
+  https://rdap.nic.net.ng/domain/coopengine.com.ng | python3 -m json.tool | head -30
+```
+
+**Diagnostics from this VPS:** outbound port 53 to external resolvers is filtered
+(`dig @1.1.1.1` returns nothing) and WHOIS on port 43 times out. Use
+**DNS-over-HTTPS over 443** instead:
+
+```bash
+curl -s -H 'accept: application/dns-json' \
+  'https://dns.google/resolve?name=api.coopengine.com.ng&type=A'
+```
+
+The portal/PWA bake `NEXT_PUBLIC_API_URL` in at **build** time, so a domain change
+requires a rebuild — which `switch-domain.sh` does for you.
