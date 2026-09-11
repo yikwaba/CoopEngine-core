@@ -211,4 +211,8 @@ if [ "${#OLD[@]}" -gt 0 ]; then
   log "pruned ${#OLD[@]} archive(s), keeping the newest $KEEP"
 fi
 
-log "offsite backup complete (offsite leg: ${UPLOADED:+verified}${UPLOADED:-staged only})"
+if [ "$UPLOADED" -eq 1 ]; then
+  log "offsite backup complete (offsite leg: uploaded and verified)"
+else
+  log "offsite backup complete (offsite leg: staged locally only)"
+fi
