@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Co-opEngine domain and TLS watchdog daily
+
+[Timer]
+OnCalendar=*-*-* 07:20:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

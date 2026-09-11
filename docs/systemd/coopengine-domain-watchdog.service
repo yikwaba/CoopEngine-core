@@ -1,0 +1,13 @@
+[Unit]
+Description=Co-opEngine domain and TLS expiry watchdog
+Documentation=file:/root/CoopEngine-core/docs/domain-and-tls-watchdog.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash /root/CoopEngine-core/scripts/domain-watchdog.sh
+# Exit 0 even when it finds problems: the report is the deliverable, and the
+# Hermes cron job is what actually alerts a human.
+SuccessExitStatus=0 1
+Nice=10
