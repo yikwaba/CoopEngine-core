@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken, API_BASE } from '../../lib/api';
+import { apiFetch, clearSession, readToken, API_BASE, downloadPdf } from '../../lib/api';
 
 interface LoanRow {
   id: string;
@@ -173,6 +173,19 @@ export default function LoansPage() {
                   <td>{l.interestRatePa}%</td>
                   <td>{l.status}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
+                    <button
+                      type="button"
+                      style={{ fontSize: 14, marginRight: 8 }}
+                      title="Download the loan schedule as a PDF"
+                      onClick={() =>
+                        void downloadPdf(
+                          `/pdf/loans/${l.id}/statement.pdf`,
+                          `loan-${l.memberNo ?? l.id}.pdf`,
+                        ).catch((e: unknown) => alert(e instanceof Error ? e.message : 'Download failed'))
+                      }
+                    >
+                      Schedule (PDF)
+                    </button>
                     <Link href={`/loans/${l.id}`} style={{ fontSize: 14, marginRight: 8 }}>
                       Open →
                     </Link>

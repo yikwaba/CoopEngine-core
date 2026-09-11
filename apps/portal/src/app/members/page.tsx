@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken, API_BASE } from '../../lib/api';
+import { apiFetch, clearSession, readToken, API_BASE, downloadPdf } from '../../lib/api';
 
 interface MemberRow {
   id: string;
@@ -123,6 +123,20 @@ export default function MembersPage() {
                     <Link href={`/members/${m.id}`} style={{ fontSize: 14 }}>
                       Open →
                     </Link>
+                    <button
+                      type="button"
+                      className="btn-link"
+                      title="Download the savings statement as a PDF"
+                      style={{ marginLeft: 10, fontSize: 14 }}
+                      onClick={() =>
+                        void downloadPdf(
+                          `/pdf/members/${m.id}/statement.pdf`,
+                          `statement-${m.memberNo}.pdf`,
+                        ).catch((e: unknown) => alert(e instanceof Error ? e.message : 'Download failed'))
+                      }
+                    >
+                      Statement (PDF)
+                    </button>
                   </td>
                 </tr>
               ))

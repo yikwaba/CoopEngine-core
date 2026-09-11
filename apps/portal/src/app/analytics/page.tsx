@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken, API_BASE } from '../../lib/api';
+import { apiFetch, clearSession, readToken, API_BASE, downloadPdf } from '../../lib/api';
 import Nav from '../components/Nav';
 
 interface BoardPack {
@@ -101,6 +101,21 @@ export default function AnalyticsPage() {
       <h1 style={{ marginBottom: 4 }}>Analytics & board pack</h1>
       <p style={{ color: '#5b6772', marginTop: 0 }}>Portfolio health at a glance, ready for the board.</p>
       <Nav />
+      <button
+        type="button"
+        className="btn secondary"
+        style={{ marginTop: 10 }}
+        title="Download this month's board pack as a PDF"
+        onClick={() => {
+          const period = new Date().toISOString().slice(0, 7);
+          void downloadPdf(`/pdf/board-pack.pdf?period=${period}`, `board-pack-${period}.pdf`).catch(
+            (e: unknown) => alert(e instanceof Error ? e.message : 'Download failed'),
+          );
+        }}
+      >
+        Board pack (PDF)
+      </button>
+
 
       {error && <p style={{ background: '#fdecea', color: '#8a1c1c', padding: 10, borderRadius: 6 }}>{error}</p>}
 

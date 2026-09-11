@@ -7,6 +7,7 @@ import { LedgerModule } from './ledger/ledger.module';
 import { SavingsModule } from './savings/savings.module';
 import { LoansModule } from './loans/loans.module';
 import { SharesModule } from './shares/shares.module';
+import { PdfModule } from './pdf/pdf.module';
 import { ReportsModule } from './reports/reports.module';
 import { PayrollModule } from './payroll/payroll.module';
 import { MemberAuthModule } from './member-auth/member-auth.module';
@@ -34,6 +35,7 @@ import { DatabaseModule } from './database/database.module';
     LoansModule,
     SharesModule,
     ReportsModule,
+    PdfModule,
     PayrollModule,
     MemberAuthModule,
     MemberSpaceModule,

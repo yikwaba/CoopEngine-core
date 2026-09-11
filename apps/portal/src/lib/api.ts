@@ -68,3 +68,30 @@ export function readToken(): string | null {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem(TOKEN_KEY);
 }
+
+/**
+ * Fetch a PDF with the session token and hand it to the browser as a download.
+ * A plain <a href> cannot carry the Authorization header, so documents are
+ * fetched as a blob and saved through a temporary object URL.
+ */
+export async function downloadPdf(path: string, filename: string): Promise<void> {
+  const token = readToken();
+  if (!token) {
+    throw new Error('Not signed in');
+  }
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Could not generate the document (${res.status})`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
