@@ -11,6 +11,7 @@ const LINKS = [
   { href: '/analytics', label: 'Analytics' },
   { href: '/documents', label: 'Documents' },
   { href: '/branches', label: 'Branches' },
+  { href: '/opening-balances', label: 'Opening balances' },
   { href: '/notifications', label: 'Notifications' },
   { href: '/collections', label: 'Collections' },
   { href: '/audit', label: 'Audit' },

@@ -20,6 +20,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { DocumentsModule } from './documents/documents.module';
 import { BranchesModule } from './branches/branches.module';
 import { GoalsModule } from './goals/goals.module';
+import { MigrationsModule } from './migrations/migrations.module';
 import { DatabaseModule } from './database/database.module';
 
 @Module({
@@ -45,6 +46,7 @@ import { DatabaseModule } from './database/database.module';
     DocumentsModule,
     BranchesModule,
     GoalsModule,
+    MigrationsModule,
     HealthModule,
   ],
 })

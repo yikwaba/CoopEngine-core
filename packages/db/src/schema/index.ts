@@ -16,6 +16,7 @@ import {
   boolean,
   date,
   index,
+  integer,
   jsonb,
   numeric,
   pgPolicy,
@@ -438,7 +439,7 @@ export const savingsTransactions = pgTable(
     journalEntryId: uuid('journal_entry_id')
       .notNull()
       .references(() => journalEntries.id),
-    type: varchar('type', { length: 12 }).notNull(), // DEPOSIT|WITHDRAWAL|INTEREST|FEE
+    type: varchar('type', { length: 24 }).notNull(), // DEPOSIT|WITHDRAWAL|INTEREST|FEE|DIVIDEND|OPENING_BALANCE
     signedAmount: numeric('signed_amount', { precision: 19, scale: 2 })
       .notNull(),
     runningBalance: numeric('running_balance', { precision: 19, scale: 2 })
@@ -683,7 +684,7 @@ export const shareTransactions = pgTable(
     journalEntryId: uuid('journal_entry_id')
       .notNull()
       .references(() => journalEntries.id),
-    type: varchar('type', { length: 16 }).notNull().default('PURCHASE'),
+    type: varchar('type', { length: 24 }).notNull().default('PURCHASE'),
     signedAmount: numeric('signed_amount', { precision: 19, scale: 2 })
       .notNull(),
     runningBalance: numeric('running_balance', { precision: 19, scale: 2 })
@@ -869,6 +870,68 @@ export const standingInstructions = pgTable(
     lastRemindedAt: timestamp('last_reminded_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+  ],
+);
+
+/** Bulk migration of a cooperative's existing balances onto the platform. */
+export const openingBalanceBatches = pgTable(
+  'opening_balance_batches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    label: varchar('label', { length: 120 }).notNull(),
+    sourceFilename: varchar('source_filename', { length: 255 }),
+    status: text('status').notNull().default('PENDING'), // PENDING|POSTED|VOID
+    memberCount: integer('member_count').notNull().default(0),
+    savingsTotal: numeric('savings_total', { precision: 19, scale: 2 }).notNull().default('0'),
+    sharesTotal: numeric('shares_total', { precision: 19, scale: 2 }).notNull().default('0'),
+    loansTotal: numeric('loans_total', { precision: 19, scale: 2 }).notNull().default('0'),
+    journalEntryId: uuid('journal_entry_id').references(() => journalEntries.id, {
+      onDelete: 'set null',
+    }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    postedAt: timestamp('posted_at', { withTimezone: true }),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+  ],
+);
+
+export const openingBalanceRows = pgTable(
+  'opening_balance_rows',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    batchId: uuid('batch_id')
+      .notNull()
+      .references(() => openingBalanceBatches.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    savingsAmount: numeric('savings_amount', { precision: 19, scale: 2 }).notNull().default('0'),
+    sharesAmount: numeric('shares_amount', { precision: 19, scale: 2 }).notNull().default('0'),
+    loanOutstanding: numeric('loan_outstanding', { precision: 19, scale: 2 }).notNull().default('0'),
+    loanTermMonths: integer('loan_term_months'),
+    loanRatePa: numeric('loan_rate_pa', { precision: 9, scale: 4 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     pgPolicy('tenant_isolation', {
@@ -1407,6 +1470,8 @@ export type NewPaymentNotification = typeof paymentNotifications.$inferInsert;
 export type VirtualAccountLookup = typeof virtualAccountLookups.$inferSelect;
 export type SavingsGoal = typeof savingsGoals.$inferSelect;
 export type StandingInstruction = typeof standingInstructions.$inferSelect;
+export type OpeningBalanceBatch = typeof openingBalanceBatches.$inferSelect;
+export type OpeningBalanceRow = typeof openingBalanceRows.$inferSelect;
 export type MemberDocument = typeof memberDocuments.$inferSelect;
 export type NewMemberDocument = typeof memberDocuments.$inferInsert;
 export type Notification = typeof notifications.$inferSelect;

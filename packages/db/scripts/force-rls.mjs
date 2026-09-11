@@ -47,6 +47,8 @@ const TABLES = [
   'member_documents',
   'savings_goals',
   'standing_instructions',
+  'opening_balance_batches',
+  'opening_balance_rows',
 ];
 
 const BALANCED_JOURNAL_SQL = `
