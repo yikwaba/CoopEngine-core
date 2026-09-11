@@ -96,11 +96,25 @@ echo
 echo "--- verifying the remote can list and write ---"
 TARGET_BASE="${NAME}:"
 if [ "$TYPE" = "b2" ]; then TARGET_BASE="${NAME}:${BUCKET}"; fi
-if ! rclone lsd "${NAME}:" >/dev/null 2>&1; then
-  echo "FAILED: 'rclone lsd ${NAME}:' did not succeed — check the key and bucket scope" >&2
-  exit 1
+if rclone lsd "${NAME}:" >/dev/null 2>&1; then
+  echo "  listing OK: ${NAME}: (key can list buckets)"
+else
+  # A bucket-scoped key without the listBuckets capability cannot enumerate
+  # buckets. Everything else may still work, so probe the bucket itself before
+  # declaring the key broken — and say precisely what is missing.
+  if [ "$TYPE" = "b2" ] && rclone lsf "${NAME}:${BUCKET}" >/dev/null 2>&1; then
+    echo "  NOTE: this key cannot list buckets (listBuckets capability missing)."
+    echo "        It can still read the bucket itself. If a later step fails with"
+    echo "        'bucket not found', recreate the key WITH the List Buckets"
+    echo "        capability (the console's Read and Write preset includes it)."
+  else
+    echo "FAILED: cannot reach ${NAME}:${BUCKET:-}" >&2
+    echo "  checks: keyID/applicationKey correct; access allowed to this bucket;" >&2
+    echo "          capabilities include listBuckets, listFiles, readFiles, writeFiles" >&2
+    [ "$TYPE" = "b2" ] && echo "          (Object Lock bucket: also readBucketRetentions + writeBucketRetentions)" >&2
+    exit 1
+  fi
 fi
-echo "  listing OK: ${NAME}:"
 
 TESTPATH="${TARGET_BASE}/${PREFIX}"
 if ! rclone mkdir "$TESTPATH" 2>/dev/null; then
