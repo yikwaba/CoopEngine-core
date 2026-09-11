@@ -15,6 +15,7 @@ const LINKS = [
   { href: '/withdrawals', label: 'Withdrawals' },
   { href: '/month-end', label: 'Month-end' },
   { href: '/notifications', label: 'Notifications' },
+  { href: '/notifications/templates', label: 'Message wording' },
   { href: '/collections', label: 'Collections' },
   { href: '/audit', label: 'Audit' },
   { href: '/interest', label: 'Interest' },

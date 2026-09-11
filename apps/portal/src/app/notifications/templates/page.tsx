@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken } from '../../../lib/api';
+import { apiFetch, readToken } from '../../../lib/api';
 
 interface Template {
   code: string;
@@ -15,33 +14,40 @@ interface Template {
   body: string;
   defaultTitle: string;
   defaultBody: string;
+  updatedAt: string | null;
+}
+
+interface PreviewResult {
+  title: string;
+  body: string;
+  smsParts: number;
+  unresolved: string[];
 }
 
 export default function NotificationTemplatesPage() {
-  const router = useRouter();
   const [items, setItems] = useState<Template[]>([]);
-  const [selected, setSelected] = useState<string>('');
+  const [selected, setSelected] = useState('');
   const [draft, setDraft] = useState({ title: '', body: '' });
-  const [preview, setPreview] = useState<{ title: string; body: string; smsParts: number } | null>(null);
+  const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     const token = readToken();
     if (!token) {
-      router.push('/login');
+      setErr('Please sign in.');
       return;
     }
-    const res = await apiFetch('/notifications/templates', { token });
-    if (res.status === 401) {
-      clearSession();
-      router.push('/login');
-      return;
+    try {
+      const list = await apiFetch<Template[]>('/notifications/templates', token);
+      setItems(list);
+      setSelected((cur) => cur || list[0]?.code || '');
+      setErr('');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not load the message wording.');
     }
-    const list = (await res.json()) as Template[];
-    setItems(list);
-    setSelected((cur) => cur || list[0]?.code || '');
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -50,47 +56,60 @@ export default function NotificationTemplatesPage() {
   const current = items.find((t) => t.code === selected);
 
   useEffect(() => {
-    if (current) setDraft({ title: current.title, body: current.body });
-    setPreview(null);
-  }, [selected, current?.updatedAt, current?.isCustomised]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (current) {
+      setDraft({ title: current.title, body: current.body });
+      setPreview(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, current?.isCustomised, current?.updatedAt]);
 
   async function runPreview() {
     const token = readToken();
-    if (!token) return;
-    const res = await apiFetch(`/notifications/templates/${selected}/preview`, {
-      token,
-      method: 'POST',
-      body: JSON.stringify(draft),
-    });
-    if (!res.ok) {
-      setMsg('Could not render a preview.');
-      return;
+    if (!token || !selected) return;
+    try {
+      const result = await apiFetch<PreviewResult>(
+        `/notifications/templates/${selected}/preview`,
+        token,
+        { method: 'POST', body: JSON.stringify(draft) },
+      );
+      setPreview(result);
+      setErr('');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not render a preview.');
     }
-    setPreview((await res.json()) as { title: string; body: string; smsParts: number });
   }
 
   async function save() {
     const token = readToken();
-    if (!token) return;
+    if (!token || !selected) return;
     setBusy(true);
     setMsg('');
-    const res = await apiFetch(`/notifications/templates/${selected}`, {
-      token,
-      method: 'PUT',
-      body: JSON.stringify({ title: draft.title, body: draft.body, channel: current?.defaultChannel }),
-    });
-    setBusy(false);
-    setMsg(res.ok ? 'Saved — members will receive this wording.' : 'Not saved. Check the message length.');
-    if (res.ok) await load();
+    setErr('');
+    try {
+      await apiFetch(`/notifications/templates/${selected}`, token, {
+        method: 'PUT',
+        body: JSON.stringify({ title: draft.title, body: draft.body }),
+      });
+      setMsg('Saved — members will receive this wording.');
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not save.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function reset() {
     const token = readToken();
-    if (!token) return;
+    if (!token || !selected) return;
     if (!window.confirm('Discard your wording and go back to the built-in message?')) return;
-    const res = await apiFetch(`/notifications/templates/${selected}`, { token, method: 'DELETE' });
-    setMsg(res.ok ? 'Reset to the built-in wording.' : 'Could not reset.');
-    if (res.ok) await load();
+    try {
+      await apiFetch(`/notifications/templates/${selected}`, token, { method: 'DELETE' });
+      setMsg('Reset to the built-in wording.');
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not reset.');
+    }
   }
 
   return (
@@ -98,9 +117,10 @@ export default function NotificationTemplatesPage() {
       <Link href="/">← Dashboard</Link>
       <h1 style={{ marginTop: 12 }}>Message wording</h1>
       <p style={{ color: '#555' }}>
-        Choose how your cooperative words its SMS and email notifications. Placeholders in{' '}
-        <code>{'{{braces}}'}</code> are filled in automatically.
+        Choose how your cooperative words its SMS and email notifications. Anything in{' '}
+        <code>{'{{braces}}'}</code> is filled in automatically.
       </p>
+      {err && <p style={{ color: '#b91c1c' }}>{err}</p>}
 
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20, marginTop: 16 }}>
         <nav style={{ borderRight: '1px solid #eee', paddingRight: 12 }}>
@@ -128,7 +148,7 @@ export default function NotificationTemplatesPage() {
         </nav>
 
         <section>
-          {current && (
+          {current ? (
             <>
               <p style={{ color: '#666', marginTop: 0 }}>{current.description}</p>
               <label style={{ display: 'block', fontWeight: 600, marginTop: 12 }}>Title</label>
@@ -149,17 +169,27 @@ export default function NotificationTemplatesPage() {
               </p>
 
               <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-                <button onClick={save} disabled={busy} style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: '#1d4ed8', color: '#fff', cursor: 'pointer' }}>
-                  Save wording
+                <button
+                  onClick={save}
+                  disabled={busy}
+                  style={{ padding: '8px 14px', borderRadius: 6, border: 'none', background: '#1d4ed8', color: '#fff', cursor: 'pointer' }}
+                >
+                  {busy ? 'Saving…' : 'Save wording'}
                 </button>
-                <button onClick={runPreview} style={{ padding: '8px 14px', borderRadius: 6, border: '1px solid #ddd', background: '#fff', cursor: 'pointer' }}>
+                <button
+                  onClick={runPreview}
+                  style={{ padding: '8px 14px', borderRadius: 6, border: '1px solid #ddd', background: '#fff', cursor: 'pointer' }}
+                >
                   Preview
                 </button>
-                <button onClick={reset} style={{ padding: '8px 14px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', cursor: 'pointer' }}>
+                <button
+                  onClick={reset}
+                  style={{ padding: '8px 14px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', cursor: 'pointer' }}
+                >
                   Reset to built-in
                 </button>
               </div>
-              {msg && <p style={{ marginTop: 10 }}>{msg}</p>}
+              {msg && <p style={{ marginTop: 10, color: '#166534' }}>{msg}</p>}
 
               {preview && (
                 <div style={{ marginTop: 16, border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, background: '#fafafa' }}>
@@ -168,9 +198,16 @@ export default function NotificationTemplatesPage() {
                   <span style={{ fontSize: 12, color: '#666' }}>
                     {preview.smsParts} SMS part{preview.smsParts > 1 ? 's' : ''} (160 characters each)
                   </span>
+                  {preview.unresolved.length > 0 && (
+                    <p style={{ fontSize: 12, color: '#b45309' }}>
+                      No value supplied for: {preview.unresolved.map((u) => `{{${u}}}`).join(', ')}
+                    </p>
+                  )}
                 </div>
               )}
             </>
+          ) : (
+            <p>Loading…</p>
           )}
         </section>
       </div>
