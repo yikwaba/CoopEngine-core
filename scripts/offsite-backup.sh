@@ -212,13 +212,22 @@ if [ "${TARGET_KIND:-}" = "rclone" ] && [ "${OFFSITE_REMOTE_KEEP:-1}" = "1" ]; t
     | grep -E '\.(gpg|tar\.gz)$' | sort -r || true)
   if [ "${#REMOTE_FILES[@]}" -gt "$KEEP" ]; then
     PRUNED=0
+    REFUSED=0
     for f in "${REMOTE_FILES[@]:$KEEP}"; do
       if rclone deletefile "${TARGET_PATH}/${f}" >/dev/null 2>&1; then
         rclone deletefile "${TARGET_PATH}/${f}.sha256" >/dev/null 2>&1 || true
         PRUNED=$((PRUNED + 1))
+      else
+        REFUSED=$((REFUSED + 1))
       fi
     done
     log "pruned ${PRUNED} remote archive(s), keeping the newest $KEEP at ${TARGET_PATH}"
+    if [ "$REFUSED" -gt 0 ]; then
+      # Most common cause: the bucket has Default Bucket Retention (Object Lock),
+      # which makes a file undeletable until its retention period elapses.
+      log "WARNING: ${REFUSED} old archive(s) could not be removed (Object Lock retention, or the key lacks delete rights)"
+      log "WARNING: keep KEEP greater than the bucket's retention days, or the vault will keep growing"
+    fi
     log "NOTE: B2 keeps file versions — add a bucket lifecycle rule to expire old versions (docs/deploy.md)"
   fi
 fi
