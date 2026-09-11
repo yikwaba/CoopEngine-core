@@ -80,7 +80,8 @@ rule = {
             "ID": f"expire-old-versions-{days}d",
             "Status": "Enabled",
             "Filter": {"Prefix": prefix} if prefix else {},
-            "NoncurrentVersionExpiration": {"NoncurrentDays": days, "NewerNoncurrentVersions": 5},
+            # B2 rejects NewerNoncurrentVersions (MalformedXML) — days only.
+            "NoncurrentVersionExpiration": {"NoncurrentDays": days},
             "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7},
         }
     ]
@@ -107,4 +108,4 @@ PY
 
 echo
 echo "verify in the Backblaze console: bucket → Lifecycle Settings"
-echo "NOTE: adjust the endpoint_url in this script if your bucket is not in eu-central-003."
+echo "NOTE: the endpoint is detected from your account; override with B2_ENDPOINT if needed."
