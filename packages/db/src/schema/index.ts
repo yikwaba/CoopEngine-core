@@ -988,6 +988,12 @@ export const openingBalanceRows = pgTable(
     loanDaysLate: integer('loan_days_late'),
     /** Overdue amount recorded by the old system (reference only). */
     loanArrearsAmount: numeric('loan_arrears_amount', { precision: 19, scale: 2 }),
+    /** Instalments already paid in the old system — rebuilt as history rows. */
+    loanPaidCount: integer('loan_paid_count').notNull().default(0),
+    /** Original principal (optional; inferred from outstanding + paid count). */
+    loanPrincipal: numeric('loan_principal', { precision: 19, scale: 2 }),
+    /** Date of the most recent payment in the old system (recorded in the audit trail). */
+    loanLastPaymentDate: date('loan_last_payment_date'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

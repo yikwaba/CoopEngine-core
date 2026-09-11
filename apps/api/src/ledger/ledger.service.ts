@@ -580,4 +580,260 @@ export class LedgerService {
     }
     return entry;
   }
+
+  // ------------------------------------------------------------- period close
+
+  /** Create a monthly period (YYYY-MM). Idempotent per code. */
+  async createPeriod(
+    organizationId: string | null,
+    actorUserId: string,
+    code: string,
+  ): Promise<{ id: string; code: string; status: string }> {
+    const orgId = this.requireOrg(organizationId);
+    if (!/^\d{4}-\d{2}$/.test(code)) {
+      throw new BadRequestException('period code must be YYYY-MM');
+    }
+    const start = `${code}-01`;
+    const endDate = new Date(`${start}T00:00:00Z`);
+    endDate.setUTCMonth(endDate.getUTCMonth() + 1);
+    endDate.setUTCDate(0);
+    const end = endDate.toISOString().slice(0, 10);
+    return withTenant(this.pool, orgId, async (c) => {
+      const existing = await c.query(
+        `SELECT id, code, status FROM ledger_periods WHERE organization_id = $1 AND code = $2`,
+        [orgId, code],
+      );
+      const found = existing.rows[0] as { id: string; code: string; status: string } | undefined;
+      if (found) return found;
+      const created = await c.query(
+        `INSERT INTO ledger_periods (organization_id, code, start_date, end_date, status)
+         VALUES ($1, $2, $3, $4, 'OPEN') RETURNING id, code, status`,
+        [orgId, code, start, end],
+      );
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, 'ledger.period.created', 'ledger_period', $3, $4)`,
+        [orgId, actorUserId, (created.rows[0] as { id: string }).id, JSON.stringify({ code })],
+      );
+      return created.rows[0] as { id: string; code: string; status: string };
+    });
+  }
+
+  /**
+   * Move a period through OPEN → SOFT_CLOSED → LOCKED (and back to OPEN).
+   * Posting into a period is already gated on status = 'OPEN' by every money
+   * path, so closing a period is what stops entries from landing in it.
+   */
+  async setPeriodStatus(
+    organizationId: string | null,
+    actorUserId: string,
+    periodId: string,
+    status: 'OPEN' | 'SOFT_CLOSED' | 'LOCKED',
+  ): Promise<{ id: string; code: string; status: string }> {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const found = await c.query(
+        `SELECT id, code, status FROM ledger_periods WHERE id = $1 FOR UPDATE`,
+        [periodId],
+      );
+      const period = found.rows[0] as { id: string; code: string; status: string } | undefined;
+      if (!period) throw new NotFoundException('Period not found');
+      if (period.status === status) return period;
+      if (period.status === 'LOCKED' && status !== 'LOCKED') {
+        throw new ConflictException('A locked period cannot be reopened — post a reversing entry instead');
+      }
+
+      const unposted = await c.query(
+        `SELECT count(*)::int AS n FROM journal_entries
+          WHERE organization_id = $1 AND period_id = $2 AND status IN ('DRAFT','SUBMITTED')`,
+        [orgId, periodId],
+      );
+      const pending = (unposted.rows[0] as { n: number }).n;
+      if (status !== 'OPEN' && pending > 0) {
+        throw new ConflictException(
+          `${pending} journal entr${pending === 1 ? 'y is' : 'ies are'} still unposted — post or discard them first`,
+        );
+      }
+
+      if (status === 'LOCKED') {
+        const tb = await c.query(
+          `SELECT coalesce(sum(jl.debit - jl.credit), 0) AS net
+             FROM journal_lines jl
+             JOIN journal_entries je ON je.id = jl.journal_entry_id
+            WHERE je.organization_id = $1 AND je.period_id = $2 AND je.status = 'POSTED'`,
+          [orgId, periodId],
+        );
+        const net = Number((tb.rows[0] as { net: string | number }).net);
+        if (Math.abs(net) > 0.005) {
+          throw new ConflictException(`Cannot lock: the period does not balance (net ${net.toFixed(2)})`);
+        }
+      }
+
+      await c.query(`UPDATE ledger_periods SET status = $2 WHERE id = $1`, [periodId, status]);
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, $3, 'ledger_period', $4, $5)`,
+        [
+          orgId,
+          actorUserId,
+          `ledger.period.${status.toLowerCase()}`,
+          periodId,
+          JSON.stringify({ from: period.status, to: status, code: period.code }),
+        ],
+      );
+      return { id: periodId, code: period.code, status };
+    });
+  }
+
+  /** Month-end checklist for a period code (YYYY-MM). */
+  async monthEndChecklist(
+    organizationId: string | null,
+    periodCode: string,
+  ): Promise<{
+    period: { code: string; status: string } | null;
+    readyToClose: boolean;
+    checks: { key: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string }[];
+  }> {
+    const orgId = this.requireOrg(organizationId);
+    if (!/^\d{4}-\d{2}$/.test(periodCode)) {
+      throw new BadRequestException('period code must be YYYY-MM');
+    }
+    // real calendar bounds (a 31st does not exist in every month)
+    const monthStart = `${periodCode}-01`;
+    const endCursor = new Date(`${monthStart}T00:00:00Z`);
+    endCursor.setUTCMonth(endCursor.getUTCMonth() + 1);
+    endCursor.setUTCDate(0);
+    const monthEnd = endCursor.toISOString().slice(0, 10);
+
+    return withTenant(this.pool, orgId, async (c) => {
+      const periodRes = await c.query(
+        `SELECT id, code, status FROM ledger_periods WHERE organization_id = $1 AND code = $2`,
+        [orgId, periodCode],
+      );
+      const period = periodRes.rows[0] as { id: string; code: string; status: string } | undefined;
+      const checks: { key: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string }[] = [];
+
+      if (!period) {
+        return {
+          period: null,
+          readyToClose: false,
+          checks: [
+            {
+              key: 'period',
+              label: `Accounting period ${periodCode}`,
+              status: 'fail' as const,
+              detail: 'no period exists for this month — create it before closing',
+            },
+          ],
+        };
+      }
+
+      const net = await c.query(
+        `SELECT coalesce(sum(jl.debit - jl.credit), 0) AS net
+           FROM journal_lines jl
+           JOIN journal_entries je ON je.id = jl.journal_entry_id
+          WHERE je.organization_id = $1 AND je.period_id = $2 AND je.status = 'POSTED'`,
+        [orgId, period.id],
+      );
+      const netValue = Number((net.rows[0] as { net: string | number }).net);
+      checks.push({
+        key: 'balanced',
+        label: 'Books balance for the month',
+        status: Math.abs(netValue) < 0.005 ? 'ok' : 'fail',
+        detail:
+          Math.abs(netValue) < 0.005
+            ? 'debits equal credits'
+            : `out by ${netValue.toFixed(2)} — investigate before closing`,
+      });
+
+      const unposted = await c.query(
+        `SELECT count(*)::int AS n FROM journal_entries
+          WHERE organization_id = $1 AND period_id = $2 AND status IN ('DRAFT','SUBMITTED')`,
+        [orgId, period.id],
+      );
+      const pending = (unposted.rows[0] as { n: number }).n;
+      checks.push({
+        key: 'unposted',
+        label: 'No unposted journals',
+        status: pending === 0 ? 'ok' : 'fail',
+        detail: pending === 0 ? 'every entry is posted' : `${pending} entr${pending === 1 ? 'y' : 'ies'} awaiting posting`,
+      });
+
+      const interest = await c.query(
+        `SELECT count(*)::int AS n FROM savings_transactions st
+           JOIN member_savings_accounts a ON a.id = st.account_id
+          WHERE st.organization_id = $1 AND st.type = 'INTEREST'
+            AND st.created_at::date BETWEEN $2::date AND $3::date`,
+        [orgId, monthStart, monthEnd],
+      );
+      const interestCount = (interest.rows[0] as { n: number }).n;
+      checks.push({
+        key: 'savings_interest',
+        label: 'Savings interest posted',
+        status: interestCount > 0 ? 'ok' : 'warn',
+        detail:
+          interestCount > 0
+            ? `${interestCount} interest transaction(s) recorded`
+            : 'no interest posted this month — check whether the policy requires it',
+      });
+
+      const arrears = await c.query(
+        `SELECT count(*)::int AS n FROM audit_logs
+          WHERE organization_id = $1 AND action = 'loan.arrears.marked'
+            AND created_at::date BETWEEN $2::date AND $3::date`,
+        [orgId, monthStart, monthEnd],
+      );
+      const arrearsRuns = (arrears.rows[0] as { n: number }).n;
+      checks.push({
+        key: 'arrears_reviewed',
+        label: 'Arrears reviewed',
+        status: arrearsRuns > 0 ? 'ok' : 'warn',
+        detail:
+          arrearsRuns > 0
+            ? `${arrearsRuns} arrears run(s) recorded (the nightly job also runs this)`
+            : 'no arrears run recorded this month',
+      });
+
+      const emptyLoans = await c.query(
+        `SELECT count(*)::int AS n FROM loans l
+          WHERE l.organization_id = $1 AND l.status IN ('DISBURSED','DEFAULTED')
+            AND NOT EXISTS (SELECT 1 FROM loan_repayments r WHERE r.loan_id = l.id)`,
+        [orgId],
+      );
+      const emptyCount = (emptyLoans.rows[0] as { n: number }).n;
+      checks.push({
+        key: 'loan_schedules',
+        label: 'Every live loan has a repayment schedule',
+        status: emptyCount === 0 ? 'ok' : 'fail',
+        detail: emptyCount === 0 ? 'all live loans have instalments' : `${emptyCount} loan(s) without instalments`,
+      });
+
+      const negative = await c.query(
+        `SELECT count(*)::int AS n FROM member_savings_accounts
+          WHERE organization_id = $1 AND status = 'ACTIVE' AND current_balance < 0`,
+        [orgId],
+      );
+      const negativeCount = (negative.rows[0] as { n: number }).n;
+      checks.push({
+        key: 'negative_balances',
+        label: 'No negative savings balances',
+        status: negativeCount === 0 ? 'ok' : 'fail',
+        detail: negativeCount === 0 ? 'all member balances are non-negative' : `${negativeCount} account(s) below zero`,
+      });
+
+      checks.push({
+        key: 'period_status',
+        label: 'Period status',
+        status: period.status === 'OPEN' ? 'ok' : 'ok',
+        detail: `${period.code} is ${period.status}`,
+      });
+
+      return {
+        period: { code: period.code, status: period.status },
+        readyToClose: checks.every((chk) => chk.status !== 'fail'),
+        checks,
+      };
+    });
+  }
+
 }

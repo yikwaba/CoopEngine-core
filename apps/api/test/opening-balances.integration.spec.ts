@@ -256,4 +256,96 @@ describe('opening balance migration', () => {
     expect(Number(tb.body.net)).toBe(0);
   });
 
+
+  it('reconstructs the repayment history of a part-paid legacy loan', async () => {
+    const coop = await onboardCoop('obhist');
+    const auth = { Authorization: `Bearer ${coop.tokens.accessToken}` };
+
+    const email = `hist-${randomUUID().slice(0, 6)}@coopengine.test`;
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/members')
+      .set(auth)
+      .send({ firstName: 'History', lastName: 'Holder', email, phone: '+2348030000000' });
+    const memberId = (created.body.id ?? created.body.member?.id) as string;
+    await request(app.getHttpServer()).post(`/api/v1/members/${memberId}/approve`).set(auth).send({});
+
+    // 12-instalment loan of which 4 were already paid; 80,000 still outstanding
+    // and the next instalment 20 days overdue.
+    const today = new Date();
+    const lastPaid = new Date(today.getTime() - 45 * 86400000).toISOString().slice(0, 10);
+    const csv = [
+      'memberEmail,savings,shares,loanOutstanding,loanTermMonths,loanRatePa,loanDaysLate,loanPaidCount,loanLastPaymentDate',
+      `${email},0,0,80000,12,15,20,4,${lastPaid}`,
+    ].join('\n');
+
+    const preview = await request(app.getHttpServer())
+      .post('/api/v1/migrations/opening-balances/preview')
+      .set(auth)
+      .send({ label: 'Legacy loan with history', csv });
+    expect(preview.status).toBe(201);
+    expect(preview.body.totals).toEqual({ rows: 1, valid: 1, invalid: 0 });
+    expect(preview.body.rows[0].loanPaidCount).toBe(4);
+    expect(preview.body.rows[0].loanLastPaymentDate).toBe(lastPaid);
+
+    const commit = await request(app.getHttpServer())
+      .post(`/api/v1/migrations/opening-balances/${preview.body.batchId}/commit`)
+      .set(auth)
+      .send({});
+    expect(commit.status).toBe(201);
+    expect(commit.body.loans).toBe(80000);
+
+    const loans = (await request(app.getHttpServer()).get('/api/v1/loans').set(auth)).body as {
+      id: string;
+      memberId: string;
+      status: string;
+      outstandingPrincipal: number;
+    }[];
+    const loan = loans.find((l) => l.memberId === memberId);
+    expect(loan?.status).toBe('DISBURSED');
+    expect(Number(loan?.outstandingPrincipal)).toBe(80000);
+
+    const schedule = (
+      await request(app.getHttpServer()).get(`/api/v1/loans/${loan?.id}/schedule`).set(auth)
+    ).body as {
+      seq: number;
+      dueDate: string;
+      principalDue: number;
+      paidPrincipal: number;
+      paidInterest: number;
+      status: string;
+    }[];
+
+    // the original 12 instalments are present...
+    expect(schedule).toHaveLength(12);
+    // ...4 of them as settled history...
+    const paidRows = schedule.filter((r) => r.status === 'PAID');
+    expect(paidRows).toHaveLength(4);
+    expect(paidRows.reduce((sum, r) => sum + r.paidPrincipal, 0)).toBe(40000);
+    expect(paidRows.every((r) => r.paidInterest > 0)).toBe(true);
+    const originalPrincipal = schedule.reduce((sum, r) => sum + r.principalDue, 0);
+    expect(Math.round(originalPrincipal * 100) / 100).toBe(120000); // 40,000 + 80,000
+
+    // ...and the unpaid principal still equals what the cooperative reported.
+    const unpaidPrincipal = schedule.reduce((sum, r) => sum + (r.principalDue - r.paidPrincipal), 0);
+    expect(Math.round(unpaidPrincipal * 100) / 100).toBe(80000);
+
+    // the paid instalments are in the past, and the one 20 days late shows up
+    const firstUnpaid = schedule.find((r) => r.status !== 'PAID');
+    const daysLate = Math.round(
+      (Date.now() - new Date(`${firstUnpaid?.dueDate}T00:00:00Z`).getTime()) / 86400000,
+    );
+    expect(daysLate).toBeGreaterThanOrEqual(19);
+    expect(daysLate).toBeLessThanOrEqual(21);
+
+    const arrears = await request(app.getHttpServer()).get('/api/v1/loans/arrears').set(auth);
+    const row = arrears.body.rows.find((r: { loanId: string }) => r.loanId === loan?.id);
+    expect(row).toBeTruthy();
+    const bucket = arrears.body.buckets.find((b: { bucket: string }) => b.bucket === '1-30');
+    expect(bucket.count).toBeGreaterThan(0);
+
+    // no phantom payments: the history is informational, the books stay balanced
+    const tb = await request(app.getHttpServer()).get('/api/v1/ledger/trial-balance').set(auth);
+    expect(Number(tb.body.net)).toBe(0);
+  });
+
 });

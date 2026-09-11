@@ -21,6 +21,9 @@ export interface OpeningBalanceParseRow {
   loanRatePa: number | null;
   loanDaysLate: number | null;
   loanArrearsAmount: number | null;
+  loanPaidCount: number;
+  loanPrincipal: number | null;
+  loanLastPaymentDate: string | null;
 }
 
 export interface OpeningBalancePreviewRow {
@@ -34,6 +37,9 @@ export interface OpeningBalancePreviewRow {
   loanTermMonths: number | null;
   loanDaysLate: number | null;
   loanArrearsAmount: number | null;
+  loanPaidCount: number;
+  loanPrincipal: number | null;
+  loanLastPaymentDate: string | null;
   errors: string[];
 }
 
@@ -145,6 +151,9 @@ export class OpeningBalancesService {
     const idxRate = col('loanRatePa');
     const idxDaysLate = col('loanDaysLate');
     const idxArrears = col('loanArrearsAmount');
+    const idxPaid = col('loanPaidCount');
+    const idxPrincipal = col('loanPrincipal');
+    const idxLastPay = col('loanLastPaymentDate');
     if (idxEmail < 0 && idxNo < 0) {
       throw new BadRequestException('CSV must include a memberEmail or memberNo column');
     }
@@ -172,6 +181,9 @@ export class OpeningBalancesService {
         const rate = idxRate >= 0 ? numberOrNull(cells[idxRate]) : null;
         const daysLate = idxDaysLate >= 0 ? numberOrNull(cells[idxDaysLate]) : null;
         const arrears = idxArrears >= 0 ? numberOrNull(cells[idxArrears]) : null;
+        const paidCountRaw = idxPaid >= 0 ? numberOrNull(cells[idxPaid]) : null;
+        const principalRaw = idxPrincipal >= 0 ? numberOrNull(cells[idxPrincipal]) : null;
+        const lastPayRaw = idxLastPay >= 0 ? (cells[idxLastPay] ?? '').trim() : '';
 
         for (const [name, value] of [
           ['savings', savings],
@@ -201,6 +213,39 @@ export class OpeningBalancesService {
           }
         }
         if (arrears !== null && arrears < 0) errors.push('loanArrearsAmount cannot be negative');
+
+        // Repayment history reconstruction (decision 2026-09-11)
+        let paidCount = 0;
+        if (paidCountRaw !== null && paidCountRaw !== 0) {
+          if (loanOutstanding <= 0) {
+            errors.push('loanPaidCount is only meaningful when loanOutstanding is set');
+          } else if (!Number.isInteger(paidCountRaw) || paidCountRaw < 0) {
+            errors.push('loanPaidCount must be a whole number of instalments');
+          } else if (termMonths !== null && paidCountRaw >= termMonths) {
+            errors.push('loanPaidCount must be less than loanTermMonths (at least one instalment left)');
+          } else {
+            paidCount = paidCountRaw;
+          }
+        }
+        let loanPrincipal: number | null = null;
+        if (principalRaw !== null && principalRaw !== 0) {
+          if (principalRaw < 0) errors.push('loanPrincipal cannot be negative');
+          else if (loanOutstanding > 0 && principalRaw < loanOutstanding) {
+            errors.push('loanPrincipal (original) cannot be smaller than loanOutstanding');
+          } else loanPrincipal = round2(principalRaw);
+        }
+        let lastPaymentDate: string | null = null;
+        if (lastPayRaw) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(lastPayRaw)) {
+            errors.push('loanLastPaymentDate must be YYYY-MM-DD');
+          } else if (paidCount === 0) {
+            errors.push('loanLastPaymentDate needs loanPaidCount');
+          } else if (lastPayRaw > new Date().toISOString().slice(0, 10)) {
+            errors.push('loanLastPaymentDate cannot be in the future');
+          } else {
+            lastPaymentDate = lastPayRaw;
+          }
+        }
         if ((savings ?? 0) === 0 && (shares ?? 0) === 0 && loanOutstanding === 0) {
           errors.push('all balances are zero — nothing to migrate');
         }
@@ -240,6 +285,9 @@ export class OpeningBalancesService {
           loanTermMonths: termMonths,
           loanDaysLate: daysLateValue,
           loanArrearsAmount: arrears === null ? null : round2(arrears),
+          loanPaidCount: paidCount,
+          loanPrincipal,
+          loanLastPaymentDate: lastPaymentDate,
           errors,
         };
         rows.push(row);
@@ -254,6 +302,9 @@ export class OpeningBalancesService {
               loanRatePa: rate,
               loanDaysLate: daysLateValue,
               loanArrearsAmount: arrears === null ? null : round2(arrears),
+              loanPaidCount: paidCount,
+              loanPrincipal,
+              loanLastPaymentDate: lastPaymentDate,
             },
             memberId,
           });
@@ -289,8 +340,8 @@ export class OpeningBalancesService {
             `INSERT INTO opening_balance_rows
                (organization_id, batch_id, member_id, savings_amount, shares_amount,
                 loan_outstanding, loan_term_months, loan_rate_pa, loan_days_late,
-                loan_arrears_amount)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                loan_arrears_amount, loan_paid_count, loan_principal, loan_last_payment_date)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
             [
               orgId,
               batchId,
@@ -302,6 +353,9 @@ export class OpeningBalancesService {
               vr.row.loanRatePa === null ? null : String(vr.row.loanRatePa),
               vr.row.loanDaysLate,
               vr.row.loanArrearsAmount === null ? null : String(vr.row.loanArrearsAmount),
+              vr.row.loanPaidCount,
+              vr.row.loanPrincipal === null ? null : String(vr.row.loanPrincipal),
+              vr.row.loanLastPaymentDate,
             ],
           );
         }
@@ -556,43 +610,74 @@ export class OpeningBalancesService {
               actorUserId,
             ],
           );
-          // Straight-line (flat) schedule: equal principal, flat interest.
-          const totalInterest = round2((loan * rate * termMonths) / 1200);
-          const principalPer = round2(loan / termMonths);
-          const interestPer = round2(totalInterest / termMonths);
+          // Straight-line (flat) schedule rebuilt to include the instalments the
+          // member had ALREADY paid in the old system, so the loan arrives with
+          // real history rather than just an ageing position.
+          //   termMonths  = the original number of instalments
+          //   paidCount   = instalments settled before the cut-over
+          //   loan        = principal still outstanding
+          const paidCount = Math.min(Number(row.loan_paid_count ?? 0), termMonths - 1);
+          const remaining = termMonths - paidCount;
+          const principalPer = round2(loan / remaining);
+
+          // Rounding delta goes on the final instalment so the unpaid principal
+          // sums to the outstanding balance exactly, whatever the division does.
+          const principalBySeq = new Map<number, number>();
+          for (let seq = 1; seq <= termMonths; seq += 1) principalBySeq.set(seq, principalPer);
+          const delta = round2(loan - principalPer * remaining);
+          if (delta !== 0) {
+            principalBySeq.set(termMonths, round2((principalBySeq.get(termMonths) ?? 0) + delta));
+          }
+          // When paid instalments are reconstructed the original principal is the
+          // sum of the whole schedule; a caller may state it explicitly instead.
+          const scheduledPrincipal = round2(
+            [...principalBySeq.values()].reduce((sum, v) => sum + v, 0),
+          );
+          const originalPrincipal =
+            row.loan_principal === null
+              ? scheduledPrincipal
+              : round2(Number(row.loan_principal));
+          if (originalPrincipal < loan) {
+            throw new ConflictException('Original principal cannot be less than the outstanding balance');
+          }
+          const interestPer = round2((originalPrincipal * rate) / 1200);
+
+          // Instalment dates are anchored on the first UNPAID one, which falls
+          // exactly daysLate days ago; already-paid instalments precede it.
+          const anchor = new Date(`${todayIso}T00:00:00Z`);
+          anchor.setUTCDate(anchor.getUTCDate() - daysLate);
+          const dueFor = (seq: number): string => {
+            const due = new Date(anchor.toISOString().slice(0, 10) + 'T00:00:00Z');
+            due.setUTCMonth(due.getUTCMonth() + (seq - (paidCount + 1)));
+            return due.toISOString().slice(0, 10);
+          };
+
           const values: string[] = [];
           const params: unknown[] = [];
-          let principalAssigned = 0;
-          // Cut-over date minus the carried-over arrears, so instalments already
-          // missed appear in the arrears ageing report.
-          const start = new Date(`${todayIso}T00:00:00Z`);
-          start.setUTCDate(start.getUTCDate() - daysLate);
-          const startIso = start.toISOString().slice(0, 10);
           for (let seq = 1; seq <= termMonths; seq += 1) {
-            const isLast = seq === termMonths;
-            const principalDue = isLast ? round2(loan - principalAssigned) : principalPer;
-            principalAssigned = round2(principalAssigned + principalDue);
-            // seq=1 is the oldest missed instalment, so it falls exactly
-            // daysLate days before today; later instalments follow monthly.
-            const due = new Date(`${startIso}T00:00:00Z`);
-            due.setUTCMonth(due.getUTCMonth() + (seq - 1));
+            const principal = principalBySeq.get(seq) ?? 0;
+            const wasPaid = seq <= paidCount;
             const base = params.length;
             values.push(
-              `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`,
+              `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`,
             );
             params.push(
               randomUUID(),
               orgId,
               loanId,
               seq,
-              due.toISOString().slice(0, 10),
-              String(principalDue),
-              String(isLast ? round2(totalInterest - interestPer * (termMonths - 1)) : interestPer),
+              dueFor(seq),
+              String(principal),
+              String(interestPer),
+              wasPaid ? String(principal) : '0',
+              wasPaid ? String(interestPer) : '0',
+              wasPaid ? 'PAID' : 'PENDING',
             );
           }
           await c.query(
             `INSERT INTO loan_repayments
-               (id, organization_id, loan_id, seq, due_date, principal_due, interest_due)
+               (id, organization_id, loan_id, seq, due_date, principal_due, interest_due,
+                paid_principal, paid_interest, status)
              VALUES ${values.join(', ')}`,
             params,
           );
@@ -614,7 +699,11 @@ export class OpeningBalancesService {
                 status,
                 daysLate,
                 arrearsAmount,
-                scheduleStart: startIso,
+                originalPrincipal,
+                instalmentsPaid: paidCount,
+                instalmentsRemaining: remaining,
+                lastPaymentDate: (row.loan_last_payment_date as string | null) ?? null,
+                historyReconstructed: paidCount > 0,
                 source: 'opening_balances',
               }),
             ],

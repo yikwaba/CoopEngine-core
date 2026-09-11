@@ -23,6 +23,9 @@ Header row required; column names are case/space-insensitive.
 | `loanOutstanding` | optional | principal still outstanding on a live loan |
 | `loanTermMonths` | when `loanOutstanding` is set | 1–60; used to rebuild the schedule |
 | `loanRatePa` | optional | defaults to the product's rate |
+| `loanPaidCount` | optional | instalments already settled in the old system |
+| `loanPrincipal` | optional | original principal (inferred from the schedule when omitted) |
+| `loanLastPaymentDate` | optional | date of the most recent payment; recorded in the audit trail |
 
 ```csv
 memberEmail,savings,shares,loanOutstanding,loanTermMonths,loanRatePa
@@ -83,3 +86,34 @@ cooperative's money.
    imported. Note any arrangements in the batch label.
 4. The import is **per tenant** — RLS isolates batches, and another
    cooperative can never read or post yours (covered by a test).
+
+## Reconstructing a loan's payment history
+
+A legacy loan rarely arrives as a clean "principal outstanding" figure — it has
+instalments the member already paid. Give `loanPaidCount` and Co-opEngine rebuilds
+the **whole original schedule**:
+
+* `loanTermMonths` is the **original** number of instalments;
+* the first `loanPaidCount` instalments are inserted as **PAID** with their paid
+  principal and interest, so the loan shows real history rather than a bare
+  ageing figure;
+* the remaining instalments are scheduled from the cut-over date, with the first
+  unpaid one falling exactly `loanDaysLate` days ago;
+* the unpaid principal sums to `loanOutstanding` **exactly** (rounding is absorbed
+  by the final instalment), and the whole schedule sums to the original principal;
+* interest is the straight-line (flat) amount for the stated rate, and the audit
+  trail records the original principal, instalments paid/remaining and the last
+  payment date.
+
+Example — 12 instalments, 4 already paid, ₦80,000 outstanding, next one 20 days late:
+
+```csv
+memberEmail,savings,shares,loanOutstanding,loanTermMonths,loanRatePa,loanDaysLate,loanPaidCount,loanLastPaymentDate
+bola@example.com,0,0,80000,12,15,20,4,2026-08-01
+```
+
+The loan arrives with 12 instalments (4 PAID = ₦40,000 of principal and interest,
+8 outstanding = ₦80,000, original principal ₦120,000), and the 20-day-late
+instalment appears in the **1–30** arrears bucket immediately. The historical
+instalments are informational: the opening journal books only the outstanding
+balance, so the books stay balanced.

@@ -60,6 +60,7 @@ const PERMISSIONS = {
     ['journals.create', 'Create journal entries'],
     ['journals.approve', 'Approve journal entries'],
     ['journals.post', 'Post journal entries'],
+    ['periods.manage', 'Open, soft-close and lock accounting periods'],
     ['payroll.upload', 'Upload payroll batches'],
     ['payroll.approve', 'Approve payroll batches'],
     ['payroll.post', 'Post payroll batches'],
@@ -85,6 +86,7 @@ const ROLE_TEMPLATES = {
     'reports.view',
   ],
   COOP_ADMIN: [
+    'periods.manage',
     'savings.approve',
     'migrations.view',
     'migrations.manage',
@@ -143,6 +145,7 @@ const ROLE_TEMPLATES = {
     'reports.export',
   ],
   ACCOUNTANT: [
+    'periods.manage',
     'journals.create',
     'journals.approve',
     'journals.post',

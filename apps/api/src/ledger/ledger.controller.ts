@@ -1,16 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Param,
-  ParseUUIDPipe,
-  Post,
-  Query,
-  Res,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { LedgerService } from './ledger.service';
 import { CreateJournalDto, PeriodQueryDto } from './dto/ledger.dto';
@@ -19,7 +7,7 @@ import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { IsIn, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 const READ_PERMISSIONS = [
   'journals.create',
@@ -34,6 +22,16 @@ class ReverseDto {
   @MinLength(3)
   @MaxLength(255)
   reason!: string;
+}
+
+export class CreatePeriodDto {
+  @Matches(/^\d{4}-\d{2}$/, { message: 'code must be YYYY-MM' })
+  code!: string;
+}
+
+export class PeriodStatusDto {
+  @IsIn(['OPEN', 'SOFT_CLOSED', 'LOCKED'])
+  status!: 'OPEN' | 'SOFT_CLOSED' | 'LOCKED';
 }
 
 @Controller('ledger')
@@ -151,4 +149,37 @@ export class LedgerController {
       dto.reason,
     );
   }
+
+  // ------------------------------------------------------------- period close
+
+  @Post('periods')
+  @RequirePermissions('periods.manage')
+  createPeriod(@CurrentUser() principal: AuthPrincipal, @Body() dto: CreatePeriodDto) {
+    return this.ledgerService.createPeriod(principal.organizationId, principal.userId, dto.code);
+  }
+
+  @Patch('periods/:id/status')
+  @RequirePermissions('periods.manage')
+  setPeriodStatus(
+    @CurrentUser() principal: AuthPrincipal,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: PeriodStatusDto,
+  ) {
+    return this.ledgerService.setPeriodStatus(
+      principal.organizationId,
+      principal.userId,
+      id,
+      dto.status,
+    );
+  }
+
+  @Get('month-end-checklist')
+  @RequirePermissions('reports.view', 'journals.create')
+  monthEndChecklist(
+    @CurrentUser() principal: AuthPrincipal,
+    @Query('period') period: string,
+  ) {
+    return this.ledgerService.monthEndChecklist(principal.organizationId, period);
+  }
+
 }
