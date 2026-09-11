@@ -109,20 +109,30 @@ if ! rclone mkdir "$TESTPATH" 2>/dev/null; then
 fi
 echo "  destination ready: ${TESTPATH}"
 
-echo "coopengine offsite round-trip $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /tmp/offsite-rt.txt
-if ! rclone copyto /tmp/offsite-rt.txt "${TESTPATH}/round-trip.txt" --log-level ERROR 2>/dev/null; then
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+RT_NAME="round-trip-${STAMP}.txt"
+echo "coopengine offsite round-trip ${STAMP}" > /tmp/offsite-rt.txt
+if ! rclone copyto /tmp/offsite-rt.txt "${TESTPATH}/${RT_NAME}" --log-level ERROR 2>/dev/null; then
   echo "FAILED: test upload did not complete" >&2
   rm -f /tmp/offsite-rt.txt
   exit 1
 fi
-BACK="$(rclone cat "${TESTPATH}/round-trip.txt" 2>/dev/null || true)"
+BACK="$(rclone cat "${TESTPATH}/${RT_NAME}" 2>/dev/null || true)"
 rm -f /tmp/offsite-rt.txt
 if [ -z "$BACK" ]; then
   echo "FAILED: test object could not be read back" >&2
   exit 1
 fi
-rclone deletefile "${TESTPATH}/round-trip.txt" >/dev/null 2>&1 || true
-echo "  round-trip OK (write → read → delete)"
+echo "  write + read verified: ${RT_NAME}"
+
+# Deleting the probe is expected to FAIL when the bucket has Object Lock
+# (Default Bucket Retention) — that is the feature working, not an error.
+if rclone deletefile "${TESTPATH}/${RT_NAME}" >/dev/null 2>&1; then
+  echo "  test object removed (no Object Lock retention active)"
+else
+  echo "  note: the test object stays until Object Lock retention expires — expected"
+  echo "        with Default Bucket Retention, and harmless (a few bytes)"
+fi
 
 if [ "$CRYPT" = "ask" ] && [ -t 0 ]; then
   printf 'Wrap the remote in rclone crypt (client-side encryption)? [y/N] ' >&2
