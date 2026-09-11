@@ -359,3 +359,47 @@ Timers in full (all systemd user units, linger enabled):
 | 06:15 | `coopengine-arrears` | loan arrears auto-default |
 | 06:30 | `coopengine-notify` | contribution sweep + notification dispatch |
 | 07:00 | `coopengine-watchdog` | backup health check (silent unless broken) |
+
+### 5. Backblaze bucket settings (encryption and Object Lock)
+
+Two bucket-level switches are worth a deliberate decision.
+
+**Default encryption (SSE-B2) — leave it on.** Backblaze encrypts every object at
+rest with provider-managed keys; it is transparent, costs nothing extra and needs
+no key handling. It is *not* a substitute for the archive's own encryption: anyone
+holding the application key can still read the files. The **gpg envelope plus the
+passphrase is the confidentiality boundary**, and it is also what keeps an archive
+restorable on any machine without Backblaze or rclone.
+
+**Object Lock / Default Bucket Retention — recommended: Compliance, 7 days.**
+Default Bucket Retention applies immutability automatically to every file
+uploaded, so a stolen application key or a compromised server cannot delete the
+backups. Two things to know before you switch it on:
+
+* Object Lock **can be enabled on an existing bucket**, but once the mode and
+  duration are saved they **cannot be changed** (1–3,000 days) — decide once.
+* Retention must stay **shorter than `KEEP`**: the nightly job prunes the vault to
+  the newest `KEEP` archives (14 by default, ≈ two weeks old), so a 7-day
+  retention never blocks it. If retention is longer than `KEEP`, pruning is
+  refused and the vault keeps growing.
+
+Governance mode can be bypassed by a key with the bypass capability — it protects
+against accidents and casual mistakes. **Compliance mode cannot be bypassed by
+anyone, including the account owner, until it expires** — that is the mode for
+ransomware resilience. Whichever you choose, raise `KEEP` (for example to 40) if
+you set a longer retention.
+
+The backup script is aware of this: when a deletion is refused it counts the
+refusals and logs
+
+```
+WARNING: 3 old archive(s) could not be removed (Object Lock retention, or the key lacks delete rights)
+WARNING: keep KEEP greater than the bucket's retention days, or the vault will keep growing
+```
+
+and still completes the run after verifying the upload (proven by an immutability
+rehearsal, not assumed).
+
+**Lifecycle rule.** B2 keeps file versions, so a deleted archive leaves hidden
+versions behind. `scripts/setup-b2-lifecycle.sh --days 30` expires noncurrent
+versions after 30 days — keep that comfortably above the retention period too.
