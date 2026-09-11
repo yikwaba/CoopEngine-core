@@ -9,6 +9,7 @@ import {
   API_BASE,
 } from '../lib/api';
 import Nav from './components/Nav';
+import TodayStrip from './components/TodayStrip';
 
 interface MemberRow {
   id: string;
@@ -108,6 +109,7 @@ export default function DashboardPage() {
         </button>
       </header>
       <Nav />
+      <TodayStrip />
 
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14 }}>
         <div className="card">

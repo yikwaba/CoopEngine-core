@@ -466,12 +466,16 @@ export class OpeningBalancesService {
         throw new ConflictException('No ACTIVE loan product — create one before migrating loans');
       }
 
-      const entryNoRes = await c.query(
-        `SELECT coalesce(max(entry_no), 0) + 1 AS next FROM journal_entries
-          WHERE organization_id = $1 AND period_id = $2`,
-        [orgId, periodId],
+      // Allocate the entry number from the SAME atomic counter every other money
+      // path uses. Computing max(entry_no)+1 here left org_counters behind, so the
+      // next deposit or repayment asked for a number this entry had already taken
+      // and failed with a unique violation.
+      const seq = await c.query(
+        `UPDATE org_counters SET journal_seq = journal_seq + 1, updated_at = now()
+          WHERE organization_id = $1 RETURNING journal_seq`,
+        [orgId],
       );
-      const entryNo = Number((entryNoRes.rows[0] as { next: string | number }).next);
+      const entryNo = Number((seq.rows[0] as { journal_seq: string | number }).journal_seq);
       const entryId = randomUUID();
 
       await c.query(
