@@ -13,7 +13,7 @@
 set -euo pipefail
 
 DAYS=30
-BUCKET="${B2_BUCKET:-coopengine-offsite-backups}"
+BUCKET="${B2_BUCKET:-coopengine-offsite-backups-ng}"
 PREFIX="${B2_PREFIX:-offsite-leg/}"
 for arg in "$@"; do
   case "$arg" in

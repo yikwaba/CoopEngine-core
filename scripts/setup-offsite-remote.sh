@@ -15,7 +15,7 @@ set -euo pipefail
 
 TYPE=b2
 NAME=b2-encrypted-vault
-BUCKET=coopengine-offsite-backups
+BUCKET=coopengine-offsite-backups-ng
 PREFIX=offsite-leg
 CRYPT=ask
 PROVIDER=

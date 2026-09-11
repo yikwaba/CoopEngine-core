@@ -3,7 +3,7 @@
 # first upload.
 #
 #   scripts/offsite-enable.sh                                  # uses the values below
-#   scripts/offsite-enable.sh --remote=b2-coopengine --bucket=coopengine-offsite-backups --prefix=offsite-leg
+#   scripts/offsite-enable.sh --remote=b2-coopengine --bucket=coopengine-offsite-backups-ng --prefix=offsite-leg
 #
 # Refuses to write anything unless the remote is reachable and writable, so a
 # typo can never turn the nightly job into a failing loop.
@@ -11,7 +11,7 @@ set -euo pipefail
 cd /root/CoopEngine-core
 
 REMOTE="${REMOTE:-b2-coopengine}"
-BUCKET="${BUCKET:-coopengine-offsite-backups}"
+BUCKET="${BUCKET:-coopengine-offsite-backups-ng}"
 PREFIX="${PREFIX:-offsite-leg}"
 for arg in "$@"; do
   case "$arg" in
@@ -83,6 +83,10 @@ echo
 echo "== watchdog =="
 WATCHDOG_VERBOSE=1 bash scripts/backup-watchdog.sh | sed 's/^/  /'
 
+echo
+echo "Reminder: if the bucket has Object Lock (Default Bucket Retention), keep"
+echo "          KEEP (currently configured) GREATER than the retention days, or"
+echo "          old archives cannot be pruned and the vault will keep growing."
 echo
 echo "offsite leg is LIVE. Rollback with:"
 echo "  cp ${ENVF}.bak ${ENVF}   # or comment the OFFSITE_TARGET line"
