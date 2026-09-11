@@ -277,3 +277,44 @@ sudo -u postgres pg_restore -d coopengine_restore /tmp/restore/payload/database/
 # documents
 rsync -a /tmp/restore/payload/uploads/ /root/coopengine/uploads/
 ```
+
+### 3. Choosing the offsite destination
+
+`OFFSITE_TARGET` in `/root/coopengine/offsite.env` accepts three forms:
+
+| Form | Example | Notes |
+| --- | --- | --- |
+| mounted directory | `OFFSITE_TARGET="dir:/mnt/backups"` | NFS share, USB disk, SAN volume |
+| rclone remote | `OFFSITE_TARGET="rclone:b2-remote:bucket/prefix"` | any of rclone's 70+ backends |
+| bare path | `OFFSITE_TARGET="/mnt/backups"` | treated as a directory |
+
+Explicit environment values win over the file, so an ad-hoc run can point
+somewhere else (`OFFSITE_TARGET=… scripts/offsite-backup.sh`).
+
+**Create the remote safely** — credentials are read from hidden prompts, written
+only to a 600-mode `~/.config/rclone/rclone.conf`, then round-trip tested:
+
+```bash
+scripts/setup-offsite-remote.sh
+#  → Backblaze B2 keyID + application key (hidden)
+#  → verifies listing, creates the destination, uploads + reads back + deletes a test object
+#  → optionally wraps the remote in rclone crypt and prints the OFFSITE_TARGET line
+```
+
+Recommended for Backblaze B2:
+
+1. Create the bucket, then create an **application key scoped to that bucket only**
+   (never the master key), with read/write access.
+2. Prefer **plain B2 remote + the gpg layer** over an rclone `crypt` remote: the
+   gpg archive is self-contained, so a restore needs only `gpg` plus the
+   passphrase — no rclone config, no second secret. If you do use `crypt`, set
+   `OFFSITE_ENCRYPT=0` so you are not double-encrypting (and remember the crypt
+   config then becomes as critical as the passphrase).
+3. Backblaze keeps file versions; add a **bucket lifecycle rule** (e.g. hide +
+   delete versions older than 30 days) so the remote cannot grow without bound —
+   the script already prunes local archives to `KEEP`.
+
+Every run verifies what actually landed: a **remote hash** when the backend
+reports one (B2 returns sha1/md5), otherwise a size comparison with the local
+sha256. A configured-but-unreachable target **fails loudly** (non-zero exit, the
+nightly unit records the failure) instead of quietly "succeeding".

@@ -16,6 +16,22 @@
 #                   cannot be restored).
 set -euo pipefail
 
+# Load the operator configuration the systemd unit provides via EnvironmentFile,
+# so manual runs behave exactly like the nightly timer.
+OFFSITE_ENV_FILE="${OFFSITE_ENV_FILE:-/root/coopengine/offsite.env}"
+if [ -f "$OFFSITE_ENV_FILE" ]; then
+  # Explicit environment values win over the file (so ad-hoc runs can override).
+  declare -A _keep=()
+  for _v in OFFSITE_TARGET OFFSITE_DIR OFFSITE_RCLONE KEEP OFFSITE_ENCRYPT DUMP_DIR UPLOADS_DIR ARCHIVE_DIR PASSPHRASE_FILE; do
+    [ -n "${!_v:-}" ] && _keep[$_v]="${!_v}"
+  done
+  set -a
+  # shellcheck disable=SC1090
+  . "$OFFSITE_ENV_FILE"
+  set +a
+  for _v in "${!_keep[@]}"; do export "$_v=${_keep[$_v]}"; done
+fi
+
 DUMP_DIR="${DUMP_DIR:-/var/lib/postgresql/backups}"
 UPLOADS_DIR="${UPLOADS_DIR:-/root/coopengine/uploads}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-/root/coopengine/backup-archives}"
@@ -73,42 +89,126 @@ fi
   (cd "$PAYLOAD" && find uploads -type f | sed 's/^/  /')
 } > "$PAYLOAD/MANIFEST.txt"
 
-# 4. archive + encrypt
+# 4. archive (+ encrypt unless the destination is already an encrypted vault)
 ARCHIVE="$ARCHIVE_DIR/coopengine-$STAMP.tar.gz"
 tar -czf "$ARCHIVE" -C "$STAGE" payload
-gpg --batch --yes --quiet --symmetric --cipher-algo AES256 \
-  --passphrase-file "$PASSPHRASE_FILE" \
-  --output "${ARCHIVE}.gpg" "$ARCHIVE"
-rm -f "$ARCHIVE"
-sha256sum "${ARCHIVE}.gpg" | awk '{print $1}' > "${ARCHIVE}.gpg.sha256"
-log "archive: $(basename "${ARCHIVE}.gpg") ($(du -h "${ARCHIVE}.gpg" | cut -f1))"
+if [ "${OFFSITE_ENCRYPT:-1}" = "0" ]; then
+  UPLOAD_FILE="$ARCHIVE"
+  log "encryption: DISABLED (OFFSITE_ENCRYPT=0) — archive is plain; only use this with an rclone crypt remote"
+else
+  gpg --batch --yes --quiet --symmetric --cipher-algo AES256 \
+    --passphrase-file "$PASSPHRASE_FILE" \
+    --output "${ARCHIVE}.gpg" "$ARCHIVE"
+  rm -f "$ARCHIVE"
+  UPLOAD_FILE="${ARCHIVE}.gpg"
+fi
+sha256sum "$UPLOAD_FILE" | awk '{print $1}' > "${UPLOAD_FILE}.sha256"
+log "archive: $(basename "$UPLOAD_FILE") ($(du -h "$UPLOAD_FILE" | cut -f1))"
 
 # 5. copy offsite (and verify the copy)
-if [ -n "${OFFSITE_DIR:-}" ]; then
-  [ -d "$OFFSITE_DIR" ] || fail "OFFSITE_DIR does not exist: $OFFSITE_DIR"
-  cp "${ARCHIVE}.gpg" "${ARCHIVE}.gpg.sha256" "$OFFSITE_DIR/"
-  LOCAL_SUM="$(cut -d' ' -f1 < "${ARCHIVE}.gpg.sha256")"
-  REMOTE_SUM="$(sha256sum "$OFFSITE_DIR/$(basename "${ARCHIVE}.gpg")" | awk '{print $1}')"
-  [ "$LOCAL_SUM" = "$REMOTE_SUM" ] || fail "checksum mismatch after copying to $OFFSITE_DIR"
-  log "offsite copy verified at $OFFSITE_DIR (sha256 $REMOTE_SUM)"
-else
-  log "OFFSITE_DIR unset — archive staged locally only (set it to complete the offsite leg)"
+# Target forms:
+#   OFFSITE_TARGET="dir:/mnt/backups"                               (mounted path)
+#   OFFSITE_TARGET="rclone:b2-remote:backup-bucket/offsite-leg"     (any rclone remote)
+#   OFFSITE_TARGET="/mnt/backups"                                   (bare path = dir)
+# Legacy variables OFFSITE_DIR / OFFSITE_RCLONE still work.
+TARGET_KIND=""
+TARGET_PATH=""
+if [ -n "${OFFSITE_TARGET:-}" ]; then
+  case "$OFFSITE_TARGET" in
+    rclone:*) TARGET_KIND=rclone; TARGET_PATH="${OFFSITE_TARGET#rclone:}" ;;
+    dir:*)    TARGET_KIND=dir;    TARGET_PATH="${OFFSITE_TARGET#dir:}" ;;
+    /*)       TARGET_KIND=dir;    TARGET_PATH="$OFFSITE_TARGET" ;;
+    *)        TARGET_KIND=rclone; TARGET_PATH="$OFFSITE_TARGET" ;;
+  esac
+elif [ -n "${OFFSITE_DIR:-}" ]; then
+  TARGET_KIND=dir; TARGET_PATH="$OFFSITE_DIR"
+elif [ -n "${OFFSITE_RCLONE:-}" ]; then
+  TARGET_KIND=rclone; TARGET_PATH="$OFFSITE_RCLONE"
 fi
 
-if [ -n "${OFFSITE_RCLONE:-}" ]; then
+ARCHIVE_NAME="$(basename "$UPLOAD_FILE")"
+LOCAL_SHA="$(cut -d' ' -f1 < "${UPLOAD_FILE}.sha256")"
+UPLOADED=0
+
+if [ -z "$TARGET_KIND" ]; then
+  log "no offsite target configured — archive staged locally only"
+  log "  set OFFSITE_TARGET in /root/coopengine/offsite.env, e.g."
+  log "  OFFSITE_TARGET=\"rclone:b2-encrypted-vault:backup-bucket/offsite-leg\""
+elif [ "$TARGET_KIND" = "dir" ]; then
+  [ -d "$TARGET_PATH" ] || fail "offsite directory does not exist: $TARGET_PATH"
+  cp "$UPLOAD_FILE" "${UPLOAD_FILE}.sha256" "$TARGET_PATH/"
+  DEST_SUM="$(sha256sum "$TARGET_PATH/$ARCHIVE_NAME" | awk '{print $1}')"
+  [ "$LOCAL_SHA" = "$DEST_SUM" ] || fail "checksum mismatch after copying to $TARGET_PATH"
+  log "offsite copy verified at $TARGET_PATH (sha256 $DEST_SUM)"
+  UPLOADED=1
+else
+  # ---- rclone target -------------------------------------------------------
+  command -v rclone >/dev/null 2>&1 || fail "OFFSITE_TARGET is an rclone remote but rclone is not installed"
+  REMOTE_ROOT="${TARGET_PATH%%:*}"                       # remote name
+  REMOTE_SUB="${TARGET_PATH#*:}"                         # bucket/prefix (may be empty)
+  if ! rclone lsd "${REMOTE_ROOT}:" >/dev/null 2>&1; then
+    fail "rclone remote '${REMOTE_ROOT}:' is not reachable — check 'rclone config' and the credentials"
+  fi
+  log "rclone target: ${REMOTE_ROOT}:${REMOTE_SUB} (remote reachable)"
+  # Make sure the destination container exists (no-op when it already does).
+  if ! rclone mkdir "${TARGET_PATH}" >/dev/null 2>&1; then
+    fail "could not create/prepare the destination ${TARGET_PATH} (bucket missing or key not scoped for it)"
+  fi
+  rclone copy "$UPLOAD_FILE" "${TARGET_PATH}" --checksum --stats-one-line --log-level ERROR 2>>"$LOG" \
+    || fail "rclone copy failed for ${ARCHIVE_NAME}"
+  rclone copy "${UPLOAD_FILE}.sha256" "${TARGET_PATH}" --checksum --log-level ERROR 2>>"$LOG" \
+    || fail "rclone copy failed for the checksum sidecar"
+
+  # Verify what actually landed: compare a remote hash when the backend reports
+  # one (B2 gives sha1/md5), otherwise fall back to a size comparison.
+  REMOTE_JSON="$(rclone lsjson --hash "${TARGET_PATH}" --files-only 2>/dev/null || echo '[]')"
+  VERIFIED="$(python3 - "$REMOTE_JSON" "$ARCHIVE_NAME" "$UPLOAD_FILE" <<'VERIFY'
+import hashlib, json, sys
+raw, name, local_path = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    entries = json.loads(raw)
+except Exception:
+    entries = []
+entry = next((e for e in entries if e.get('Name') == name), None)
+if not entry:
+    print('missing')
+    raise SystemExit
+hashes = {k.lower(): v for k, v in (entry.get('Hashes') or {}).items()}
+if hashes:
+    for algo in ('sha256', 'sha1', 'md5'):
+        if algo in hashes:
+            h = hashlib.new(algo)
+            with open(local_path, 'rb') as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b''):
+                    h.update(chunk)
+            print('ok' if h.hexdigest() == hashes[algo] else 'mismatch:' + algo)
+            raise SystemExit
+print('size:' + ('ok' if int(entry.get('Size') or 0) == __import__('os').path.getsize(local_path) else 'mismatch'))
+VERIFY
+)"
+  case "$VERIFIED" in
+    ok) log "offsite upload verified by remote hash (${REMOTE_ROOT}:${REMOTE_SUB}/$ARCHIVE_NAME)" ;;
+    size:ok) log "offsite upload verified by size (backend reports no hash; sha256 checked locally)" ;;
+    missing) fail "upload verification failed: $ARCHIVE_NAME not found at ${TARGET_PATH}" ;;
+    *) fail "upload verification failed: $VERIFIED" ;;
+  esac
+  UPLOADED=1
+fi
+
+if [ -n "${OFFSITE_RCLONE:-}" ] && [ "$TARGET_KIND" != "rclone" ]; then
   if command -v rclone >/dev/null 2>&1; then
-    rclone copy "${ARCHIVE}.gpg" "$OFFSITE_RCLONE" --quiet
+    rclone copy "$UPLOAD_FILE" "$OFFSITE_RCLONE" --checksum --log-level ERROR 2>>"$LOG" \
+      || fail "rclone copy to OFFSITE_RCLONE failed"
     log "rclone copy complete: $OFFSITE_RCLONE"
   else
     log "OFFSITE_RCLONE set but rclone is not installed — skipping"
   fi
 fi
-
 # 6. prune local archives
-mapfile -t OLD < <(ls -1t "$ARCHIVE_DIR"/*.gpg 2>/dev/null | tail -n +$((KEEP + 1)) || true)
+mapfile -t OLD < <(ls -1t "$ARCHIVE_DIR"/*.gpg "$ARCHIVE_DIR"/*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) || true)
 if [ "${#OLD[@]}" -gt 0 ]; then
   for f in "${OLD[@]}"; do rm -f "$f" "$f.sha256"; done
   log "pruned ${#OLD[@]} archive(s), keeping the newest $KEEP"
 fi
 
-log "offsite backup complete"
+log "offsite backup complete (offsite leg: ${UPLOADED:+verified}${UPLOADED:-staged only})"
