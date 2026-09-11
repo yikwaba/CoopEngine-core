@@ -13,6 +13,7 @@
 set -uo pipefail
 cd /root/CoopEngine-core
 
+KEY_FILE="${KEY_FILE:-}"
 REMOTE="${REMOTE:-b2-coopengine}"
 BUCKET="${BUCKET:-coopengine-offsite-backups-ng}"
 PREFIX="${PREFIX:-offsite-leg}"
@@ -25,6 +26,7 @@ for arg in "$@"; do
     --bucket=*) BUCKET="${arg#*=}" ;;
     --prefix=*) PREFIX="${arg#*=}" ;;
     --days=*)   LIFECYCLE_DAYS="${arg#*=}" ;;
+    --key-file=*) KEY_FILE="${arg#*=}" ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -57,7 +59,9 @@ if rclone listremotes 2>/dev/null | grep -qx "${REMOTE}:"; then
   echo "== 1/3 remote already registered: ${REMOTE}: (skipping key entry) =="
 else
   echo "== 1/3 registering the remote (the key is read at hidden prompts) =="
-  bash scripts/setup-offsite-remote.sh --name="$REMOTE" --bucket="$BUCKET" --prefix="$PREFIX" || {
+  SETUP_ARGS=(--name="$REMOTE" --bucket="$BUCKET" --prefix="$PREFIX")
+  [ -n "$KEY_FILE" ] && SETUP_ARGS+=(--key-file="$KEY_FILE")
+  bash scripts/setup-offsite-remote.sh "${SETUP_ARGS[@]}" || {
     echo
     echo "Setup did not complete. Re-run this script when you have the keyID and" >&2
     echo "application key to hand (they are on the Application Keys page in Backblaze)." >&2

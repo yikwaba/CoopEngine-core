@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Co-opEngine offsite remote setup (rclone).
 #
-#   scripts/setup-offsite-remote.sh                       # interactive
+#   scripts/setup-offsite-remote.sh                       # interactive (hidden prompts)
+#   scripts/setup-offsite-remote.sh --key-file=/root/b2.key   # easiest for pasting:
+#       line 1 = keyID, line 2 = application key; the file is deleted on success
 #   scripts/setup-offsite-remote.sh --type=local --name=test-vault --path=/tmp/x
 #
 # Creates/refreshes an rclone remote in ~/.config/rclone/rclone.conf (mode 600),
@@ -20,8 +22,10 @@ PREFIX=offsite-leg
 CRYPT=ask
 PROVIDER=
 
+KEY_FILE=""
 for arg in "$@"; do
   case "$arg" in
+    --key-file=*) KEY_FILE="${arg#*=}" ;;
     --type=*)   TYPE="${arg#*=}" ;;
     --name=*)   NAME="${arg#*=}" ;;
     --bucket=*) BUCKET="${arg#*=}" ;;
@@ -53,6 +57,17 @@ if [ -f "$CONF" ]; then
   cp "$CONF" "${CONF}.bak-$(date -u +%Y%m%dT%H%M%SZ)"
   chmod 600 "$CONF".bak-* 2>/dev/null || true
   echo "existing rclone config backed up"
+fi
+
+if [ "$TYPE" = "b2" ] && [ -n "$KEY_FILE" ]; then
+  if [ ! -r "$KEY_FILE" ]; then
+    echo "cannot read --key-file=${KEY_FILE}" >&2
+    exit 1
+  fi
+  # first non-empty line = keyID, second = application key (CR/space tolerant)
+  B2_KEY_ID="$(tr -d '\r' < "$KEY_FILE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | sed -n '1p')"
+  B2_APP_KEY="$(tr -d '\r' < "$KEY_FILE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | sed -n '2p')"
+  echo "read the key from ${KEY_FILE} (line 1 keyID, line 2 application key)"
 fi
 
 if [ "$TYPE" = "b2" ]; then
