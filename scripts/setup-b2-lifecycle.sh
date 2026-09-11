@@ -15,14 +15,17 @@ set -euo pipefail
 DAYS=30
 BUCKET="${B2_BUCKET:-coopengine-offsite-backups-ng}"
 PREFIX="${B2_PREFIX:-offsite-leg/}"
-for arg in "$@"; do
-  case "$arg" in
-    --days=*)   DAYS="${arg#*=}" ;;
+# while+shift, not for+shift: a for-loop keeps its original argument list, so
+# "--days 30" would leave "30" to be parsed as an unknown argument.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --days=*)   DAYS="${1#*=}" ;;
     --days)     shift; DAYS="${1:-30}" ;;
-    --bucket=*) BUCKET="${arg#*=}" ;;
-    --prefix=*) PREFIX="${arg#*=}" ;;
-    *) echo "unknown argument: $arg" >&2; exit 2 ;;
+    --bucket=*) BUCKET="${1#*=}" ;;
+    --prefix=*) PREFIX="${1#*=}" ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 prompt_secret() {

@@ -87,7 +87,9 @@ else
     | python3 -c 'import json,sys
 try:
     d = json.load(sys.stdin)
-    print((d.get("apiInfo") or {}).get("s3ApiUrl") or (d.get("s3ApiUrl") or ""))
+    # v3 nests it under apiInfo.storageApi; v2 exposes it at the top level
+    url = ((d.get("apiInfo") or {}).get("storageApi") or {}).get("s3ApiUrl") or d.get("s3ApiUrl") or ""
+    print(url)
 except Exception:
     print("")')"
   apply_lifecycle() { # endpoint (may be empty)
@@ -95,11 +97,11 @@ except Exception:
     if [ -n "$endpoint" ]; then
       echo "  account S3 endpoint: ${endpoint}"
       B2_KEY_ID="$KEY_ID" B2_APP_KEY="$APP_KEY" B2_BUCKET="$BUCKET" B2_ENDPOINT="$endpoint" \
-        bash scripts/setup-b2-lifecycle.sh --days "$LIFECYCLE_DAYS"
+        bash scripts/setup-b2-lifecycle.sh --days="$LIFECYCLE_DAYS"
     else
       echo "  endpoint unknown (key may lack listBuckets) — trying the default region"
       B2_KEY_ID="$KEY_ID" B2_APP_KEY="$APP_KEY" B2_BUCKET="$BUCKET" \
-        bash scripts/setup-b2-lifecycle.sh --days "$LIFECYCLE_DAYS"
+        bash scripts/setup-b2-lifecycle.sh --days="$LIFECYCLE_DAYS"
     fi
   }
 

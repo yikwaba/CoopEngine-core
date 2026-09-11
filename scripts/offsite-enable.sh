@@ -23,7 +23,10 @@ for arg in "$@"; do
 done
 
 ENVF=/root/coopengine/offsite.env
+# TARGET carries our own "rclone:" scheme marker for offsite.env; RPATH is the
+# form rclone itself understands and must be used for every rclone call.
 TARGET="rclone:${REMOTE}:${BUCKET}/${PREFIX}"
+RPATH="${REMOTE}:${BUCKET}/${PREFIX}"
 
 echo "== preflight =="
 if ! command -v rclone >/dev/null 2>&1; then
@@ -42,7 +45,7 @@ if ! rclone lsd "${REMOTE}:" >/dev/null 2>&1; then
   exit 1
 fi
 echo "  remote reachable"
-if ! rclone mkdir "${TARGET}" 2>/dev/null; then
+if ! rclone mkdir "${RPATH}" 2>/dev/null; then
   echo "cannot prepare ${TARGET} — bucket missing, or the key is not scoped to it" >&2
   exit 1
 fi
@@ -77,7 +80,7 @@ bash scripts/offsite-backup.sh | tail -8 | sed 's/^/  /'
 
 echo
 echo "== verify the vault contents =="
-rclone lsf "$TARGET" 2>/dev/null | tail -5 | sed 's/^/  /'
+rclone lsf "$RPATH" 2>/dev/null | tail -5 | sed 's/^/  /'
 
 echo
 echo "== watchdog =="
