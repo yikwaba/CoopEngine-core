@@ -73,3 +73,26 @@ A restore recipe (decrypt → extract → `pg_restore` → `rsync` the uploads) 
    or SMS (the notification centre is ready) when a backup run exits non-zero.
 4. **Provider keys** — the last functional gap; the switch is rehearsed and takes
    about fifteen minutes (`docs/provider-onboarding.md`).
+
+---
+
+## 7. Follow-up delivered (2026-09-11)
+
+**Decision taken on the offsite destination:** a *plain* Backblaze B2 remote plus
+the gpg envelope — the archive stays self-contained, so a restore needs only gpg
+and the passphrase (no rclone config, no second secret). An rclone `crypt` remote
+would be redundant with gpg, so `OFFSITE_ENCRYPT=0` exists for that case.
+
+| Added | What it does | Verified |
+| --- | --- | --- |
+| `OFFSITE_TARGET` support | `rclone:remote:bucket/prefix`, `dir:/path`, or a bare path; explicit env beats the config file | uploaded, remote-hash verified |
+| Loud target preflight | an unreachable remote fails the run instead of silently "succeeding" | dead remote → exit 1 |
+| Remote retention | prunes the vault to the same `KEEP` as local archives | 17 → 14, newest preserved |
+| `setup-offsite-remote.sh` | hidden-prompt key entry, 600-mode rclone.conf, round-trip test, optional crypt wrapper | remote created + write/read/delete proven |
+| `setup-b2-lifecycle.sh` | applies a B2 lifecycle rule (noncurrent versions expire in 30 days) via S3 API in a dedicated venv | reached B2 and failed cleanly on a fake key |
+| `backup-watchdog.sh` | dump/archive freshness, offsite leg, timer liveness, uploads coverage → JSON status | healthy = silent; broken → exit 1 + alert |
+| Alert channel | daily 07:00 watchdog job delivers an alert **only when broken** | job created and run |
+
+Nothing is enabled that needs credentials you have not supplied: with no
+`OFFSITE_TARGET` set, each run stages the archive locally and the watchdog
+reports "not configured" as a note rather than a failure.
