@@ -204,7 +204,26 @@ if [ -n "${OFFSITE_RCLONE:-}" ] && [ "$TARGET_KIND" != "rclone" ]; then
     log "OFFSITE_RCLONE set but rclone is not installed — skipping"
   fi
 fi
-# 6. prune local archives
+# 6. prune remote + local archives
+# Archives are named coopengine-<UTC stamp>, so a reverse lexical sort is
+# newest-first.
+if [ "${TARGET_KIND:-}" = "rclone" ] && [ "${OFFSITE_REMOTE_KEEP:-1}" = "1" ]; then
+  mapfile -t REMOTE_FILES < <(rclone lsf "$TARGET_PATH" --files-only 2>/dev/null \
+    | grep -E '\.(gpg|tar\.gz)$' | sort -r || true)
+  if [ "${#REMOTE_FILES[@]}" -gt "$KEEP" ]; then
+    PRUNED=0
+    for f in "${REMOTE_FILES[@]:$KEEP}"; do
+      if rclone deletefile "${TARGET_PATH}/${f}" >/dev/null 2>&1; then
+        rclone deletefile "${TARGET_PATH}/${f}.sha256" >/dev/null 2>&1 || true
+        PRUNED=$((PRUNED + 1))
+      fi
+    done
+    log "pruned ${PRUNED} remote archive(s), keeping the newest $KEEP at ${TARGET_PATH}"
+    log "NOTE: B2 keeps file versions — add a bucket lifecycle rule to expire old versions (docs/deploy.md)"
+  fi
+fi
+
+
 mapfile -t OLD < <(ls -1t "$ARCHIVE_DIR"/*.gpg "$ARCHIVE_DIR"/*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) || true)
 if [ "${#OLD[@]}" -gt 0 ]; then
   for f in "${OLD[@]}"; do rm -f "$f" "$f.sha256"; done

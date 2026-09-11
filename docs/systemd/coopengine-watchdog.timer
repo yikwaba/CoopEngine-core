@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Co-opEngine backup watchdog every morning at 07:00
+
+[Timer]
+OnCalendar=*-*-* 07:00:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

@@ -318,3 +318,44 @@ Every run verifies what actually landed: a **remote hash** when the backend
 reports one (B2 returns sha1/md5), otherwise a size comparison with the local
 sha256. A configured-but-unreachable target **fails loudly** (non-zero exit, the
 nightly unit records the failure) instead of quietly "succeeding".
+
+### 4. Retention, lifecycle and supervision (added 2026-09-11)
+
+**Retention is enforced in two places.** Local archives keep the newest `KEEP`
+(default 14); the same count is enforced in the vault by remote pruning
+(`OFFSITE_REMOTE_KEEP=0` makes the vault append-only). Rehearsed: a vault seeded
+with 16 archives plus a new upload came back to exactly 14, newest preserved.
+
+**Backblaze keeps versions**, so deleting an archive leaves hidden versions
+behind. Apply a bucket lifecycle rule once to expire them:
+
+```bash
+scripts/setup-b2-lifecycle.sh --days 30          # noncurrent versions expire after 30 days
+#   keeps the 5 newest noncurrent versions, aborts stale multipart uploads after 7 days
+#   override the region endpoint with B2_ENDPOINT=… when the bucket is not in eu-central-003
+```
+
+The script reads the key from hidden prompts, stores nothing, uses a dedicated
+`/root/.venvs/b2lifecycle` (boto3) and prints the resulting rule IDs.
+
+**Supervision.** `scripts/backup-watchdog.sh` checks that the newest dump and
+archive are younger than 26 h, that the offsite leg verified its upload when a
+target is configured, that the offsite timer is still firing, and that existing
+KYC uploads are inside the archive. It writes
+`/root/coopengine/logs/backup-status.json` and is **silent when healthy**:
+
+* systemd: `coopengine-watchdog.timer` (07:00) — the unit records a failure
+* Hermes cron job *"CoopEngine backup watchdog"* (daily 07:00) — delivers a short
+  alert block **only** when something is wrong, straight to the operator's chat
+
+So a backup that stops running announces itself; silence means healthy.
+
+Timers in full (all systemd user units, linger enabled):
+
+| Time | Unit | Purpose |
+| --- | --- | --- |
+| 02:17 | `coopengine-backup` | local `pg_dump` (7-dump retention) |
+| 03:10 | `coopengine-offsite` | encrypted archive → vault (+ remote pruning) |
+| 06:15 | `coopengine-arrears` | loan arrears auto-default |
+| 06:30 | `coopengine-notify` | contribution sweep + notification dispatch |
+| 07:00 | `coopengine-watchdog` | backup health check (silent unless broken) |

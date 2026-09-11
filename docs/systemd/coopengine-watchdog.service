@@ -1,0 +1,8 @@
+[Unit]
+Description=Co-opEngine backup watchdog (dumps, archives, offsite leg, uploads)
+After=coopengine-offsite.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/root/coopengine/offsite.env
+ExecStart=/root/CoopEngine-core/scripts/backup-watchdog.sh
