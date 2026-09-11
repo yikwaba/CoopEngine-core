@@ -3,7 +3,7 @@
 # first upload.
 #
 #   scripts/offsite-enable.sh                                  # uses the values below
-#   scripts/offsite-enable.sh --remote=b2-coopengine --bucket=backup-bucket --prefix=offsite-leg
+#   scripts/offsite-enable.sh --remote=b2-coopengine --bucket=coopengine-offsite-backups --prefix=offsite-leg
 #
 # Refuses to write anything unless the remote is reachable and writable, so a
 # typo can never turn the nightly job into a failing loop.
@@ -11,7 +11,7 @@ set -euo pipefail
 cd /root/CoopEngine-core
 
 REMOTE="${REMOTE:-b2-coopengine}"
-BUCKET="${BUCKET:-backup-bucket}"
+BUCKET="${BUCKET:-coopengine-offsite-backups}"
 PREFIX="${PREFIX:-offsite-leg}"
 for arg in "$@"; do
   case "$arg" in
