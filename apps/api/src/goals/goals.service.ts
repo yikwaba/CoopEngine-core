@@ -119,7 +119,12 @@ export class GoalsService {
             title: `Goal reached: ${r.name as string}`,
             body: `You have saved ${progress.toFixed(2)} towards your ${target.toFixed(2)} target. Well done!`,
             channels: outboundChannels(),
-            metadata: { goalId: r.id as string },
+            metadata: {
+              goalId: r.id as string,
+              goalName: r.name as string,
+              target,
+              progress,
+            },
           });
         }
         out.push({
@@ -331,7 +336,12 @@ export class GoalsService {
           title: 'Contribution due',
           body: `Your ${(i.frequency as string).toLowerCase()} contribution of ${Number(i.amount).toFixed(2)} is due. Pay into your collection account to keep your savings on track.`,
           channels: outboundChannels(),
-          metadata: { instructionId: i.id as string, amount: Number(i.amount) },
+          metadata: {
+            instructionId: i.id as string,
+            amount: Number(i.amount),
+            frequency: i.frequency as string,
+            dueDate: String(i.next_run_date ?? ''),
+          },
         });
         await c.query(
           `UPDATE standing_instructions

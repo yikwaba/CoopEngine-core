@@ -1006,6 +1006,37 @@ export const openingBalanceRows = pgTable(
   ],
 );
 
+/**
+ * Per-cooperative wording for notifications. Absent rows fall back to the
+ * built-in catalogue in apps/api/src/notifications/templates.ts, so nothing
+ * depends on a cooperative having written anything.
+ */
+export const notificationTemplates = pgTable(
+  'notification_templates',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    code: varchar('code', { length: 40 }).notNull(),
+    channel: varchar('channel', { length: 8 }).notNull().default('ANY'), // SMS|EMAIL|ANY
+    title: varchar('title', { length: 200 }).notNull(),
+    body: text('body').notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('notification_templates_org_code_uq').on(table.organizationId, table.code),
+  ],
+);
+
 /** KYC / membership documents uploaded for a member. */
 export const memberDocuments = pgTable(
   'member_documents',

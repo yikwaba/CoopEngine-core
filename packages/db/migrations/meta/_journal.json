@@ -218,6 +218,13 @@
       "when": 1789106096910,
       "tag": "0030_lethal_wolverine",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1789163717381,
+      "tag": "0031_notification_templates",
+      "breakpoints": true
     }
   ]
 }

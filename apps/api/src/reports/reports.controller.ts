@@ -11,6 +11,7 @@ import {
 import type { Response } from 'express';
 import { IsNumber, IsOptional, IsString, MaxLength } from 'class-validator';
 import { ReportsService } from './reports.service';
+import { BoardPackXlsxService } from './board-pack-xlsx.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
@@ -37,7 +38,10 @@ class AuditQueryDto {
 @Controller('reports')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class ReportsController {
-  constructor(private readonly reportsService: ReportsService) {}
+  constructor(
+    private readonly reportsService: ReportsService,
+    private readonly boardPackXlsxService: BoardPackXlsxService,
+  ) {}
 
   @Get('member/:memberId/360')
   @RequirePermissions(...REPORT_READ)
@@ -94,6 +98,25 @@ export class ReportsController {
   @RequirePermissions('reports.view', 'reports.export', 'settings.manage')
   savingsInterestPreview(@CurrentUser() principal: AuthPrincipal) {
     return this.reportsService.savingsInterestPreview(principal.organizationId);
+  }
+
+  /** Board pack as an Excel workbook (one sheet per view). */
+  @Get('board-pack.xlsx')
+  @RequirePermissions('reports.view')
+  async boardPackXlsx(
+    @CurrentUser() principal: AuthPrincipal,
+    @Res() res: Response,
+    @Query('period') period?: string,
+  ) {
+    if (!principal.organizationId) throw new BadRequestException('Organisation context required.');
+    const code = period ?? new Date().toISOString().slice(0, 7);
+    const buffer = await this.boardPackXlsxService.build(principal.organizationId, code);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="board-pack-${code}.xlsx"`);
+    res.send(buffer);
   }
 
   @Get('board-pack')

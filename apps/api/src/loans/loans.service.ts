@@ -451,7 +451,11 @@ export class LoansService {
               ? 'Your loan application has been approved and is awaiting disbursement.'
               : 'Your loan has been disbursed. Check your schedule for repayment dates.',
           channels: outboundChannels(),
-          metadata: { loanId, status: target },
+          metadata: {
+            loanId,
+            status: target,
+            amount: Number((current as { principal?: unknown }).principal ?? 0),
+          },
         });
       }
       void current;
@@ -906,7 +910,7 @@ export class LoansService {
         title: 'Repayment received',
         body: `We received your repayment. New outstanding balance: ${outstanding}.`,
         channels: outboundChannels(),
-        metadata: { loanId },
+        metadata: { loanId, outstanding },
       });
       await c.query(
         `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)

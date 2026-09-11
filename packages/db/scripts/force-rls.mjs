@@ -50,6 +50,7 @@ const TABLES = [
   'savings_withdrawal_requests',
   'opening_balance_batches',
   'opening_balance_rows',
+  'notification_templates',
 ];
 
 const BALANCED_JOURNAL_SQL = `

@@ -231,7 +231,53 @@ describe('printable documents', () => {
       .get(`/api/v1/pdf/members/${memberId}/statement.pdf`)
       .set({ Authorization: `Bearer ${otherLogin.body.tokens.accessToken}` });
     expect(foreign.status).toBe(404);
+
+    // ---- Excel board pack (same tenant, same numbers) ----
+  const res = await request(app.getHttpServer())
+    .get('/api/v1/reports/board-pack.xlsx')
+    .set(auth)
+    .buffer(true)
+    .parse((r, cb) => {
+      const chunks: Buffer[] = [];
+      r.on('data', (c: Buffer) => chunks.push(c));
+      r.on('end', () => cb(null, Buffer.concat(chunks)));
+    });
+
+  expect(res.status).toBe(200);
+  expect(res.headers['content-type']).toContain('spreadsheetml.sheet');
+  const body = res.body as Buffer;
+  expect(body.subarray(0, 2).toString()).toBe('PK');
+  expect(body.length).toBeGreaterThan(3000);
+
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(body);
+  const names = wb.worksheets.map((w) => w.name);
+  for (const expected of ['Summary', 'Membership', 'Savings', 'Shares', 'Loans', 'Arrears', 'Dividends', 'Trial Balance']) {
+    expect(names).toContain(expected);
+  }
+
+  const summary = wb.getWorksheet('Summary')!;
+  const items = summary.getColumn(1).values.slice(2).map(String);
+  const savingsRow = items.findIndex((v) => v === 'Total savings');
+  expect(savingsRow).toBeGreaterThan(-1);
+  const savingsValue = summary.getRow(savingsRow + 2).getCell(2).value;
+  expect(Number(savingsValue)).toBe(90000);
+
+  const tb = wb.getWorksheet('Trial Balance')!;
+  let dr = 0;
+  let cr = 0;
+  tb.eachRow((row: import('exceljs').Row) => {
+    const code = row.getCell(1).value;
+    if (typeof code === 'string' && /^[0-9]/.test(code)) {
+      dr += Number(row.getCell(4).value ?? 0);
+      cr += Number(row.getCell(5).value ?? 0);
+    }
   });
+  expect(Number(dr.toFixed(2))).toBe(Number(cr.toFixed(2)));
+  
+  });
+
 
   it('formats money the way a treasurer expects', () => {
     expect(money(1234567.5)).toBe('₦1,234,567.50');
