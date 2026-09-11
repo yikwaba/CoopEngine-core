@@ -160,19 +160,22 @@ if [ "$DOMAIN_LIVE" -eq 1 ]; then
     bump warn "${DOMAIN} resolves to ${DOMAIN_IPS}, not ${NIPIO_IP} — customers are not reaching this server"
   fi
 
-  # Does the platform actually answer on the real domain?
-  for h in "${DOMAIN}" "api.${DOMAIN}"; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 "https://${h}/" 2>/dev/null || echo 000)
+  # Does the platform actually answer on the real domain? The API serves nothing
+  # at "/", so it is probed at its health endpoint instead.
+  for probe in "${DOMAIN}|/" "api.${DOMAIN}|/api/v1/health"; do
+    h="${probe%%|*}"
+    path="${probe##*|}"
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 "https://${h}${path}" 2>/dev/null || echo 000)
     case "$code" in
-      000) bump broken "https://${h}/ did not respond at all" ;;
+      000) bump broken "https://${h}${path} did not respond at all" ;;
       52[0-9])
         if [ "$PROXIED" -eq 1 ]; then
-          bump broken "https://${h}/ returns ${code}: Cloudflare cannot complete TLS with this server. Either switch those DNS records to DNS-only (grey cloud) so Caddy can serve its own certificate, or install a Cloudflare Origin Certificate and set SSL/TLS to Full (strict)."
+          bump broken "https://${h}${path} returns ${code}: Cloudflare cannot complete TLS with this server. Either switch those DNS records to DNS-only (grey cloud) so Caddy can serve its own certificate, or install a Cloudflare Origin Certificate and set SSL/TLS to Full (strict)."
         else
-          bump broken "https://${h}/ returns ${code} (TLS/origin failure)"
+          bump broken "https://${h}${path} returns ${code} (TLS/origin failure)"
         fi
         ;;
-      4*|5*) bump warn "https://${h}/ returns ${code}" ;;
+      4*|5*) bump warn "https://${h}${path} returns ${code}" ;;
     esac
   done
 else

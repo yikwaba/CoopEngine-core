@@ -107,6 +107,20 @@ write_caddyfile() {
     member_hosts="member.${DOMAIN}, member.${NIP}"
   fi
 
+  # The apex and www have no application of their own, so they redirect to the
+  # staff portal. Omitted on revert, where there is no domain to redirect from.
+  local apex_block=""
+  if [ "$REVERT" -eq 0 ]; then
+    apex_block="
+# Apex and www: no application of their own — send visitors to the staff portal.
+${DOMAIN}, www.${DOMAIN} {
+	import security_headers
+	redir https://app.${DOMAIN}{uri} permanent
+}
+
+"
+  fi
+
   local tmp
   tmp="$(mktemp)"
   cat > "$tmp" <<EOF
@@ -128,7 +142,7 @@ write_caddyfile() {
 	}
 }
 
-${api_hosts} {
+${apex_block}${api_hosts} {
 	import security_headers
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:3999
@@ -245,14 +259,14 @@ verify() {
 
   log "waiting for certificate issuance (up to 90s)…"
   for i in $(seq 1 30); do
-    if curl -sf --max-time 8 "${api}/health" >/dev/null 2>&1; then break; fi
+    if curl -sf --max-time 8 "${api}/api/v1/health" >/dev/null 2>&1; then break; fi
     sleep 3
   done
 
   local ok=0 fail_n=0
   for url in \
-    "${api}/health" "${api}/docs" \
-    "${app}/" "${app}/members" "${app}/loans" "${app}/reports" \
+    "${api}/api/v1/health" "${api}/docs" \
+    "${app}/" "${app}/members" "${app}/loans" "${app}/month-end" \
     "${app}/withdrawals" "${app}/month-end" "${app}/opening-balances" "${app}/analytics" \
     "${member}/" "${member}/manifest.webmanifest"; do
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo 000)"
