@@ -52,6 +52,8 @@ export const organizations = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    /** NULL = no approval needed; 0 = always; N = above N (see savings_withdrawal_requests). */
+    withdrawalApprovalThreshold: numeric('withdrawal_approval_threshold', { precision: 19, scale: 2 }),
   },
   (table) => [
     pgPolicy('tenant_self_isolation', {
@@ -881,6 +883,57 @@ export const standingInstructions = pgTable(
   ],
 );
 
+/**
+ * Maker-checker control for savings withdrawals.
+ *
+ * The organisation setting `withdrawal_approval_threshold` decides the policy:
+ *   NULL  -> no approval needed (withdrawals post immediately)
+ *   0     -> every withdrawal needs a second pair of eyes
+ *   N > 0 -> withdrawals above N need approval
+ */
+export const savingsWithdrawalRequests = pgTable(
+  'savings_withdrawal_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => memberSavingsAccounts.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    amount: numeric('amount', { precision: 19, scale: 2 }).notNull(),
+    description: varchar('description', { length: 240 }),
+    status: text('status').notNull().default('PENDING'), // PENDING|APPROVED|REJECTED|CANCELLED
+    source: text('source').notNull().default('STAFF'), // STAFF|MEMBER
+    requestedByUserId: uuid('requested_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    requestedByMemberId: uuid('requested_by_member_id').references(() => members.id, {
+      onDelete: 'set null',
+    }),
+    decidedByUserId: uuid('decided_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    decisionNotes: varchar('decision_notes', { length: 240 }),
+    journalEntryId: uuid('journal_entry_id').references(() => journalEntries.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+  ],
+);
+
 /** Bulk migration of a cooperative's existing balances onto the platform. */
 export const openingBalanceBatches = pgTable(
   'opening_balance_batches',
@@ -931,6 +984,10 @@ export const openingBalanceRows = pgTable(
     loanOutstanding: numeric('loan_outstanding', { precision: 19, scale: 2 }).notNull().default('0'),
     loanTermMonths: integer('loan_term_months'),
     loanRatePa: numeric('loan_rate_pa', { precision: 9, scale: 4 }),
+    /** Days the legacy loan is already past due at cut-over. */
+    loanDaysLate: integer('loan_days_late'),
+    /** Overdue amount recorded by the old system (reference only). */
+    loanArrearsAmount: numeric('loan_arrears_amount', { precision: 19, scale: 2 }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -1470,6 +1527,7 @@ export type NewPaymentNotification = typeof paymentNotifications.$inferInsert;
 export type VirtualAccountLookup = typeof virtualAccountLookups.$inferSelect;
 export type SavingsGoal = typeof savingsGoals.$inferSelect;
 export type StandingInstruction = typeof standingInstructions.$inferSelect;
+export type SavingsWithdrawalRequest = typeof savingsWithdrawalRequests.$inferSelect;
 export type OpeningBalanceBatch = typeof openingBalanceBatches.$inferSelect;
 export type OpeningBalanceRow = typeof openingBalanceRows.$inferSelect;
 export type MemberDocument = typeof memberDocuments.$inferSelect;

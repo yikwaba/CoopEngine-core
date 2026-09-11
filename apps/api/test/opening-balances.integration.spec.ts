@@ -184,4 +184,76 @@ describe('opening balance migration', () => {
       .set({ Authorization: `Bearer ${other.tokens.accessToken}` });
     expect(foreign.status).toBe(404);
   });
+
+  it('carries past-due flags across (arrears ageing + auto-default)', async () => {
+    const coop = await onboardCoop('oblate');
+    const auth = { Authorization: `Bearer ${coop.tokens.accessToken}` };
+
+    const mk = async (first: string) => {
+      const email = `late-${first.toLowerCase()}-${randomUUID().slice(0, 6)}@coopengine.test`;
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/members')
+        .set(auth)
+        .send({ firstName: first, lastName: 'Behind', email, phone: '+2348030000000' });
+      const id = (created.body.id ?? created.body.member?.id) as string;
+      await request(app.getHttpServer()).post(`/api/v1/members/${id}/approve`).set(auth).send({});
+      return { id, email };
+    };
+
+    const mild = await mk('Mild');
+    const severe = await mk('Severe');
+
+    const csv = [
+      'memberEmail,savings,shares,loanOutstanding,loanTermMonths,loanRatePa,loanDaysLate,loanArrearsAmount',
+      `${mild.email},0,0,20000,6,15,45,5000`,
+      `${severe.email},0,0,10000,12,15,120,10000`,
+    ].join('\n');
+
+    const preview = await request(app.getHttpServer())
+      .post('/api/v1/migrations/opening-balances/preview')
+      .set(auth)
+      .send({ label: 'Legacy balances with arrears', csv });
+    expect(preview.status).toBe(201);
+    expect(preview.body.totals).toEqual({ rows: 2, valid: 2, invalid: 0 });
+    const lateRow = preview.body.rows.find((r: { memberRef: string }) => r.memberRef === mild.email);
+    expect(lateRow.loanDaysLate).toBe(45);
+    expect(lateRow.loanArrearsAmount).toBe(5000);
+
+    const commit = await request(app.getHttpServer())
+      .post(`/api/v1/migrations/opening-balances/${preview.body.batchId}/commit`)
+      .set(auth)
+      .send({});
+    expect(commit.status).toBe(201);
+    expect(commit.body.loans).toBe(30000);
+
+    const loans = (await request(app.getHttpServer()).get('/api/v1/loans').set(auth)).body as {
+      id: string;
+      memberId: string;
+      status: string;
+      interestMethod?: string;
+      outstandingPrincipal: number;
+    }[];
+    const mildLoan = loans.find((l) => l.memberId === mild.id);
+    const severeLoan = loans.find((l) => l.memberId === severe.id);
+    // straight-line method, and the 90+ day rule mirrored from the nightly job
+    expect(mildLoan?.interestMethod).toBe('FLAT');
+    expect(mildLoan?.status).toBe('DISBURSED');
+    expect(severeLoan?.status).toBe('DEFAULTED');
+
+    // the schedule is backdated, so the missed instalments show up as arrears
+    const arrears = await request(app.getHttpServer()).get('/api/v1/loans/arrears').set(auth);
+    expect(arrears.status).toBe(200);
+    const mildArrears = arrears.body.rows.filter((r: { loanId: string }) => r.loanId === mildLoan?.id);
+    expect(mildArrears.length).toBeGreaterThan(0);
+    expect(mildArrears[0].daysLate).toBeGreaterThanOrEqual(31);
+    expect(mildArrears[0].daysLate).toBeLessThanOrEqual(75);
+    const bucket = arrears.body.buckets.find((b: { bucket: string }) => b.bucket === '31-60');
+    expect(bucket.count).toBeGreaterThan(0);
+    expect(arrears.body.total).toBeGreaterThan(0);
+
+    // and the books still balance
+    const tb = await request(app.getHttpServer()).get('/api/v1/ledger/trial-balance').set(auth);
+    expect(Number(tb.body.net)).toBe(0);
+  });
+
 });

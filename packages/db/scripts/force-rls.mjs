@@ -47,6 +47,7 @@ const TABLES = [
   'member_documents',
   'savings_goals',
   'standing_instructions',
+  'savings_withdrawal_requests',
   'opening_balance_batches',
   'opening_balance_rows',
 ];

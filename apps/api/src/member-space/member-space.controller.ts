@@ -82,8 +82,24 @@ class LoanApplyDto {
   termMonths!: number;
 }
 
+export class MemberWithdrawalDto {
+  @IsOptional()
+  @IsUUID()
+  accountId?: string;
+
+  @IsNumber()
+  @Min(1)
+  amount!: number;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+}
+
 @Controller('member')
 @UseGuards(MemberJwtGuard)
+
+
 export class MemberSpaceController {
   constructor(
     private readonly memberSpaceService: MemberSpaceService,
@@ -257,4 +273,27 @@ export class MemberSpaceController {
       dto,
     );
   }
+
+  @Post('withdrawals/request')
+  requestWithdrawal(
+    @CurrentMember() principal: MemberPrincipal,
+    @Body() dto: MemberWithdrawalDto,
+  ) {
+    return this.memberSpaceService.requestWithdrawal(
+      principal.organizationId,
+      principal.memberId,
+      dto.accountId,
+      dto.amount,
+      dto.description,
+    );
+  }
+
+  @Get('withdrawals')
+  myWithdrawals(@CurrentMember() principal: MemberPrincipal) {
+    return this.memberSpaceService.myWithdrawalRequests(
+      principal.organizationId,
+      principal.memberId,
+    );
+  }
+
 }

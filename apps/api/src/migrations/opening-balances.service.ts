@@ -19,6 +19,8 @@ export interface OpeningBalanceParseRow {
   loanOutstanding: number;
   loanTermMonths: number | null;
   loanRatePa: number | null;
+  loanDaysLate: number | null;
+  loanArrearsAmount: number | null;
 }
 
 export interface OpeningBalancePreviewRow {
@@ -30,6 +32,8 @@ export interface OpeningBalancePreviewRow {
   shares: number;
   loanOutstanding: number;
   loanTermMonths: number | null;
+  loanDaysLate: number | null;
+  loanArrearsAmount: number | null;
   errors: string[];
 }
 
@@ -139,6 +143,8 @@ export class OpeningBalancesService {
     const idxLoan = col('loanOutstanding');
     const idxTerm = col('loanTermMonths');
     const idxRate = col('loanRatePa');
+    const idxDaysLate = col('loanDaysLate');
+    const idxArrears = col('loanArrearsAmount');
     if (idxEmail < 0 && idxNo < 0) {
       throw new BadRequestException('CSV must include a memberEmail or memberNo column');
     }
@@ -164,6 +170,8 @@ export class OpeningBalancesService {
         const loans = numberOrNull(idxLoan >= 0 ? cells[idxLoan] : '0');
         const term = idxTerm >= 0 ? numberOrNull(cells[idxTerm]) : null;
         const rate = idxRate >= 0 ? numberOrNull(cells[idxRate]) : null;
+        const daysLate = idxDaysLate >= 0 ? numberOrNull(cells[idxDaysLate]) : null;
+        const arrears = idxArrears >= 0 ? numberOrNull(cells[idxArrears]) : null;
 
         for (const [name, value] of [
           ['savings', savings],
@@ -181,6 +189,18 @@ export class OpeningBalancesService {
             errors.push('loanTermMonths (1-60) is required when loanOutstanding is set');
           }
         }
+        // Optional past-due carry-over (decision 2026-09-11: flags carry across)
+        let daysLateValue: number | null = null;
+        if (daysLate !== null && daysLate !== 0) {
+          if (!Number.isInteger(daysLate) || daysLate < 0 || daysLate > 3650) {
+            errors.push('loanDaysLate must be a whole number of days (0-3650)');
+          } else if (loanOutstanding <= 0) {
+            errors.push('loanDaysLate is only meaningful when loanOutstanding is set');
+          } else {
+            daysLateValue = daysLate;
+          }
+        }
+        if (arrears !== null && arrears < 0) errors.push('loanArrearsAmount cannot be negative');
         if ((savings ?? 0) === 0 && (shares ?? 0) === 0 && loanOutstanding === 0) {
           errors.push('all balances are zero — nothing to migrate');
         }
@@ -218,6 +238,8 @@ export class OpeningBalancesService {
           shares: round2(shares ?? 0),
           loanOutstanding: round2(loanOutstanding),
           loanTermMonths: termMonths,
+          loanDaysLate: daysLateValue,
+          loanArrearsAmount: arrears === null ? null : round2(arrears),
           errors,
         };
         rows.push(row);
@@ -230,6 +252,8 @@ export class OpeningBalancesService {
               loanOutstanding: row.loanOutstanding,
               loanTermMonths: termMonths,
               loanRatePa: rate,
+              loanDaysLate: daysLateValue,
+              loanArrearsAmount: arrears === null ? null : round2(arrears),
             },
             memberId,
           });
@@ -264,8 +288,9 @@ export class OpeningBalancesService {
           await c.query(
             `INSERT INTO opening_balance_rows
                (organization_id, batch_id, member_id, savings_amount, shares_amount,
-                loan_outstanding, loan_term_months, loan_rate_pa)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                loan_outstanding, loan_term_months, loan_rate_pa, loan_days_late,
+                loan_arrears_amount)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
             [
               orgId,
               batchId,
@@ -275,6 +300,8 @@ export class OpeningBalancesService {
               String(vr.row.loanOutstanding),
               vr.row.loanTermMonths,
               vr.row.loanRatePa === null ? null : String(vr.row.loanRatePa),
+              vr.row.loanDaysLate,
+              vr.row.loanArrearsAmount === null ? null : String(vr.row.loanArrearsAmount),
             ],
           );
         }
@@ -505,11 +532,18 @@ export class OpeningBalancesService {
             ? Number(loanProductRow.interest_rate_pa)
             : Number(row.loan_rate_pa);
           const loanId = randomUUID();
+          const daysLate = Number(row.loan_days_late ?? 0);
+          const arrearsAmount =
+            row.loan_arrears_amount === null ? null : round2(Number(row.loan_arrears_amount));
+          // Decision 2026-09-11: migrated loans use the straight-line (FLAT)
+          // method, and past-due flags carry across — a loan already 90+ days
+          // behind arrives DEFAULTED, matching the nightly arrears policy.
+          const status = daysLate >= 90 ? 'DEFAULTED' : 'DISBURSED';
           await c.query(
             `INSERT INTO loans (id, organization_id, member_id, loan_product_id, principal,
                                 term_months, interest_rate_pa, interest_method, status,
                                 outstanding_principal, created_by, disbursed_by, disbursed_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'DISBURSED', $5, $9, $9, now())`,
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'FLAT', $8, $5, $9, $9, now())`,
             [
               loanId,
               orgId,
@@ -518,7 +552,7 @@ export class OpeningBalancesService {
               String(loan),
               termMonths,
               String(rate),
-              loanProductRow.interest_method,
+              status,
               actorUserId,
             ],
           );
@@ -529,12 +563,19 @@ export class OpeningBalancesService {
           const values: string[] = [];
           const params: unknown[] = [];
           let principalAssigned = 0;
+          // Cut-over date minus the carried-over arrears, so instalments already
+          // missed appear in the arrears ageing report.
+          const start = new Date(`${todayIso}T00:00:00Z`);
+          start.setUTCDate(start.getUTCDate() - daysLate);
+          const startIso = start.toISOString().slice(0, 10);
           for (let seq = 1; seq <= termMonths; seq += 1) {
             const isLast = seq === termMonths;
             const principalDue = isLast ? round2(loan - principalAssigned) : principalPer;
             principalAssigned = round2(principalAssigned + principalDue);
-            const due = new Date(`${todayIso}T00:00:00Z`);
-            due.setUTCMonth(due.getUTCMonth() + seq);
+            // seq=1 is the oldest missed instalment, so it falls exactly
+            // daysLate days before today; later instalments follow monthly.
+            const due = new Date(`${startIso}T00:00:00Z`);
+            due.setUTCMonth(due.getUTCMonth() + (seq - 1));
             const base = params.length;
             values.push(
               `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`,
@@ -560,7 +601,23 @@ export class OpeningBalancesService {
           await c.query(
             `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
              VALUES ($1, $2, 'loan.migrated', 'loan', $3, $4)`,
-            [orgId, actorUserId, loanId, JSON.stringify({ memberId, memberName, outstanding: loan, termMonths, source: 'opening_balances' })],
+            [
+              orgId,
+              actorUserId,
+              loanId,
+              JSON.stringify({
+                memberId,
+                memberName,
+                outstanding: loan,
+                termMonths,
+                interestMethod: 'FLAT',
+                status,
+                daysLate,
+                arrearsAmount,
+                scheduleStart: startIso,
+                source: 'opening_balances',
+              }),
+            ],
           );
         }
       }

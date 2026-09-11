@@ -48,6 +48,7 @@ const PERMISSIONS = {
     ['members.lookup', 'Restricted member lookup'],
     ['savings.post', 'Post savings contributions'],
     ['savings.withdraw', 'Process withdrawals'],
+    ['savings.approve', 'Approve savings withdrawals (maker-checker)'],
     ['savings.reverse', 'Reverse savings transactions'],
     ['savings.export', 'Export savings records'],
     ['shares.post', 'Post share transactions'],
@@ -84,6 +85,7 @@ const ROLE_TEMPLATES = {
     'reports.view',
   ],
   COOP_ADMIN: [
+    'savings.approve',
     'migrations.view',
     'migrations.manage',
     'members.lookup',
@@ -134,6 +136,7 @@ const ROLE_TEMPLATES = {
   TREASURER: [
     'savings.post',
     'savings.withdraw',
+    'savings.approve',
     'payments.reconcile',
     'journals.create',
     'reports.view',

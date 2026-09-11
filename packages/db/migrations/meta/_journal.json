@@ -197,6 +197,20 @@
       "when": 1789102301042,
       "tag": "0027_outgoing_marauders",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1789103739571,
+      "tag": "0028_steady_centennial",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1789103861634,
+      "tag": "0029_burly_ultimo",
+      "breakpoints": true
     }
   ]
 }

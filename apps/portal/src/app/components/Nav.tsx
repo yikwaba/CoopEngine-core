@@ -12,6 +12,7 @@ const LINKS = [
   { href: '/documents', label: 'Documents' },
   { href: '/branches', label: 'Branches' },
   { href: '/opening-balances', label: 'Opening balances' },
+  { href: '/withdrawals', label: 'Withdrawals' },
   { href: '/notifications', label: 'Notifications' },
   { href: '/collections', label: 'Collections' },
   { href: '/audit', label: 'Audit' },

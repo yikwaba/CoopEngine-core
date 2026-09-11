@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -100,6 +100,12 @@ export default function MemberDashboardPage() {
   const [goalForm, setGoalForm] = useState({ name: '', target: '' });
   const [uploading, setUploading] = useState(false);
   const [docMsg, setDocMsg] = useState<string | null>(null);
+  const [withdrawalAmount, setWithdrawalAmount] = useState('');
+  const [withdrawalNote, setWithdrawalNote] = useState('');
+  const [withdrawalMsg, setWithdrawalMsg] = useState<string | null>(null);
+  const [myWithdrawals, setMyWithdrawals] = useState<
+    { id: string; amount: number; status: string; description: string | null; requestedAt: string }[]
+  >([]);
   const [error, setError] = useState<string | null>(null);
   const info = readMemberInfo();
 
@@ -121,6 +127,7 @@ export default function MemberDashboardPage() {
           setData(dash);
           setVAccount(acc);
           setFunding(payments);
+          void loadWithdrawals();
         }
       } catch (err) {
         if (cancelled) return;
@@ -134,6 +141,41 @@ export default function MemberDashboardPage() {
     };
   }, [router]);
 
+
+  async function loadWithdrawals(): Promise<void> {
+    const token = readMemberToken();
+    if (!token) return;
+    try {
+      setMyWithdrawals(await apiFetch('/member/withdrawals', token));
+    } catch {
+      /* non-fatal */
+    }
+  }
+
+  async function requestWithdrawal(): Promise<void> {
+    const token = readMemberToken();
+    if (!token) return;
+    setWithdrawalMsg(null);
+    try {
+      const res = await apiFetch<{ kind: string }>('/member/withdrawals/request', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          amount: Number(withdrawalAmount),
+          description: withdrawalNote || 'withdrawal request',
+        }),
+      });
+      setWithdrawalMsg(
+        res.kind === 'PENDING'
+          ? 'Request submitted — your cooperative will review it.'
+          : 'Withdrawal processed.',
+      );
+      setWithdrawalAmount('');
+      setWithdrawalNote('');
+      await loadWithdrawals();
+    } catch (e) {
+      setWithdrawalMsg(e instanceof Error ? e.message : 'Request failed');
+    }
+  }
 
   async function uploadDocument(file: File): Promise<void> {
     const token = readMemberToken();
@@ -515,6 +557,41 @@ export default function MemberDashboardPage() {
           <p style={{ color: '#5b6772' }}>Loading…</p>
         )}
       </section>
-    </main>
+    
+      <section className="card">
+        <h2>Request a withdrawal</h2>
+        <p className="muted">
+          Withdrawals above your cooperative&apos;s limit are reviewed by staff before any money moves.
+        </p>
+        <div className="row">
+          <input
+            inputMode="decimal"
+            placeholder="Amount"
+            value={withdrawalAmount}
+            onChange={(e) => setWithdrawalAmount(e.target.value)}
+          />
+          <input
+            placeholder="Reason (optional)"
+            value={withdrawalNote}
+            onChange={(e) => setWithdrawalNote(e.target.value)}
+          />
+          <button onClick={() => void requestWithdrawal()} disabled={!withdrawalAmount}>
+            Request
+          </button>
+        </div>
+        {withdrawalMsg && <p className="muted">{withdrawalMsg}</p>}
+        {myWithdrawals.length > 0 && (
+          <ul className="list">
+            {myWithdrawals.slice(0, 5).map((w: { id: string; amount: number; status: string }) => (
+              <li key={w.id}>
+                <span>₦{Number(w.amount).toLocaleString()}</span>
+                <span className="muted">{w.status}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      </main>
   );
 }

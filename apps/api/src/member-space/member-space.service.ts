@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { SavingsWithdrawalsService } from '../savings/savings-withdrawals.service';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
@@ -34,7 +35,10 @@ export interface MemberDashboard {
 
 @Injectable()
 export class MemberSpaceService {
-  constructor(@Inject(DB_POOL) private readonly pool: Pool) {}
+  constructor(
+    @Inject(DB_POOL) private readonly pool: Pool,
+    private readonly withdrawals: SavingsWithdrawalsService,
+  ) {}
 
   async me(organizationId: string, memberId: string): Promise<MemberDashboard['member']> {
     return withTenant(this.pool, organizationId, async (c) => {
@@ -609,4 +613,49 @@ export class MemberSpaceService {
       }));
     });
   }
+
+  /** Member-raised withdrawal request — always parked for staff approval. */
+  async requestWithdrawal(
+    organizationId: string | null,
+    memberId: string,
+    accountId: string | undefined,
+    amount: number,
+    description?: string,
+  ): Promise<{ kind: string; requestId?: string; status?: string }> {
+    // Members do not need to name an account: default to their primary active
+    // savings account.
+    let target = accountId;
+    if (!target) {
+      if (!organizationId) {
+        throw new BadRequestException('Organization context required');
+      }
+      const found = await withTenant(this.pool, organizationId, async (c) =>
+        c.query(
+          `SELECT id FROM member_savings_accounts
+            WHERE organization_id = $1 AND member_id = $2 AND status = 'ACTIVE'
+            ORDER BY created_at LIMIT 1`,
+          [organizationId, memberId],
+        ),
+      );
+      target = (found.rows[0] as { id: string } | undefined)?.id;
+      if (!target) {
+        throw new ConflictException('No active savings account for this member');
+      }
+    }
+    return this.withdrawals.request(
+      organizationId,
+      null,
+      'MEMBER',
+      memberId,
+      target,
+      amount,
+      description,
+    );
+  }
+
+  /** The member's own withdrawal requests, newest first. */
+  async myWithdrawalRequests(organizationId: string | null, memberId: string) {
+    return this.withdrawals.list(organizationId, undefined, memberId);
+  }
+
 }
