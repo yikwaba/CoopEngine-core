@@ -124,11 +124,18 @@ export class MemberSpaceController {
   }
 
   @Get('virtual-account')
-  virtualAccount(@CurrentMember() principal: MemberPrincipal) {
-    return this.memberSpaceService.virtualAccount(
+  async virtualAccount(
+    @CurrentMember() principal: MemberPrincipal,
+    @Res() res: Response,
+  ): Promise<void> {
+    // A member often has no virtual account yet, and Nest turns a null return into a
+    // response with NO body at all. A browser calling res.json() on that throws
+    // "Unexpected end of JSON input", so send an explicit JSON null.
+    const account = await this.memberSpaceService.virtualAccount(
       principal.organizationId,
       principal.memberId,
     );
+    res.json(account ?? null);
   }
 
   @Get('payments')

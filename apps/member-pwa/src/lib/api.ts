@@ -28,7 +28,10 @@ export async function apiFetch<T>(
     }
     throw new Error(message);
   }
-  return (await res.json()) as T;
+  // A 200 can carry an empty body (e.g. "nothing to return yet"); parsing that as JSON
+  // throws "Unexpected end of JSON input" and takes the whole page down with it.
+  const text = await res.text();
+  return (text ? (JSON.parse(text) as T) : (null as T));
 }
 
 export const MEMBER_TOKEN_KEY = 'coopengine_member_token';
