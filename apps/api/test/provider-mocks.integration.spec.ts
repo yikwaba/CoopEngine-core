@@ -126,7 +126,10 @@ afterAll(async () => {
   delete process.env.MONNIFY_BASE_URL;
   if (pool) {
     await pool.query(`DELETE FROM users WHERE email LIKE '%@coopengine.test'`);
-    await pool.query(`DELETE FROM sessions`);
+    await pool.query(
+      `DELETE FROM sessions WHERE user_id IN (
+         SELECT id FROM users WHERE email LIKE '%@coopengine.test')`,
+    );
     await pool.end();
   }
   await new Promise<void>((r) => termiiServer.close(() => r()));

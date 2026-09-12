@@ -32,7 +32,7 @@ export default function LoginPage() {
       }
       if (!outcome.tokens) {
         throw new Error(
-          'No access token returned. If you belong to more than one cooperative, choose your organization on the next screen (or provide its slug).',
+          'No access token returned. If you belong to more than one cooperative, choose your organization on the next screen (or provide its short name).',
         );
       }
       storeSession(outcome.tokens, email);
@@ -132,13 +132,13 @@ export default function LoginPage() {
               />
             </label>
             <label style={{ fontSize: 14, fontWeight: 600 }}>
-              Organization slug <span style={{ fontWeight: 400, color: '#5b6772' }}>(optional)</span>
+              Cooperative <span style={{ fontWeight: 400, color: '#5b6772' }}>(its short name, e.g. sunrise)</span>
               <input
                 className="field"
                 style={{ marginTop: 6 }}
                 value={organizationSlug}
                 onChange={(e) => setOrganizationSlug(e.target.value)}
-                placeholder="my-cooperative"
+                placeholder="sunrise"
               />
             </label>
             <button className="btn" disabled={busy} type="submit">

@@ -18,9 +18,44 @@ import { createPool, withTenant } from '../src/client';
 
 const pool: Pool = createPool(process.env.DATABASE_URL);
 
+/**
+ * Slugs this suite owns. Cleanup is deliberately scoped to them.
+ *
+ * This file used to run `TRUNCATE TABLE organizations CASCADE`, which deletes
+ * EVERY cooperative in whatever database it is pointed at. In CI that is a
+ * throwaway Postgres, but the same command run locally against the development
+ * database wiped a working demo tenant — and against a shared or production
+ * database it would destroy real customers. Scope cleanup to our own rows.
+ */
+const TEST_SLUGS = ['alpha-coop', 'beta-coop'];
+
+async function clearTestOrgs(): Promise<void> {
+  // FORCE RLS is on, so an unscoped DELETE silently matches nothing (and that is
+  // the point of the strategy). Find our own rows using the internal-scan policy,
+  // then delete each one inside its own tenant context.
+  const client = await pool.connect();
+  let ids: string[] = [];
+  try {
+    await client.query(`SELECT set_config('app.internal_scan', 'on', false)`);
+    const found = await client.query(
+      `SELECT id FROM organizations WHERE slug = ANY($1::text[])`,
+      [TEST_SLUGS],
+    );
+    ids = found.rows.map((r) => (r as { id: string }).id);
+    await client.query(`SELECT set_config('app.internal_scan', 'off', false)`);
+  } finally {
+    client.release();
+  }
+  for (const id of ids) {
+    await withTenant(pool, id, async (c) => {
+      await c.query('DELETE FROM organizations WHERE id = $1', [id]);
+    });
+  }
+}
+
 beforeAll(async () => {
-  // Clean slate for the test run.
-  await pool.query('TRUNCATE TABLE organizations CASCADE');
+  // Clean slate for THIS suite only — never for other tenants.
+  await clearTestOrgs();
   const rls = await pool.query(
     `SELECT c.relname, c.relforcerowsecurity
        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -36,7 +71,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await pool.query('TRUNCATE TABLE organizations CASCADE');
+  await clearTestOrgs();
   await pool.end();
 });
 

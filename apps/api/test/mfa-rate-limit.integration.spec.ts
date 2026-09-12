@@ -74,7 +74,10 @@ afterAll(async () => {
     );
     await pool.query(`DELETE FROM users WHERE email LIKE '%@coopengine.test'`);
     await pool.query(`DELETE FROM login_attempts WHERE email LIKE 'ratelimit%'`);
-    await pool.query(`DELETE FROM sessions`);
+    await pool.query(
+      `DELETE FROM sessions WHERE user_id IN (
+         SELECT id FROM users WHERE email LIKE '%@coopengine.test')`,
+    );
     await pool.end();
   }
   if (app) await app.close();

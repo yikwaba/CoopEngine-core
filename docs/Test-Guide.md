@@ -23,11 +23,11 @@ withdrawal waiting for approval).
 | Role | Email | Password | What they can do |
 |---|---|---|---|
 | **Manager** (start here) | `manager@sunrise.coop` | `Sunrise#2026` | everything, including settings, period close, approvals |
-| Treasurer | `treasurer@sunrise.coop` | `AHJnAIXk3s_g` | collections, deposit posting, loan review, approvals |
-| Loan officer | `loans@sunrise.coop` | `aPuJUEvfzX0U` | loan applications and repayments |
-| Auditor | `auditor@sunrise.coop` | `4rkgHVXHvh53` | read-only, including the audit trail |
+| Treasurer | `treasurer@sunrise.coop` | `rKsyApJrsWES` | collections, deposit posting, loan review, approvals |
+| Loan officer | `loans@sunrise.coop` | `pj2yDERvIH-P` | loan applications and repayments |
+| Auditor | `auditor@sunrise.coop` | `PK5tvMRSRIob` | read-only, including the audit trail |
 
-After typing your email, the portal asks for the **cooperative** — it is `sunrise`.
+The portal also shows a **Cooperative** field — type `sunrise` (or leave it blank: the platform resolves it when you belong to one cooperative).
 
 **Member app:** enter cooperative `sunrise` and email `member01@sunrise.coop`. In this
 test build the one-time code is **shown on screen** instead of being sent by SMS (see
