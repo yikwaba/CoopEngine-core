@@ -131,9 +131,17 @@ export default function MemberDashboardPage() {
         }
       } catch (err) {
         if (cancelled) return;
-        clearMemberSession();
-        setError(err instanceof Error ? err.message : 'Failed to load your account');
-        router.replace('/login');
+        const message = err instanceof Error ? err.message : 'Failed to load your account';
+        // Only an authentication failure means "sign in again". A network hiccup or a
+        // single failing module must not silently throw the member out — that hides the
+        // reason and looks like the app is broken.
+        const authFailure = /unauthor|invalid token|jwt|expired|401/i.test(message);
+        if (authFailure) {
+          clearMemberSession();
+          router.replace('/login');
+          return;
+        }
+        setError(message);
       }
     })();
     return () => {

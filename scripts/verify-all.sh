@@ -52,6 +52,24 @@ else
 fi
 grep -aE "^ Tasks:" /tmp/verify-build.log || true
 
+step "baked API URL (a wrong one breaks every browser call)"
+# NEXT_PUBLIC_* is compiled into the client bundle. Building without it falls back to
+# http://localhost:3999, which the browser cannot reach — the page then reports
+# "Failed to fetch" and nothing works. This check exists because that happened.
+baked_ok=1
+for app in portal member-pwa; do
+  env_file="apps/$app/.env.production"
+  if [ ! -f "$env_file" ] || ! grep -q "NEXT_PUBLIC_API_URL=https://api\." "$env_file"; then
+    echo "MISSING/incorrect $env_file"
+    baked_ok=0
+  fi
+  if grep -rqs "localhost:3999" "apps/$app/.next/static/chunks" 2>/dev/null; then
+    echo "$app bundle still contains localhost:3999"
+    baked_ok=0
+  fi
+done
+if [ "$baked_ok" = "1" ]; then echo "ok"; else FAILED+=("baked API URL"); fi
+
 step "schema"
 if [ -n "$DBURL" ]; then
   psql "$DBURL" -At -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relrowsecurity and c.relforcerowsecurity and c.relkind='r'" 2>/dev/null | xargs echo "FORCE RLS tables:"

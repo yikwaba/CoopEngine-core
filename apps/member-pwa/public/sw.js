@@ -6,7 +6,7 @@
  *     on a poor connection.
  *   - Static assets are cache-first.
  */
-const CACHE = 'coopengine-shell-v1';
+const CACHE = 'coopengine-shell-v2';
 const SHELL = ['/', '/loans', '/manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
