@@ -5,9 +5,10 @@ import { AuthModule } from '../auth/auth.module';
 import { DocumentsModule } from '../documents/documents.module';
 import { SavingsModule } from '../savings/savings.module';
 import { GoalsModule } from '../goals/goals.module';
+import { PdfModule } from '../pdf/pdf.module';
 
 @Module({
-  imports: [AuthModule, DocumentsModule, GoalsModule, SavingsModule],
+  imports: [AuthModule, DocumentsModule, GoalsModule, SavingsModule, PdfModule],
   controllers: [MemberSpaceController],
   providers: [MemberSpaceService],
   exports: [MemberSpaceService],

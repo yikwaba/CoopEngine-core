@@ -70,3 +70,28 @@ export function readMemberInfo(): {
     return null;
   }
 }
+
+/** Fetch a PDF with the member's token and hand it to the browser as a download. */
+export async function downloadMemberPdf(path: string, filename: string): Promise<void> {
+  const token = readMemberToken();
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    throw new Error(
+      res.status === 404
+        ? 'There is nothing to print for you yet.'
+        : `Could not prepare the document (${res.status})`,
+    );
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}

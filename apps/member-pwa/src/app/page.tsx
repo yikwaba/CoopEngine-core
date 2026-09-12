@@ -266,6 +266,12 @@ export default function MemberDashboardPage() {
           </h1>
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
+          <Link href="/savings" style={{ fontSize: 13, padding: '6px 10px', background: '#eef4ff', borderRadius: 8, color: '#123a6b' }}>
+            Savings
+          </Link>
+          <Link href="/statements" style={{ fontSize: 13, padding: '6px 10px', background: '#eef4ff', borderRadius: 8, color: '#123a6b' }}>
+            Statements
+          </Link>
           <Link href="/loans" style={{ fontSize: 13, padding: '6px 10px', background: '#eef4ff', borderRadius: 8, color: '#123a6b' }}>
             Loans
           </Link>

@@ -1,8 +1,20 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { IsBoolean, IsIn, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { MemberSpaceService } from './member-space.service';
 import { DocumentsService } from '../documents/documents.service';
 import { GoalsService } from '../goals/goals.service';
+import { PdfService } from '../pdf/pdf.service';
 import type { Response } from 'express';
 import { MemberJwtGuard } from '../common/guards/member-jwt.guard';
 import { CurrentMember } from '../common/decorators/current-member.decorator';
@@ -105,6 +117,7 @@ export class MemberSpaceController {
     private readonly memberSpaceService: MemberSpaceService,
     private readonly documentsService: DocumentsService,
     private readonly goalsService: GoalsService,
+    private readonly pdfService: PdfService,
   ) {}
 
   @Get('me')
@@ -136,6 +149,53 @@ export class MemberSpaceController {
       principal.memberId,
     );
     res.json(account ?? null);
+  }
+
+  @Get('savings')
+  mySavings(@CurrentMember() principal: MemberPrincipal) {
+    return this.memberSpaceService.mySavings(principal.organizationId, principal.memberId);
+  }
+
+  @Get('statements')
+  myStatements(@CurrentMember() principal: MemberPrincipal) {
+    return this.memberSpaceService.myStatements(principal.organizationId, principal.memberId);
+  }
+
+  /** The member's own savings statement as a PDF. */
+  @Get('statements/savings.pdf')
+  async savingsStatement(
+    @CurrentMember() principal: MemberPrincipal,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { buffer, filename } = await this.pdfService.memberStatement(
+      principal.organizationId,
+      principal.memberId,
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.end(buffer);
+  }
+
+  /** The member's own loan statement as a PDF. */
+  @Get('statements/loan.pdf')
+  async loanStatement(
+    @CurrentMember() principal: MemberPrincipal,
+    @Res() res: Response,
+  ): Promise<void> {
+    const loanId = await this.memberSpaceService.myLatestLoanId(
+      principal.organizationId,
+      principal.memberId,
+    );
+    if (!loanId) {
+      throw new NotFoundException('You have no loan to print a statement for');
+    }
+    const { buffer, filename } = await this.pdfService.loanStatement(
+      principal.organizationId as string,
+      loanId,
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.end(buffer);
   }
 
   @Get('payments')

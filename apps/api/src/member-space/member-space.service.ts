@@ -261,6 +261,122 @@ export class MemberSpaceService {
   }
 
   /** This member's standing contribution instructions. */
+  /** The member's own savings: accounts, balances and recent movements. */
+  async mySavings(organizationId: string, memberId: string) {
+    const orgId = organizationId;
+    return withTenant(this.pool, orgId, async (c) => {
+      const accounts = await c.query(
+        `SELECT a.id, a.account_no, a.current_balance, a.status,
+                p.code AS product_code, p.name AS product_name
+           FROM member_savings_accounts a
+           JOIN savings_products p ON p.id = a.product_id
+          WHERE a.organization_id = $1 AND a.member_id = $2
+          ORDER BY a.account_no`,
+        [orgId, memberId],
+      );
+      const accountIds = accounts.rows.map((r) => (r as { id: string }).id);
+      let movements: Record<string, unknown>[] = [];
+      if (accountIds.length > 0) {
+        const tx = await c.query(
+          `SELECT t.id, t.account_id, t.type, t.signed_amount, t.running_balance,
+                  t.created_at, je.description
+             FROM savings_transactions t
+             LEFT JOIN journal_entries je ON je.id = t.journal_entry_id
+            WHERE t.organization_id = $1 AND t.account_id = ANY($2::uuid[])
+            ORDER BY t.created_at DESC, t.id DESC
+            LIMIT 60`,
+          [orgId, accountIds],
+        );
+        movements = tx.rows as Record<string, unknown>[];
+      }
+      const mapped = accounts.rows.map((r) => {
+        const a = r as Record<string, unknown>;
+        return {
+          id: a.id as string,
+          accountNo: a.account_no as string,
+          balance: Number(a.current_balance),
+          status: a.status as string,
+          productCode: a.product_code as string,
+          productName: a.product_name as string,
+        };
+      });
+      return {
+        accounts: mapped,
+        totalBalance: mapped.reduce((sum, a) => sum + a.balance, 0),
+        transactions: movements.map((t) => ({
+          id: t.id as string,
+          accountId: t.account_id as string,
+          type: t.type as string,
+          amount: Number(t.signed_amount),
+          runningBalance: Number(t.running_balance),
+          description: (t.description as string | null) ?? null,
+          date: t.created_at as string,
+        })),
+      };
+    });
+  }
+
+  /** Statements this member can download right now. */
+  async myStatements(organizationId: string, memberId: string) {
+    const orgId = organizationId;
+    return withTenant(this.pool, orgId, async (c) => {
+      const account = await c.query(
+        `SELECT count(*)::int AS n FROM member_savings_accounts
+          WHERE organization_id = $1 AND member_id = $2`,
+        [orgId, memberId],
+      );
+      // The loans table has no human reference column, so label the document with
+      // the principal instead — that is what a member recognises anyway.
+      const loan = await c.query(
+        `SELECT id, principal, created_at FROM loans
+          WHERE organization_id = $1 AND member_id = $2
+          ORDER BY created_at DESC LIMIT 1`,
+        [orgId, memberId],
+      );
+      const out: {
+        kind: string;
+        label: string;
+        description: string;
+        downloadPath: string;
+      }[] = [];
+      if (Number((account.rows[0] as { n: number }).n) > 0) {
+        out.push({
+          kind: 'SAVINGS',
+          label: 'Savings statement',
+          description: 'Every deposit, withdrawal and the running balance.',
+          downloadPath: '/member/statements/savings.pdf',
+        });
+      }
+      if (loan.rows[0]) {
+        const l = loan.rows[0] as { principal: string | number };
+        const principal = Number(l.principal).toLocaleString('en-NG', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        out.push({
+          kind: 'LOAN',
+          label: `Loan statement — N${principal}`,
+          description: 'Instalments, what has been paid, and the balance outstanding.',
+          downloadPath: '/member/statements/loan.pdf',
+        });
+      }
+      return out;
+    });
+  }
+
+  /** The member's most recent loan id, for their own loan statement. */
+  async myLatestLoanId(organizationId: string, memberId: string): Promise<string | null> {
+    const orgId = organizationId;
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT id FROM loans WHERE organization_id = $1 AND member_id = $2
+          ORDER BY created_at DESC LIMIT 1`,
+        [orgId, memberId],
+      );
+      return rows[0] ? (rows[0] as { id: string }).id : null;
+    });
+  }
+
   async myInstructions(organizationId: string, memberId: string): Promise<unknown[]> {
     return withTenant(this.pool, organizationId, async (c) => {
       const { rows } = await c.query(
