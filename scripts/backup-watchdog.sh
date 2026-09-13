@@ -20,6 +20,9 @@ UPLOADS_DIR="${UPLOADS_DIR:-/root/coopengine/uploads}"
 LOG="${LOG:-/root/coopengine/logs/offsite-backup.log}"
 STATUS_JSON="${STATUS_JSON:-/root/coopengine/logs/backup-status.json}"
 ENV_FILE="${OFFSITE_ENV_FILE:-/root/coopengine/offsite.env}"
+# The archive is GPG-encrypted, so verifying its contents needs the same passphrase
+# file the offsite script used. Without it the check cannot see inside at all.
+PASS_FILE="${PASSPHRASE_FILE:-/root/coopengine/offsite-passphrase}"
 MAX_AGE_H=26
 
 problems=()
@@ -83,12 +86,26 @@ fi
 # 5. KYC uploads coverage
 if [ -d "$UPLOADS_DIR" ] && [ -n "$(ls -A "$UPLOADS_DIR" 2>/dev/null)" ]; then
   if [ -n "$ARCH" ]; then
-    if tar -tzf "$ARCH" 2>/dev/null | grep -q '^payload/uploads/' \
-       || gpg --batch --quiet --decrypt "$ARCH" 2>/dev/null | tar -tzf - 2>/dev/null | grep -q '^payload/uploads/'; then
-      notes+=("uploads: included in the archive")
+    ARCH_LIST="$(mktemp)"
+    READABLE=0
+    if tar -tzf "$ARCH" > "$ARCH_LIST" 2>/dev/null; then
+      READABLE=1                                    # plain tar.gz (encryption disabled)
+    elif [ ! -f "$PASS_FILE" ]; then
+      problems+=("cannot verify the archive contents: passphrase file $PASS_FILE is missing")
+    elif gpg --batch --quiet --passphrase-file "$PASS_FILE" --decrypt "$ARCH" 2>/dev/null \
+         | tar -tzf - > "$ARCH_LIST" 2>/dev/null && [ -s "$ARCH_LIST" ]; then
+      READABLE=1                                    # decrypted and listed
     else
-      problems+=("KYC uploads exist but were not found inside the archive")
+      problems+=("cannot read the archive to verify coverage (decryption failed) — check $PASS_FILE")
     fi
+    if [ "$READABLE" -eq 1 ]; then
+      if grep -q '^payload/uploads/' "$ARCH_LIST"; then
+        notes+=("uploads: $(grep -c '^payload/uploads/' "$ARCH_LIST") entries included in the archive")
+      else
+        problems+=("KYC uploads exist but were not found inside the archive")
+      fi
+    fi
+    rm -f "$ARCH_LIST"
   fi
 else
   notes+=("uploads: none yet")
