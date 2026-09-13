@@ -71,33 +71,34 @@ if [ "${#SENDER_ID}" -gt 11 ]; then
   say "note: '$SENDER_ID' is longer than 11 characters — Nigerian carriers usually only accept 11."
 fi
 
-# ---------------------------------------------------------------- write the env
-step "writing credentials to $ENV_FILE (mode 600, atomic, backed up)"
+# ---------------------------------------------------------------- validate FIRST
+# The credentials are staged in a separate file and validated there. Only a set that
+# Termii accepts is ever installed into the live providers.env: a mistyped or unapproved
+# key must not reach the running platform, because a bad key left in there makes the
+# notification channel fail and the watchdog complain (which is what happened while this
+# script was being tested).
+step "staging the credentials and validating them with Termii"
 [ -f "$ENV_FILE" ] || printf 'MEMBER_OTP_PROVIDER=dev\nMONNIFY_PROVIDER=dev\n' > "$ENV_FILE"
-BACKUP="${ENV_FILE}.bak.$(date -u +%Y%m%d-%H%M%S)"
-cp -p "$ENV_FILE" "$BACKUP"
-TMP="$(mktemp)"
-grep -vE '^(TERMII_API_KEY|TERMII_SENDER_ID|TERMII_TEST_PHONE|TERMII_CHANNEL|TERMII_BASE_URL|TERMII_TIMEOUT_MS)=' "$ENV_FILE" > "$TMP" || true
+STAGE="$(mktemp /root/coopengine/providers.env.staged.XXXXXX)"
+chmod 600 "$STAGE"
+grep -vE '^(TERMII_API_KEY|TERMII_SENDER_ID|TERMII_TEST_PHONE|TERMII_CHANNEL|TERMII_BASE_URL|TERMII_TIMEOUT_MS)=' "$ENV_FILE" > "$STAGE" || true
 {
   printf 'TERMII_API_KEY=%s\n' "$API_KEY"
   printf 'TERMII_SENDER_ID=%s\n' "$SENDER_ID"
   [ -n "$TEST_PHONE" ] && printf 'TERMII_TEST_PHONE=%s\n' "$TEST_PHONE"
-} >> "$TMP"
-chmod 600 "$TMP"
-mv "$TMP" "$ENV_FILE"
+} >> "$STAGE"
 [ -n "$KEY_FILE" ] && shred -u "$KEY_FILE" 2>/dev/null || true
 say "  api key    $(mask "$API_KEY")"
 say "  sender id  $SENDER_ID"
 say "  test phone ${TEST_PHONE:-(none - the test SMS will be skipped)}"
-say "  backup     $BACKUP"
 
-# ---------------------------------------------------------------- preflight
-step "preflight: validating the credentials with Termii"
-bash "$REPO/scripts/provider-preflight.sh" --require
+ENV_FILE="$STAGE" bash "$REPO/scripts/provider-preflight.sh" --require
 PF=$?
 if [ "$PF" -ne 0 ]; then
+  rm -f "$STAGE"
   say ""
-  say "Preflight failed, so nothing was switched on — the platform is unchanged (still dev mode)."
+  say "Preflight failed, so the credentials were NOT installed. The live configuration is"
+  say "untouched and SMS stays off — there is nothing to undo."
   say "Most common causes:"
   say "  * the API key was copied with a stray space or truncated"
   say "  * the sender ID has not been approved by the carriers yet (Termii must approve it)"
@@ -105,6 +106,14 @@ if [ "$PF" -ne 0 ]; then
   say "Fix it and re-run: scripts/termii-onboard.sh --key-file=<file>"
   exit "$PF"
 fi
+
+# ---------------------------------------------------------------- install
+step "credentials accepted — installing into $ENV_FILE (mode 600, atomic, backed up)"
+BACKUP="${ENV_FILE}.bak.$(date -u +%Y%m%d-%H%M%S)"
+cp -p "$ENV_FILE" "$BACKUP"
+chmod 600 "$STAGE"
+mv "$STAGE" "$ENV_FILE"
+say "  backup: $BACKUP"
 
 # ---------------------------------------------------------------- switch
 step "switching OTP + notification SMS to Termii"
