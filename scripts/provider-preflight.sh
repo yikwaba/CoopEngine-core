@@ -49,9 +49,27 @@ else
   echo "  api key: $(mask "$TERMII_API_KEY")   sender id: ${TERMII_SENDER_ID}   base: ${TERMII_BASE}"
   BAL="$(curl -sS --max-time 15 "${TERMII_BASE}/api/get-balance?api_key=${TERMII_API_KEY}" 2>/dev/null || true)"
   if printf '%s' "$BAL" | grep -qiE 'balance'; then
-    echo "  auth: OK"
+    BALANCE="$(printf '%s' "$BAL" | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("balance",""))
+except Exception:
+    print("")' 2>/dev/null || true)"
+    echo "  auth: OK   wallet: ${BALANCE:-unknown}"
+    # An empty wallet accepts every request and delivers nothing — worth shouting about.
+    LOW="$(python3 - "$BALANCE" <<'PY' 2>/dev/null || echo no
+import sys
+try:
+    print("yes" if float(sys.argv[1]) <= 500 else "no")
+except Exception:
+    print("unknown")
+PY
+)"
+    case "$LOW" in
+      yes) echo "  WARNING: wallet balance is very low — top up before members depend on it" ;;
+      unknown) echo "  note: could not read the balance as a number" ;;
+    esac
   else
-    echo "  auth: FAILED (no balance payload returned)"
+    echo "  auth: FAILED (no balance payload returned — check the API key)"
     FAILED=1
   fi
   if [ -n "${TERMII_TEST_PHONE:-}" ]; then
@@ -73,6 +91,12 @@ PY
       echo "  test SMS: SENT to ${TERMII_TEST_PHONE}"
     else
       echo "  test SMS: FAILED (no message id returned)"
+      printf '  termii replied: %s\n' "$(printf '%s' "$SEND" | head -c 300)"
+      echo "  likely causes, in order:"
+      echo "    1. the sender ID '$TERMII_SENDER_ID' is not approved by the carriers yet"
+      echo "       (Termii must approve it; until then messages are rejected or fall back)"
+      echo "    2. no credit in the wallet"
+      echo "    3. the destination number is not in international format (234…, no leading 0)"
       FAILED=1
     fi
   else
