@@ -26,13 +26,15 @@ import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
 
-const READ_PERMISSIONS = [
-  'members.approve',
-  'members.create',
-  'members.edit',
-  'members.import',
-  'members.export',
-];
+/**
+ * Reading members requires the READ permission.
+ *
+ * This used to list the mutation permissions (approve/create/edit/import/export), with two
+ * consequences: a role holding the actual read permission but no mutation rights could not
+ * read members at all — the treasurer, loan officer and auditor were all locked out of the
+ * member list — and a role could read members only if it could also change them.
+ */
+const READ_PERMISSIONS = ['members.lookup'];
 
 @Controller('members')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
