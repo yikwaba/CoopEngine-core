@@ -7,6 +7,8 @@ import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
+import { StepUpDto } from '../common/dto/step-up.dto';
+import { AuthService } from '../auth/auth.service';
 import { IsIn, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 const READ_PERMISSIONS = [
@@ -37,7 +39,9 @@ export class PeriodStatusDto {
 @Controller('ledger')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class LedgerController {
-  constructor(private readonly ledgerService: LedgerService) {}
+  constructor(private readonly ledgerService: LedgerService,
+    private readonly auth: AuthService,
+  ) {}
 
   @Get('accounts')
   @RequirePermissions(...READ_PERMISSIONS)
@@ -123,10 +127,17 @@ export class LedgerController {
   @Post('journals/:id/approve-post')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('journals.approve')
-  approvePost(
+  async approvePost(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) journalId: string,
+    @Body() dto: StepUpDto,
   ) {
+    await this.auth.assertStepUp(
+      principal.organizationId,
+      principal.userId,
+      dto?.otp,
+      'post a journal entry',
+    );
     return this.ledgerService.approveAndPost(
       principal.organizationId,
       principal.userId,

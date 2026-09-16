@@ -72,6 +72,8 @@ import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
+import { StepUpDto } from '../common/dto/step-up.dto';
+import { AuthService } from '../auth/auth.service';
 
 const LOAN_READ = [
   'loans.review',
@@ -84,7 +86,9 @@ const LOAN_READ = [
 @Controller('loans')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class LoansController {
-  constructor(private readonly loansService: LoansService) {}
+  constructor(private readonly loansService: LoansService,
+    private readonly auth: AuthService,
+  ) {}
 
   @Get('products')
   @RequirePermissions(...LOAN_READ)
@@ -263,10 +267,18 @@ export class LoansController {
   @Post(':id/disburse')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('loans.disburse')
-  disburse(
+  async disburse(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) loanId: string,
+    @Body() dto: StepUpDto,
   ) {
+    // Disbursement moves money out of the cooperative: step-up when the cooperative asks.
+    await this.auth.assertStepUp(
+      principal.organizationId,
+      principal.userId,
+      dto?.otp,
+      'disburse a loan',
+    );
     return this.loansService.transition(
       principal.organizationId,
       principal.userId,

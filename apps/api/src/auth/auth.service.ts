@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Inject,
@@ -228,6 +229,13 @@ export class AuthService {
       }
       organizationId = org.id;
       contextRows = rows.filter((r) => r.organization_id === organizationId);
+      // Organisation MFA policy: a cooperative that requires staff MFA refuses sign-in until
+      // the user has enrolled, rather than issuing a session and hoping they enrol later.
+      await this.assertMfaPolicy(
+        organizationId,
+        userId,
+        [...new Set(contextRows.map((r) => r.role_code))],
+      );
     } else {
       contextRows = rows.filter(
         (r) => r.organization_id === null && r.role_scope === 'saas',
@@ -331,6 +339,121 @@ export class AuthService {
       `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
        VALUES ($1, 'mfa.disabled', 'user', $1, $2)`,
       [userId, JSON.stringify({ method: 'totp' })],
+    );
+  }
+
+  /**
+   * Staff roles bound by the organisation's MFA policy.
+   *
+   * Members sign in through the member app with a one-time code and do not reach these
+   * endpoints, so "privileged" here means every staff role that can open the portal.
+   */
+  static readonly PRIVILEGED_ROLE_CODES = [
+    'COOP_ADMIN',
+    'TREASURER',
+    'ACCOUNTANT',
+    'LOAN_OFFICER',
+    'CREDIT_COMMITTEE',
+    'AUDITOR',
+    'CHAIRMAN',
+    'SECRETARY',
+  ];
+
+  /** Security settings a cooperative can turn on for itself. */
+  async orgSecuritySettings(
+    organizationId: string,
+  ): Promise<{ mfaRequiredForPrivilegedRoles: boolean; requireStepUpForSensitiveMoney: boolean }> {
+    const { rows } = await withTenant(this.pool, organizationId, (client) =>
+      client.query(
+        `SELECT coalesce(settings -> 'security', '{}'::jsonb) AS security
+           FROM organization_settings WHERE organization_id = $1`,
+        [organizationId],
+      ),
+    );
+    const security = ((rows[0] as { security?: Record<string, unknown> } | undefined)?.security ?? {}) as Record<
+      string,
+      unknown
+    >;
+    return {
+      mfaRequiredForPrivilegedRoles: security.mfaRequiredForPrivilegedRoles === true,
+      requireStepUpForSensitiveMoney: security.requireStepUpForSensitiveMoney === true,
+    };
+  }
+
+  /**
+   * Refuse a staff sign-in when the cooperative requires MFA and this user has not set it up.
+   *
+   * Returns nothing when the policy is off, the user is not bound by it, or MFA is already on.
+   * The error carries a code so the portal can send the user straight to enrolment instead of
+   * showing "forbidden".
+   */
+  async assertMfaPolicy(
+    organizationId: string,
+    userId: string,
+    roleCodes: string[],
+  ): Promise<void> {
+    const { mfaRequiredForPrivilegedRoles } = await this.orgSecuritySettings(organizationId);
+    if (!mfaRequiredForPrivilegedRoles) return;
+    const bound = roleCodes.some((code) => AuthService.PRIVILEGED_ROLE_CODES.includes(code));
+    if (!bound) return;
+
+    const { rows } = await this.pool.query(`SELECT mfa_enabled FROM users WHERE id = $1`, [userId]);
+    if ((rows[0] as { mfa_enabled: boolean } | undefined)?.mfa_enabled) return;
+
+    await this.pool.query(
+      `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'mfa.login_blocked', 'user', $1, $2)`,
+      [userId, JSON.stringify({ organizationId })],
+    );
+    throw new ForbiddenException(
+      'This cooperative requires two-factor authentication for staff. Set up your authenticator app to continue.',
+    );
+  }
+
+  /**
+   * Step-up authentication for actions that move money or rewrite the books.
+   *
+   * When the cooperative turns this on, the caller must present a live TOTP code with the
+   * request. MFA must already be enabled — a policy that can be satisfied by "no MFA set up"
+   * would be no policy at all.
+   */
+  async assertStepUp(
+    organizationId: string | null,
+    userId: string,
+    code: string | undefined,
+    action: string,
+  ): Promise<void> {
+    // No cooperative context means the action has no books to protect; the service layer
+    // rejects such calls anyway, so there is nothing to step up to.
+    if (!organizationId) return;
+    const { requireStepUpForSensitiveMoney } = await this.orgSecuritySettings(organizationId);
+    if (!requireStepUpForSensitiveMoney) return;
+
+    const { rows } = await this.pool.query(
+      `SELECT mfa_enabled, mfa_secret FROM users WHERE id = $1`,
+      [userId],
+    );
+    const user = rows[0] as { mfa_enabled: boolean; mfa_secret: string | null } | undefined;
+    if (!user?.mfa_enabled || !user.mfa_secret) {
+      throw new ForbiddenException(
+        'This cooperative requires step-up verification for this action, and MFA must be enabled on your account first',
+      );
+    }
+    if (!code) {
+      throw new ForbiddenException(`A step-up verification code is required to ${action}`);
+    }
+    if (!(await this.verifyCode(user.mfa_secret, code))) {
+      await this.pool.query(
+        `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, 'stepup.failed', 'user', $1, $2)`,
+        [userId, JSON.stringify({ action })],
+      );
+      throw new UnauthorizedException('Invalid step-up verification code');
+    }
+    await this.pool.query(
+      `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'stepup.verified', 'user', $1, $2)`,
+      [userId, JSON.stringify({ action })],
     );
   }
 
