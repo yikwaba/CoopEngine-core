@@ -14,6 +14,7 @@ export class LoginDto {
 }
 
 export class RefreshDto {
+  @IsOptional()
   @IsString()
   @MinLength(16)
   refreshToken!: string;

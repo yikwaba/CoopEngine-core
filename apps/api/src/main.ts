@@ -41,6 +41,9 @@ async function bootstrap(): Promise<void> {
   app.enableCors({
     origin: ENV.corsOrigins,
     exposedHeaders: ['x-request-id', 'x-total-count'],
+    // Required for session cookies: the browser will not send or store them without it, and the
+    // portal and API are different origins even though they share a site.
+    credentials: true,
   });
   app.useGlobalPipes(
     new ValidationPipe({

@@ -4,7 +4,11 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
+import { clearSessionCookies, setSessionCookies } from '../common/auth-cookies';
+import { ENV } from '../config/env';
 import { IsEmail, IsString, Length, Matches } from 'class-validator';
 import { MemberAuthService } from './member-auth.service';
 
@@ -45,11 +49,18 @@ export class MemberAuthController {
 
   @Post('verify-otp')
   @HttpCode(HttpStatus.OK)
-  verifyOtp(@Body() dto: VerifyOtpDto) {
-    return this.memberAuthService.verifyOtp(
+  async verifyOtp(
+    @Body() dto: VerifyOtpDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const session = await this.memberAuthService.verifyOtp(
       dto.organizationSlug,
       dto.email,
       dto.code,
     );
+    // The member app is a browser too, and a member's session is worth just as much: it goes in
+    // an httpOnly cookie, with the token still in the body for anything non-browser.
+    setSessionCookies(res, { accessToken: session.accessToken }, ENV.jwtAccessTtlSeconds);
+    return session;
   }
 }

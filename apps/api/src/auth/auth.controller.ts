@@ -6,9 +6,14 @@ import {
   HttpStatus,
   Post,
   Req,
+  Res,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthService, SessionTokens } from './auth.service';
+import { clearSessionCookies, readRefreshCookie, setSessionCookies } from '../common/auth-cookies';
+import { ENV } from '../config/env';
 import {
   LoginDto,
   MfaDisableDto,
@@ -38,6 +43,7 @@ export class AuthController {
   async login(
     @Body() dto: LoginDto,
     @Req() request: { ip?: string; headers: { 'user-agent'?: string } },
+    @Res({ passthrough: true }) res: Response,
   ): Promise<LoginResult> {
     const ip = request.ip ?? 'unknown';
     const ua = request.headers['user-agent'];
@@ -71,6 +77,11 @@ export class AuthController {
       'user',
       auth.id,
     );
+    // The browser takes the session as an httpOnly cookie. The tokens stay in the body for
+    // scripts, tests and callbacks, and the guards accept either.
+    if (outcome.tokens) {
+      setSessionCookies(res, outcome.tokens, ENV.jwtAccessTtlSeconds);
+    }
     return {
       user: { id: auth.id, email: auth.email },
       organizations: auth.organizations,
@@ -86,6 +97,7 @@ export class AuthController {
   async mfaLoginVerify(
     @Body() dto: MfaLoginVerifyDto,
     @Req() request: { ip?: string; headers: { 'user-agent'?: string } },
+    @Res({ passthrough: true }) res: Response,
   ): Promise<LoginResult> {
     const ip = request.ip ?? 'unknown';
     const ua = request.headers['user-agent'];
@@ -100,6 +112,9 @@ export class AuthController {
       ip,
       ua,
     );
+    if (outcome.tokens) {
+      setSessionCookies(res, outcome.tokens, ENV.jwtAccessTtlSeconds);
+    }
     return {
       user: { id: userId, email: user?.email ?? '' },
       organizations: outcome.organizations,
@@ -140,14 +155,29 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  async refresh(@Body() dto: RefreshDto): Promise<SessionTokens> {
-    return this.authService.rotateRefresh(dto.refreshToken);
+  async refresh(
+    @Body() dto: RefreshDto,
+    @Req() request: { headers?: { cookie?: string } },
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<SessionTokens> {
+    // A browser has no token to send in the body: it presents the refresh cookie.
+    const presented = dto?.refreshToken || readRefreshCookie(request as never);
+    if (!presented) {
+      throw new UnauthorizedException('Missing refresh token');
+    }
+    const tokens = await this.authService.rotateRefresh(presented);
+    setSessionCookies(res, tokens, ENV.jwtAccessTtlSeconds);
+    return tokens;
   }
 
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(JwtAuthGuard)
-  async logout(@CurrentUser() principal: AuthPrincipal): Promise<void> {
+  async logout(
+    @CurrentUser() principal: AuthPrincipal,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    clearSessionCookies(res);
     await this.authService.revokeSession(principal.sessionId);
     await this.authService.recordAudit(
       principal.organizationId,

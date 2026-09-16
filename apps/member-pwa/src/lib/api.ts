@@ -3,20 +3,32 @@
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3999/api/v1';
 
+/**
+ * Member app API client.
+ *
+ * The session is an httpOnly cookie set by the API, so the token is never visible to JavaScript —
+ * a cross-site scripting bug cannot lift a member's session out of browser storage. Only *who* is
+ * signed in is kept locally, for the header. A token written by an earlier build is deleted on
+ * sight, so an upgrade does not leave one lying around.
+ */
 export async function apiFetch<T>(
   path: string,
-  token?: string,
+  _token?: string,
   init?: RequestInit,
 ): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
+    // The member's session is an httpOnly cookie: the browser attaches it, scripts cannot read it.
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
     cache: 'no-store',
   });
+  if (res.status === 401) {
+    clearMemberSession();
+  }
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -37,9 +49,10 @@ export async function apiFetch<T>(
 export const MEMBER_TOKEN_KEY = 'coopengine_member_token';
 export const MEMBER_INFO_KEY = 'coopengine_member_info';
 
-export function storeMemberSession(accessToken: string, info: unknown): void {
+export function storeMemberSession(_accessToken: string, info: unknown): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(MEMBER_TOKEN_KEY, accessToken);
+  localStorage.removeItem(MEMBER_TOKEN_KEY);
+  localStorage.setItem(MEMBER_SESSION_MARKER, 'cookie');
   localStorage.setItem(MEMBER_INFO_KEY, JSON.stringify(info));
 }
 
@@ -47,11 +60,16 @@ export function clearMemberSession(): void {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(MEMBER_TOKEN_KEY);
   localStorage.removeItem(MEMBER_INFO_KEY);
+  localStorage.removeItem(MEMBER_SESSION_MARKER);
 }
 
+export const MEMBER_SESSION_MARKER = 'coopengine_member_session';
+
+/** Non-null when a session is believed to exist; the cookie itself is invisible here. */
 export function readMemberToken(): string | null {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem(MEMBER_TOKEN_KEY);
+  localStorage.removeItem(MEMBER_TOKEN_KEY);
+  return localStorage.getItem(MEMBER_SESSION_MARKER);
 }
 
 export function readMemberInfo(): {
@@ -75,7 +93,6 @@ export function readMemberInfo(): {
 export async function downloadMemberPdf(path: string, filename: string): Promise<void> {
   const token = readMemberToken();
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
     cache: 'no-store',
   });
   if (!res.ok) {

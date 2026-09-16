@@ -10,6 +10,7 @@ import { Pool } from 'pg';
 import { DB_POOL } from '../../database/database.module';
 import { ENV } from '../../config/env';
 import { JwtClaims, AuthPrincipal } from '../auth.types';
+import { readAccessCookie } from '../auth-cookies';
 
 /**
  * Verifies the Bearer access token and confirms the underlying session is
@@ -26,11 +27,13 @@ export class JwtAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
+    // A browser presents the session cookie; anything else presents a bearer token.
     const header: string | undefined = request.headers?.authorization;
-    if (!header?.startsWith('Bearer ')) {
-      throw new UnauthorizedException('Missing bearer token');
+    const cookieToken = readAccessCookie(request);
+    const token = cookieToken ?? (header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : null);
+    if (!token) {
+      throw new UnauthorizedException('Missing session');
     }
-    const token = header.slice('Bearer '.length);
     let claims: JwtClaims;
     try {
       claims = await this.jwtService.verifyAsync<JwtClaims>(token, {

@@ -8,6 +8,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ENV } from '../../config/env';
 import { MemberClaims } from '../../member-auth/member-auth.service';
+import { readAccessCookie } from '../auth-cookies';
 
 /** Authenticated member principal attached by MemberJwtGuard. */
 export interface MemberPrincipal {
@@ -22,14 +23,17 @@ export class MemberJwtGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<{
-      headers: { authorization?: string };
+      headers: { authorization?: string; cookie?: string };
       member?: MemberPrincipal;
     }>();
+    // The member app is a browser: its session arrives as a cookie. A bearer token still works.
     const header = request.headers.authorization;
-    if (!header?.startsWith('Bearer ')) {
-      throw new UnauthorizedException('Missing bearer token');
+    const cookieToken = readAccessCookie(request as unknown as Parameters<typeof readAccessCookie>[0]);
+    const token =
+      cookieToken ?? (header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : null);
+    if (!token) {
+      throw new UnauthorizedException('Missing session');
     }
-    const token = header.slice('Bearer '.length);
     let claims: MemberClaims;
     try {
       claims = await this.jwtService.verifyAsync<MemberClaims>(token, {

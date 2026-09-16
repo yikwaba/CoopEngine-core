@@ -23,18 +23,25 @@ export interface LoginOutcome {
 
 export async function apiFetch<T>(
   path: string,
-  token?: string,
+  _token?: string,
   init?: RequestInit,
 ): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
+    // The browser attaches the session cookie; there is no token to attach by hand.
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
     cache: 'no-store',
   });
+  if (res.status === 401) {
+    clearSession();
+    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      window.location.href = '/login';
+    }
+  }
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -52,24 +59,32 @@ export async function apiFetch<T>(
   return (text ? (JSON.parse(text) as T) : (null as T));
 }
 
+/**
+ * Legacy key from builds that kept the token in browser storage. Only ever removed.
+ */
 export const TOKEN_KEY = 'coopengine_access_token';
 export const USER_KEY = 'coopengine_user';
+/** Presence means "a session is believed to exist" — the cookie itself is invisible here. */
+export const SESSION_MARKER = 'coopengine_session';
 
-export function storeSession(tokens: SessionTokens, email: string): void {
+export function storeSession(_tokens: SessionTokens, email: string): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(TOKEN_KEY, tokens.accessToken);
+  localStorage.setItem(SESSION_MARKER, 'cookie');
   localStorage.setItem(USER_KEY, JSON.stringify({ email }));
+  localStorage.removeItem(TOKEN_KEY);
 }
 
 export function clearSession(): void {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(SESSION_MARKER);
 }
 
 export function readToken(): string | null {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem(TOKEN_KEY);
+  localStorage.removeItem(TOKEN_KEY);
+  return localStorage.getItem(SESSION_MARKER);
 }
 
 /**
@@ -82,9 +97,8 @@ export async function downloadPdf(path: string, filename: string): Promise<void>
   if (!token) {
     throw new Error('Not signed in');
   }
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  // The session cookie travels with this request; nothing is attached by hand.
+  const res = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
   if (!res.ok) {
     throw new Error(`Could not generate the document (${res.status})`);
   }

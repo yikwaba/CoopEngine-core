@@ -35,8 +35,8 @@ export default function LoginPage() {
           'No access token returned. If you belong to more than one cooperative, choose your organization on the next screen (or provide its short name).',
         );
       }
+      // The session arrives as an httpOnly cookie; the browser keeps no token for scripts to steal.
       storeSession(outcome.tokens, email);
-      localStorage.setItem(TOKEN_KEY, outcome.tokens.accessToken);
       router.push('/');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
