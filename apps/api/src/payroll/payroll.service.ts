@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
+import { LedgerService } from '../ledger/ledger.service';
 import { parseCsv } from '../members/csv';
 import { PreviewImportDto } from '../members/dto/import-member.dto';
 
@@ -42,7 +43,9 @@ interface ValidRow {
 
 @Injectable()
 export class PayrollService {
-  constructor(@Inject(DB_POOL) private readonly pool: Pool) {}
+  constructor(@Inject(DB_POOL) private readonly pool: Pool,
+    private readonly ledger: LedgerService,
+  ) {}
 
   private requireOrg(organizationId: string | null): string {
     if (!organizationId) {
@@ -169,12 +172,11 @@ export class PayrollService {
    * Savings Deposits 2000 per member), opening missing accounts, updating
    * balances + transaction projections — all in one tenant transaction.
    */
-  async commit(
-    organizationId: string | null,
+  private async postBatch(
+    orgId: string,
     actorUserId: string,
     batchId: string,
   ): Promise<PayrollCommitResult> {
-    const orgId = this.requireOrg(organizationId);
     const skipped: { row: number; reason: string }[] = [];
     let committed = 0;
     let totalPosted = 0;
@@ -189,8 +191,14 @@ export class PayrollService {
         | { id: string; status: string; rows: unknown }
         | undefined;
       if (!b) throw new NotFoundException('Payroll batch not found');
-      if (b.status === 'COMMITTED') {
-        throw new ConflictException('Payroll batch has already been committed');
+      if (b.status === 'POSTED' || b.status === 'REVERSED') {
+        throw new ConflictException('This payroll batch has already been posted');
+      }
+      if (b.status === 'REJECTED') {
+        throw new ConflictException('This payroll batch was rejected; submit a corrected one');
+      }
+      if (b.status !== 'SUBMITTED') {
+        throw new ConflictException('Submit the batch for approval before posting it');
       }
       const rows = (b.rows ?? []) as {
         memberNo: number;
@@ -379,9 +387,17 @@ export class PayrollService {
         );
       }
 
+      // POSTED, and the entries it created are recorded so a reversal can undo exactly those.
       await c.query(
         `UPDATE payroll_batches
-            SET status = 'COMMITTED', committed_by = $1, committed_at = now()
+            SET status = 'POSTED',
+                committed_by = $1, committed_at = now(),
+                approved_by = $1, approved_at = now(),
+                journal_entry_ids = (
+                  SELECT coalesce(jsonb_agg(id), '[]'::jsonb)
+                    FROM journal_entries
+                   WHERE organization_id = $2 AND source_type = 'payroll_batch' AND source_id = $3
+                )
           WHERE organization_id = $2 AND id = $3`,
         [actorUserId, orgId, batchId],
       );
@@ -399,5 +415,258 @@ export class PayrollService {
       totalPosted = total;
     });
     return { batchId, committed, totalAmount: totalPosted, skipped };
+  }
+
+  /** Upload staged a preview; this puts it in front of an approver. */
+  async submit(organizationId: string | null, actorUserId: string, batchId: string) {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT id, status, valid_rows, total_amount FROM payroll_batches
+          WHERE organization_id = $1 AND id = $2`,
+        [orgId, batchId],
+      );
+      const batch = rows[0] as
+        | { id: string; status: string; valid_rows: string | number; total_amount: string }
+        | undefined;
+      if (!batch) throw new NotFoundException('Payroll batch not found');
+      if (batch.status === 'SUBMITTED') {
+        throw new ConflictException('This batch is already waiting for approval');
+      }
+      if (batch.status === 'POSTED' || batch.status === 'REVERSED') {
+        throw new ConflictException('This batch has already been posted');
+      }
+      if (Number(batch.valid_rows) === 0) {
+        throw new ConflictException('This batch has no valid rows to submit');
+      }
+      await c.query(
+        `UPDATE payroll_batches
+            SET status = 'SUBMITTED', submitted_by = $1, submitted_at = now()
+          WHERE organization_id = $2 AND id = $3`,
+        [actorUserId, orgId, batchId],
+      );
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, 'payroll.submitted', 'payroll_batch', $3, '{}'::jsonb)`,
+        [orgId, actorUserId, batchId],
+      );
+      return {
+        id: batchId,
+        status: 'SUBMITTED',
+        totalAmount: batch.total_amount,
+        members: Number(batch.valid_rows),
+      };
+    });
+  }
+
+  /**
+   * Approve and post, atomically. The approver must not be the person who submitted it: money
+   * leaving many members' savings at once deserves a second pair of eyes, and the whole batch
+   * posts in one transaction or not at all.
+   */
+  async approve(organizationId: string | null, actorUserId: string, batchId: string) {
+    const orgId = this.requireOrg(organizationId);
+    const submittedBy = await withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT submitted_by, created_by, status FROM payroll_batches
+          WHERE organization_id = $1 AND id = $2`,
+        [orgId, batchId],
+      );
+      const batch = rows[0] as
+        | { submitted_by: string | null; created_by: string | null; status: string }
+        | undefined;
+      if (!batch) throw new NotFoundException('Payroll batch not found');
+      if (batch.status !== 'SUBMITTED') {
+        throw new ConflictException('Only a submitted batch can be approved');
+      }
+      return batch.submitted_by ?? batch.created_by;
+    });
+    if (submittedBy && submittedBy === actorUserId) {
+      throw new ConflictException(
+        'A payroll batch must be approved by a different user (segregation of duties)',
+      );
+    }
+    return this.postBatch(orgId, actorUserId, batchId);
+  }
+
+  /** Reject a submitted batch: nothing is posted and the reason is kept. */
+  async reject(
+    organizationId: string | null,
+    actorUserId: string,
+    batchId: string,
+    reason: string,
+  ) {
+    const orgId = this.requireOrg(organizationId);
+    if (!reason?.trim()) throw new BadRequestException('A rejection reason is required');
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `UPDATE payroll_batches
+            SET status = 'REJECTED', rejected_by = $1, rejected_at = now(), rejection_reason = $4
+          WHERE organization_id = $2 AND id = $3 AND status = 'SUBMITTED'
+          RETURNING id, status`,
+        [actorUserId, orgId, batchId, reason.trim()],
+      );
+      if (!rows[0]) throw new ConflictException('Only a submitted batch can be rejected');
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, 'payroll.rejected', 'payroll_batch', $3, $4::jsonb)`,
+        [orgId, actorUserId, batchId, JSON.stringify({ reason: reason.trim() })],
+      );
+      return rows[0];
+    });
+  }
+
+  /**
+   * Reverse a posted batch. Every journal entry it created is reversed through the ledger, so the
+   * correction follows the same path as any other reversal and appears in the audit trail.
+   */
+  async reverse(
+    organizationId: string | null,
+    actorUserId: string,
+    batchId: string,
+    reason: string,
+  ) {
+    const orgId = this.requireOrg(organizationId);
+    if (!reason?.trim()) throw new BadRequestException('A reversal reason is required');
+
+    const batch = await withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT id, status, journal_entry_ids, total_amount FROM payroll_batches
+          WHERE organization_id = $1 AND id = $2`,
+        [orgId, batchId],
+      );
+      return rows[0] as
+        | { id: string; status: string; journal_entry_ids: string[]; total_amount: string }
+        | undefined;
+    });
+    if (!batch) throw new NotFoundException('Payroll batch not found');
+    if (batch.status !== 'POSTED') {
+      throw new ConflictException('Only a posted batch can be reversed');
+    }
+
+    const entries = Array.isArray(batch.journal_entry_ids) ? batch.journal_entry_ids : [];
+    if (entries.length === 0) {
+      // Fall back to the source stamp, in case a batch was posted before this column existed.
+      const found = await withTenant(this.pool, orgId, (c) =>
+        c.query(
+          `SELECT id FROM journal_entries
+            WHERE organization_id = $1 AND source_type = 'payroll_batch' AND source_id = $2
+              AND status = 'POSTED'`,
+          [orgId, batchId],
+        ),
+      );
+      entries.push(...(found.rows as { id: string }[]).map((r) => r.id));
+    }
+
+    const reversed: string[] = [];
+    for (const entryId of entries) {
+      const result = await this.ledger.reverse(orgId, actorUserId, entryId, reason.trim());
+      reversed.push((result.reversal as { id?: string })?.id ?? entryId);
+    }
+
+    // Reversing the journal balances the books; it does not by itself move the money back out of
+    // the members' savings accounts, so that is done here — in the same place the posting put it
+    // in, and with the same refusal to overdraw: if a member has already spent it, an officer has
+    // to deal with that rather than the system quietly inventing a negative balance.
+    await withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT rows FROM payroll_batches WHERE organization_id = $1 AND id = $2`,
+        [orgId, batchId],
+      );
+      const postedRows = ((rows[0] as { rows: unknown } | undefined)?.rows ?? []) as {
+        memberId: string;
+        amount: number;
+      }[];
+
+      for (const row of postedRows) {
+        const account = await c.query(
+          `SELECT id, current_balance FROM member_savings_accounts
+            WHERE organization_id = $1 AND member_id = $2 AND status = 'ACTIVE'
+            ORDER BY opened_at LIMIT 1`,
+          [orgId, row.memberId],
+        );
+        const acc = account.rows[0] as { id: string; current_balance: string } | undefined;
+        if (!acc) continue;
+        const balance = round2(Number(acc.current_balance));
+        if (balance < round2(row.amount)) {
+          throw new ConflictException(
+            `Member ${row.memberId} has only ${balance} in savings; the ${row.amount} this batch ` +
+              'credited has already been used, so it must be resolved by hand',
+          );
+        }
+        const after = round2(balance - row.amount);
+        await c.query(
+          `UPDATE member_savings_accounts SET current_balance = $1
+            WHERE organization_id = $2 AND id = $3`,
+          [String(after), orgId, acc.id],
+        );
+        await c.query(
+          `INSERT INTO savings_transactions
+             (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
+           VALUES ($1, $2, $3, 'WITHDRAWAL', $4, $5)`,
+          [orgId, acc.id, reversed[0] ?? null, String(-round2(row.amount)), String(after)],
+        );
+      }
+    });
+
+    await withTenant(this.pool, orgId, async (c) => {
+      await c.query(
+        `UPDATE payroll_batches
+            SET status = 'REVERSED', reversed_by = $1, reversed_at = now(), reversal_reason = $4
+          WHERE organization_id = $2 AND id = $3`,
+        [actorUserId, orgId, batchId, reason.trim()],
+      );
+      await c.query(
+        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, 'payroll.reversed', 'payroll_batch', $3, $4::jsonb)`,
+        [
+          orgId,
+          actorUserId,
+          batchId,
+          JSON.stringify({ reason: reason.trim(), entriesReversed: reversed.length }),
+        ],
+      );
+    });
+    return { id: batchId, status: 'REVERSED', entriesReversed: reversed.length };
+  }
+
+  /** Batch history: what was uploaded, who submitted it, where it stands. */
+  async listBatches(
+    organizationId: string | null,
+    filters: { status?: string; limit?: number } = {},
+  ) {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT b.id, b.filename, b.kind, b.status, b.total_rows, b.valid_rows, b.total_amount,
+                b.created_at, b.submitted_at, b.approved_at, b.reversed_at, b.rejection_reason,
+                b.reversal_reason,
+                su.email AS submitted_by, au.email AS approved_by, cu.email AS created_by
+           FROM payroll_batches b
+           LEFT JOIN users su ON su.id = b.submitted_by
+           LEFT JOIN users au ON au.id = b.approved_by
+           LEFT JOIN users cu ON cu.id = b.created_by
+          WHERE ($1::text IS NULL OR b.status = $1)
+          ORDER BY b.created_at DESC
+          LIMIT $2`,
+        [filters.status ?? null, Math.min(filters.limit ?? 50, 200)],
+      );
+      return rows;
+    });
+  }
+
+  /** One batch, with the rows it would post. */
+  async batchDetail(organizationId: string | null, batchId: string) {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (c) => {
+      const { rows } = await c.query(
+        `SELECT id, filename, kind, status, total_rows, valid_rows, total_amount, rows,
+                created_at, submitted_at, approved_at, reversed_at, rejection_reason, reversal_reason
+           FROM payroll_batches WHERE organization_id = $1 AND id = $2`,
+        [orgId, batchId],
+      );
+      if (!rows[0]) throw new NotFoundException('Payroll batch not found');
+      return rows[0];
+    });
   }
 }

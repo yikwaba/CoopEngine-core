@@ -25,6 +25,7 @@ import { BranchesModule } from './branches/branches.module';
 import { GoalsModule } from './goals/goals.module';
 import { MigrationsModule } from './migrations/migrations.module';
 import { DatabaseModule } from './database/database.module';
+import { ApprovalsModule } from './approvals/approvals.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { DatabaseModule } from './database/database.module';
     GoalsModule,
     MigrationsModule,
     HealthModule,
+    ApprovalsModule,
   ],
 })
 export class AppModule {}

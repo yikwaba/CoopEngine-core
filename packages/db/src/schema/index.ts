@@ -729,6 +729,19 @@ export const payrollBatches = pgTable(
     createdBy: uuid('created_by').references(() => users.id, {
       onDelete: 'set null',
     }),
+    /** PENDING | PREVIEWED | SUBMITTED | POSTED | REJECTED | REVERSED */
+    submittedBy: uuid('submitted_by').references(() => users.id, { onDelete: 'set null' }),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }),
+    approvedBy: uuid('approved_by').references(() => users.id, { onDelete: 'set null' }),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    rejectedBy: uuid('rejected_by').references(() => users.id, { onDelete: 'set null' }),
+    rejectedAt: timestamp('rejected_at', { withTimezone: true }),
+    rejectionReason: text('rejection_reason'),
+    reversedBy: uuid('reversed_by').references(() => users.id, { onDelete: 'set null' }),
+    reversedAt: timestamp('reversed_at', { withTimezone: true }),
+    reversalReason: text('reversal_reason'),
+    /** The journal entries this batch created, so a reversal can undo exactly those. */
+    journalEntryIds: jsonb('journal_entry_ids').notNull().default(sql`'[]'::jsonb`),
     committedBy: uuid('committed_by').references(() => users.id, {
       onDelete: 'set null',
     }),

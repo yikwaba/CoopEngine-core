@@ -246,6 +246,13 @@
       "when": 1789597755116,
       "tag": "0034_backfill_unallocated_account",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1789600815717,
+      "tag": "0035_friendly_rhino",
+      "breakpoints": true
     }
   ]
 }

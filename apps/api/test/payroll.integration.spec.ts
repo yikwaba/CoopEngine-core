@@ -130,13 +130,45 @@ describe('payroll deduction import', () => {
     expect(preview.body.totals.totalAmount).toBe(35000);
     const batchId = preview.body.batchId as string;
 
-    // Commit -> member 2's account is auto-opened
+    // Commit now SUBMITS the batch: posting needs a second pair of eyes.
     const commit = await request(app.getHttpServer())
       .post('/api/v1/payroll/import/commit')
       .set(auth)
       .send({ batchId });
     expect(commit.status).toBe(200);
-    expect(commit.body).toMatchObject({ committed: 2, totalAmount: 35000 });
+    expect(commit.body.status).toBe('SUBMITTED');
+    expect(Number(commit.body.totalAmount)).toBe(35000);
+    expect(commit.body.members).toBe(2);
+
+    // The submitter cannot approve their own batch (segregation of duties)
+    const selfApprove = await request(app.getHttpServer())
+      .post(`/api/v1/payroll/batches/${batchId}/approve`)
+      .set(auth);
+    expect(selfApprove.status).toBe(409);
+    expect(String(selfApprove.body.message)).toMatch(/different user/i);
+
+    // A second officer approves and posts it atomically
+    const invited = await request(app.getHttpServer())
+      .post('/api/v1/users')
+      .set(auth)
+      .send({ email: `approver-${Date.now()}@coopengine.test`, roleCodes: ['COOP_ADMIN'] });
+    expect(invited.status).toBe(201);
+    const approverLogin = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({
+        email: invited.body.email,
+        password: invited.body.tempPassword,
+      });
+    expect(approverLogin.status).toBe(200);
+    const approverAuth = {
+      Authorization: ['Bearer', approverLogin.body.tokens.accessToken as string].join(' '),
+    };
+
+    const approved = await request(app.getHttpServer())
+      .post(`/api/v1/payroll/batches/${batchId}/approve`)
+      .set(approverAuth);
+    expect(approved.status).toBe(200);
+    expect(approved.body).toMatchObject({ committed: 2, totalAmount: 35000 });
 
     // Balances: m1 = 5000 + 15000 = 20000; m2 = 20000 (auto-opened)
     const a1 = await request(app.getHttpServer())
@@ -167,7 +199,7 @@ describe('payroll deduction import', () => {
     expect(debitTotal).toBe(35000);
     expect(creditTotal).toBe(35000);
 
-    // Double-commit -> 409
+    // Double-commit -> 409 (it has already been posted)
     const again = await request(app.getHttpServer())
       .post('/api/v1/payroll/import/commit')
       .set(auth)
@@ -182,5 +214,43 @@ describe('payroll deduction import', () => {
     expect(reconcile.body.checked).toBe(2);
     expect(reconcile.body.matched).toBe(2);
     expect(reconcile.body.mismatches).toEqual([]);
+
+    // Reversal: every entry the batch created is reversed, so balances go back
+    const reversed = await request(app.getHttpServer())
+      .post(`/api/v1/payroll/batches/${batchId}/reverse`)
+      .set(auth)
+      .send({ reason: 'Wrong month uploaded by mistake' });
+    expect(reversed.status).toBe(200);
+    expect(reversed.body).toMatchObject({ status: 'REVERSED' });
+    expect(reversed.body.entriesReversed).toBeGreaterThanOrEqual(1);
+
+    const backToStart = await request(app.getHttpServer())
+      .get(`/api/v1/savings/accounts/${account1Id}`)
+      .set(auth);
+    expect(backToStart.body.currentBalance).toBe(5000);
+
+    // A reversed batch cannot be reversed twice
+    const twice = await request(app.getHttpServer())
+      .post(`/api/v1/payroll/batches/${batchId}/reverse`)
+      .set(auth)
+      .send({ reason: 'again' });
+    expect(twice.status).toBe(409);
+
+    // The history shows where it ended up
+    const history = await request(app.getHttpServer())
+      .get('/api/v1/payroll/batches')
+      .set(auth);
+    expect(history.status).toBe(200);
+    const row = (history.body as { id: string; status: string }[]).find((b) => b.id === batchId);
+    expect(row?.status).toBe('REVERSED');
+
+    // And the books still balance after all of that
+    const trial = await request(app.getHttpServer())
+      .get('/api/v1/ledger/trial-balance')
+      .set(auth);
+    const rows = (trial.body.rows ?? trial.body) as { debit?: string; credit?: string }[];
+    const debit = rows.reduce((n, r) => n + Number(r.debit ?? 0), 0);
+    const credit = rows.reduce((n, r) => n + Number(r.credit ?? 0), 0);
+    expect(Math.round((debit - credit) * 100) / 100).toBe(0);
   });
 });
