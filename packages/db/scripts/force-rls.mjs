@@ -53,6 +53,8 @@ const TABLES = [
   'notification_templates',
   // SaaS administration: tenant-owned subscription rows (plans are a global catalogue)
   'subscriptions',
+  'payment_intents',
+  'provider_transactions',
 ];
 
 const BALANCED_JOURNAL_SQL = `

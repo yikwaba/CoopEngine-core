@@ -79,6 +79,9 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '2000', name: 'Member Savings Deposits', type: 'LIABILITY', category: 'Member Funds' },
   { code: '2010', name: 'Due to Members', type: 'LIABILITY', category: 'Member Funds' },
   { code: '2100', name: 'Accrued Expenses', type: 'LIABILITY', category: 'Liabilities' },
+  // Money that arrived from a member we could not identify yet. It is a liability — the
+  // cooperative owes it to whoever sent it — so a receipt never disappears into nowhere.
+  { code: '2990', name: 'Unallocated Receipts', type: 'LIABILITY', category: 'Member Funds' },
   { code: '3000', name: 'Member Share Capital', type: 'EQUITY', category: 'Capital' },
   { code: '3010', name: 'Retained Earnings', type: 'EQUITY', category: 'Capital' },
   { code: '3020', name: 'Current Year Earnings', type: 'EQUITY', category: 'Capital' },

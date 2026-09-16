@@ -1672,3 +1672,106 @@ export type Plan = typeof plans.$inferSelect;
 export type NewPlan = typeof plans.$inferInsert;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type NewSubscription = typeof subscriptions.$inferInsert;
+
+/* ------------------------------------------------------------------ *
+ * Payment reconciliation
+ *
+ * An intent is money the cooperative is expecting (a contribution, a repayment, a share
+ * purchase) with a reference the member can quote. A provider transaction is money that
+ * actually arrived. Reconciliation is the act of joining the two, and the exception queue is
+ * where the ones that do not join wait for a human.
+ * ------------------------------------------------------------------ */
+
+export const paymentIntents = pgTable(
+  'payment_intents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    /** SAVINGS_DEPOSIT | LOAN_REPAYMENT | SHARE_PURCHASE */
+    purpose: text('purpose').notNull().default('SAVINGS_DEPOSIT'),
+    /** what the member is asked to quote as the transfer narration */
+    reference: varchar('reference', { length: 64 }).notNull(),
+    expectedAmount: numeric('expected_amount', { precision: 19, scale: 2 }).notNull(),
+    receivedAmount: numeric('received_amount', { precision: 19, scale: 2 }).notNull().default('0'),
+    /** OPEN | PARTIAL | MATCHED | CANCELLED | EXPIRED */
+    status: text('status').notNull().default('OPEN'),
+    dueAt: timestamp('due_at', { withTimezone: true }),
+    notes: text('notes'),
+    createdBy: uuid('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    uniqueIndex('payment_intents_org_ref_uq').on(table.organizationId, table.reference),
+    index('payment_intents_org_status_idx').on(table.organizationId, table.status),
+  ],
+);
+
+export const providerTransactions = pgTable(
+  'provider_transactions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    /** MONNIFY | MANUAL — where this receipt came from */
+    provider: text('provider').notNull().default('MANUAL'),
+    /** the provider's own id: the anchor that makes a replayed webhook harmless */
+    providerReference: varchar('provider_reference', { length: 128 }).notNull(),
+    amount: numeric('amount', { precision: 19, scale: 2 }).notNull(),
+    currency: varchar('currency', { length: 3 }).notNull().default('NGN'),
+    payerName: varchar('payer_name', { length: 255 }),
+    payerAccount: varchar('payer_account', { length: 64 }),
+    narration: text('narration'),
+    virtualAccountNo: varchar('virtual_account_no', { length: 32 }),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    raw: jsonb('raw').notNull().default(sql`'{}'::jsonb`),
+    /** UNMATCHED | MATCHED | EXCEPTION */
+    status: text('status').notNull().default('UNMATCHED'),
+    exceptionReason: text('exception_reason'),
+    memberId: uuid('member_id').references(() => members.id, { onDelete: 'set null' }),
+    paymentIntentId: uuid('payment_intent_id').references(() => paymentIntents.id, {
+      onDelete: 'set null',
+    }),
+    /** the journal entry that moved the money */
+    journalEntryId: uuid('journal_entry_id'),
+    createdBy: uuid('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    pgPolicy('internal_scan', {
+      as: 'permissive',
+      for: 'select',
+      using: sql`nullif(current_setting('app.internal_scan', true), '') = 'on'`,
+    }),
+    uniqueIndex('provider_transactions_ref_uq').on(
+      table.organizationId,
+      table.provider,
+      table.providerReference,
+    ),
+    index('provider_transactions_org_status_idx').on(table.organizationId, table.status),
+  ],
+);
+
+export type PaymentIntent = typeof paymentIntents.$inferSelect;
+export type NewPaymentIntent = typeof paymentIntents.$inferInsert;
+export type ProviderTransaction = typeof providerTransactions.$inferSelect;
+export type NewProviderTransaction = typeof providerTransactions.$inferInsert;

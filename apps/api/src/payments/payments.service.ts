@@ -10,6 +10,7 @@ import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
+import { ReconciliationService } from './reconciliation.service';
 
 const DEV_SECRET = 'monnify-dev-secret';
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -41,7 +42,9 @@ interface MonnifyReservedAccountResponse {
 
 @Injectable()
 export class PaymentsService {
-  constructor(@Inject(DB_POOL) private readonly pool: Pool) {}
+  constructor(@Inject(DB_POOL) private readonly pool: Pool,
+    private readonly reconciliation: ReconciliationService,
+  ) {}
 
   private requireOrg(organizationId: string | null): string {
     if (!organizationId) {
@@ -193,6 +196,9 @@ export class PaymentsService {
   ): Promise<{
     acknowledged: boolean;
     paymentReference?: string;
+    matched?: boolean;
+    exception?: boolean;
+    reason?: string;
   }> {
     const accountNumber = String(payload.accountNumber ?? '');
     const paymentReference = String(payload.paymentReference ?? '');
@@ -231,125 +237,49 @@ export class PaymentsService {
     const memberId = orgRow.member_id;
     const accountRef = String(payload.accountReference ?? '');
 
-    let entryNo = 0;
+    // Hand the receipt to the reconciliation engine rather than posting it here. It resolves the
+    // member, honours any payment intent the member quoted, posts through the same services the
+    // counter uses, and parks anything unresolved in Unallocated Receipts. Keeping one posting
+    // path is what stops two of them disagreeing about what a member is owed.
+    const outcome: { matched: boolean; exception?: boolean; reason?: string } =
+      await this.reconciliation.recordTransaction(orgId, null, {
+      provider: 'MONNIFY',
+      providerReference: transactionReference || paymentReference,
+      amount: round2(amount),
+      payerName: String(payload.payerName ?? payload.customerName ?? '') || undefined,
+      payerAccount: String(payload.payerAccountNumber ?? '') || undefined,
+      narration: `${accountRef} ${String(payload.paymentDescription ?? '')}`.trim(),
+      virtualAccountNo: accountNumber,
+      receivedAt: paidAt.toISOString(),
+      raw: payload,
+    });
+
+    // Keep the provider's own record of what it told us, exactly as it told us: a reconciliation
+    // engine is only as good as the evidence behind it, and this is the evidence.
     await withTenant(this.pool, orgId, async (c) => {
-      const dup = await c.query(
-        `SELECT 1 FROM payment_notifications
-          WHERE organization_id = $1 AND payment_reference = $2`,
-        [orgId, paymentReference],
-      );
-      if (dup.rows[0]) {
-        return; // duplicate delivery — already posted
-      }
-      // Ensure an ACTIVE regular savings account exists (auto-open)
-      const product = await c.query(
-        `SELECT id FROM savings_products
-          WHERE organization_id = $1 AND code = 'REGULAR-SAVINGS'`,
-        [orgId],
-      );
-      const productId = (product.rows[0] as { id: string }).id;
-      const acc = await c.query(
-        `SELECT id, current_balance FROM member_savings_accounts
-          WHERE organization_id = $1 AND member_id = $2 AND status = 'ACTIVE'`,
-        [orgId, memberId],
-      );
-      let accountId: string;
-      if (acc.rows[0]) {
-        accountId = (acc.rows[0] as { id: string }).id;
-      } else {
-        accountId = randomUUID();
-        const seqNo = await c.query(
-          `UPDATE org_counters SET savings_seq = savings_seq + 1, updated_at = now()
-            WHERE organization_id = $1 RETURNING savings_seq`,
-          [orgId],
-        );
-        const accountNo = Number((seqNo.rows[0] as { savings_seq: string | number }).savings_seq);
-        await c.query(
-          `INSERT INTO member_savings_accounts (id, organization_id, member_id, product_id, account_no, status)
-           VALUES ($1, $2, $3, $4, $5, 'ACTIVE')`,
-          [accountId, orgId, memberId, productId, accountNo],
-        );
-      }
-
-      const period = await c.query(
-        `SELECT id FROM ledger_periods
-          WHERE organization_id = $1 AND status = 'OPEN' ORDER BY start_date DESC LIMIT 1`,
-        [orgId],
-      );
-      if (!period.rows[0]) throw new ConflictException('No OPEN ledger period');
-
-      const accRes = await c.query(
-        `SELECT id, code FROM chart_of_accounts
-          WHERE organization_id = $1 AND code = ANY($2::varchar[])`,
-        [orgId, ['1000', '2000']],
-      );
-      const idByCode = new Map<string, string>();
-      for (const r of accRes.rows as { id: string; code: string }[]) {
-        idByCode.set(r.code, r.id);
-      }
-
-      const seq = await c.query(
-        `UPDATE org_counters SET journal_seq = journal_seq + 1, updated_at = now()
-          WHERE organization_id = $1 RETURNING journal_seq`,
-        [orgId],
-      );
-      entryNo = Number((seq.rows[0] as { journal_seq: string | number }).journal_seq);
-
-      const entryId = randomUUID();
-      const notifId = randomUUID();
-      const amountStr = String(round2(amount));
-      await c.query(
-        `INSERT INTO journal_entries
-           (id, organization_id, period_id, entry_date, description, source,
-            source_type, source_id, status, entry_no, posted_at)
-         VALUES ($1, $2, $3, now()::date, $4, 'PAYMENT_COLLECTION', 'payment_notification', $5,
-                 'POSTED', $6, now())`,
-        [entryId, orgId, (period.rows[0] as { id: string }).id, `Monnify payment ${paymentReference}`, notifId, entryNo],
-      );
-      await c.query(
-        `INSERT INTO journal_lines (organization_id, journal_entry_id, account_id, debit, credit, member_id)
-         VALUES ($1, $2, $3, $4, '0', $5),
-                ($1, $2, $6, '0', $4, $5)`,
-        [orgId, entryId, idByCode.get('1000'), amountStr, memberId, idByCode.get('2000')],
-      );
-      const bal = await c.query(
-        `SELECT current_balance FROM member_savings_accounts
-          WHERE organization_id = $1 AND id = $2`,
-        [orgId, accountId],
-      );
-      const before = Number((bal.rows[0] as { current_balance: string }).current_balance);
-      const after = round2(before + amount);
-      await c.query(
-        `UPDATE member_savings_accounts SET current_balance = $1
-          WHERE organization_id = $2 AND id = $3`,
-        [String(after), orgId, accountId],
-      );
-      await c.query(
-        `INSERT INTO savings_transactions (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
-         VALUES ($1, $2, $3, 'DEPOSIT', $4, $5)`,
-        [orgId, accountId, entryId, amountStr, String(after)],
-      );
       await c.query(
         `INSERT INTO payment_notifications
-           (id, organization_id, member_id, account_reference, account_number,
-            payment_reference, transaction_reference, amount, paid_at, journal_entry_id, raw)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+           (organization_id, member_id, account_reference, account_number, payment_reference,
+            transaction_reference, amount, paid_at, status, journal_entry_id, raw)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+         ON CONFLICT DO NOTHING`,
         [
-          notifId,
           orgId,
           memberId,
-          accountRef,
+          accountRef || accountNumber,
           accountNumber,
           paymentReference,
-          transactionReference,
-          amountStr,
+          transactionReference || paymentReference,
+          String(round2(amount)),
           paidAt,
-          entryId,
+          outcome.matched ? 'POSTED' : 'FAILED',
+          (outcome as { journalEntryId?: string }).journalEntryId ?? null,
           JSON.stringify(payload),
         ],
       );
     });
-    return { acknowledged: true, paymentReference };
+
+    return { acknowledged: true, paymentReference, ...outcome };
   }
 
   async listNotifications(

@@ -232,6 +232,20 @@
       "when": 1789594977676,
       "tag": "0033_plans_and_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1789597726753,
+      "tag": "0034_payment_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1789597755116,
+      "tag": "0034_backfill_unallocated_account",
+      "breakpoints": true
     }
   ]
 }
