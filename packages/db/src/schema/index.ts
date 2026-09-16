@@ -1597,3 +1597,78 @@ export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type NewAuditLog = typeof auditLogs.$inferInsert;
+
+/* ------------------------------------------------------------------ *
+ * SaaS administration: plans and subscriptions
+ *
+ * A plan is a global catalogue row (like permissions): it is platform
+ * configuration, not tenant data, so it carries no organisation and no RLS.
+ * A subscription belongs to one cooperative, so it is tenant-scoped like every
+ * other tenant table — plus a narrow SELECT-only policy that lets the platform
+ * console read subscriptions across cooperatives, and nothing else.
+ * ------------------------------------------------------------------ */
+
+export const plans = pgTable(
+  'plans',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    code: varchar('code', { length: 40 }).notNull().unique(),
+    name: varchar('name', { length: 120 }).notNull(),
+    description: text('description'),
+    priceAmount: numeric('price_amount', { precision: 19, scale: 2 }).notNull().default('0'),
+    currency: varchar('currency', { length: 3 }).notNull().default('NGN'),
+    billingPeriod: text('billing_period').notNull().default('MONTHLY'),
+    /** null / absent = unlimited: maxMembers, maxBranches, maxUsers */
+    limits: jsonb('limits').notNull().default(sql`'{}'::jsonb`),
+    /** absent = allowed; false = the cooperative's plan does not include it */
+    features: jsonb('features').notNull().default(sql`'{}'::jsonb`),
+    isActive: boolean('is_active').notNull().default(true),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('plans_active_sort_idx').on(table.isActive, table.sortOrder)],
+);
+
+export const subscriptions = pgTable(
+  'subscriptions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    planId: uuid('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'restrict' }),
+    status: text('status').notNull().default('TRIAL'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    renewsAt: timestamp('renews_at', { withTimezone: true }),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      for: 'all',
+      using: tenantScope(table.organizationId),
+      withCheck: tenantScope(table.organizationId),
+    }),
+    pgPolicy('internal_scan', {
+      as: 'permissive',
+      for: 'select',
+      using: sql`nullif(current_setting('app.internal_scan', true), '') = 'on'`,
+    }),
+    index('subscriptions_org_idx').on(table.organizationId),
+    /** one live subscription per cooperative; cancelled history is kept */
+    uniqueIndex('subscriptions_live_org_uq')
+      .on(table.organizationId)
+      .where(sql`status <> 'CANCELLED'`),
+  ],
+);
+
+export type Plan = typeof plans.$inferSelect;
+export type NewPlan = typeof plans.$inferInsert;
+export type Subscription = typeof subscriptions.$inferSelect;
+export type NewSubscription = typeof subscriptions.$inferInsert;

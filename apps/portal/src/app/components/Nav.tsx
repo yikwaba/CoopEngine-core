@@ -21,6 +21,7 @@ const LINKS = [
   { href: '/audit', label: 'Audit' },
   { href: '/interest', label: 'Interest' },
   { href: '/users', label: 'Users' },
+  { href: '/admin/tenants', label: 'Cooperatives' },
 ];
 
 export default function Nav() {

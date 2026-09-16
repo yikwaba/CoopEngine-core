@@ -1,3 +1,14 @@
+-- Co-opEngine — one-off data repair (NOT a drizzle-managed migration).
+-- Applied to the development database on 13 Sep 2026 while fixing the journal-numbering
+-- fault: the opening-balance import allocated entry numbers without advancing
+-- org_counters.journal_seq, so the next deposit or repayment collided with a number the
+-- batch already held. The permanent fix is in code (opening-balances.service.ts now uses
+-- the same atomic allocator as every other money path); this statement reconciles
+-- cooperatives that were migrated before that fix, and is safe to re-run.
+--
+-- Kept out of the numbered sequence on purpose: it carries no schema change and was applied
+-- by hand, so drizzle-kit must not treat it as a journaled migration.
+
 -- Reconcile org_counters.journal_seq with the highest entry number actually used.
 --
 -- The opening-balance migration allocated journal numbers with max(entry_no)+1 and

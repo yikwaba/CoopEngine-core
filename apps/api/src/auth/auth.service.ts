@@ -227,6 +227,13 @@ export class AuthService {
       if (!org) {
         throw new UnauthorizedException('Not a member of that organization');
       }
+      // A suspended cooperative cannot be signed into at all — the platform operator's only
+      // lever that takes effect immediately, without touching the tenant's data.
+      if (org.status === 'SUSPENDED') {
+        throw new ForbiddenException(
+          'This cooperative account is suspended. Contact the platform operator.',
+        );
+      }
       organizationId = org.id;
       contextRows = rows.filter((r) => r.organization_id === organizationId);
       // Organisation MFA policy: a cooperative that requires staff MFA refuses sign-in until
@@ -653,15 +660,15 @@ export class AuthService {
   private async findOrgBySlug(
     orgIds: string[],
     slug: string,
-  ): Promise<{ id: string; name: string; slug: string } | null> {
+  ): Promise<{ id: string; name: string; slug: string; status: string } | null> {
     for (const orgId of orgIds) {
       const org = await withTenant(this.pool, orgId, async (c) => {
         const res = await c.query(
-          `SELECT id, name, slug FROM organizations WHERE id = $1 AND slug = $2`,
+          `SELECT id, name, slug, status FROM organizations WHERE id = $1 AND slug = $2`,
           [orgId, slug],
         );
         return res.rows[0] as
-          | { id: string; name: string; slug: string }
+          | { id: string; name: string; slug: string; status: string }
           | undefined;
       });
       if (org) return org;

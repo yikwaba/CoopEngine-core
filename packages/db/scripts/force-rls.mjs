@@ -51,6 +51,8 @@ const TABLES = [
   'opening_balance_batches',
   'opening_balance_rows',
   'notification_templates',
+  // SaaS administration: tenant-owned subscription rows (plans are a global catalogue)
+  'subscriptions',
 ];
 
 const BALANCED_JOURNAL_SQL = `

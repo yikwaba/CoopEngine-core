@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { IsUUID } from 'class-validator';
 import { PayrollService } from './payroll.service';
+import { PlanLimitsService } from '../admin/plan-limits.service';
 import { PreviewImportDto } from '../members/dto/import-member.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -23,7 +24,9 @@ class CommitBatchDto {
 @Controller('payroll/import')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class PayrollController {
-  constructor(private readonly payrollService: PayrollService) {}
+  constructor(private readonly payrollService: PayrollService,
+    private readonly planLimits: PlanLimitsService,
+  ) {}
 
   @Post('preview')
   @RequirePermissions('payroll.upload')
@@ -41,10 +44,11 @@ export class PayrollController {
   @Post('commit')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('payroll.post')
-  commit(
+  async commit(
     @CurrentUser() principal: AuthPrincipal,
     @Body() dto: CommitBatchDto,
   ) {
+    await this.planLimits.assertFeature(principal.organizationId, 'payroll');
     return this.payrollService.commit(
       principal.organizationId,
       principal.userId,

@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
+import { PlanLimitsService } from '../admin/plan-limits.service';
 import { parseCsv } from './csv';
 
 export const MEMBER_CSV_HEADERS = [
@@ -108,7 +109,9 @@ function validateRowData(
 
 @Injectable()
 export class MemberImportService {
-  constructor(@Inject(DB_POOL) private readonly pool: Pool) {}
+  constructor(@Inject(DB_POOL) private readonly pool: Pool,
+    private readonly planLimits: PlanLimitsService,
+  ) {}
 
   private requireOrg(organizationId: string | null): string {
     if (!organizationId) {
@@ -261,6 +264,10 @@ export class MemberImportService {
         (r): r is ImportPreviewRow & { data: ImportedMemberData } =>
           r.data !== undefined && r.errors === undefined,
       );
+
+      // Enforce the cooperative's member limit against this whole batch, not one member at a
+      // time — a bulk import is exactly how a cooperative would otherwise walk past its plan.
+      await this.planLimits.assertCanAddMembers(orgId, validRows.length);
 
       const created: { id: string; memberNo: number }[] = [];
       for (const row of validRows) {

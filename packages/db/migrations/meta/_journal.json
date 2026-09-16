@@ -225,6 +225,13 @@
       "when": 1789163717381,
       "tag": "0031_notification_templates",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1789594977676,
+      "tag": "0033_plans_and_subscriptions",
+      "breakpoints": true
     }
   ]
 }

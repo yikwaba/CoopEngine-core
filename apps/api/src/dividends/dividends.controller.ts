@@ -15,6 +15,7 @@ import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
 import { DividendsService } from './dividends.service';
+import { PlanLimitsService } from '../admin/plan-limits.service';
 
 class DividendPostDto {
   @IsOptional()
@@ -30,7 +31,9 @@ class DividendPostDto {
 @Controller('dividends')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class DividendsController {
-  constructor(private readonly dividendsService: DividendsService) {}
+  constructor(private readonly dividendsService: DividendsService,
+    private readonly planLimits: PlanLimitsService,
+  ) {}
 
   @Get('preview')
   @RequirePermissions('dividends.view', 'reports.view')
@@ -44,7 +47,8 @@ export class DividendsController {
 
   @Post('post')
   @RequirePermissions('dividends.post')
-  post(@CurrentUser() user: AuthPrincipal, @Body() dto: DividendPostDto) {
+  async post(@CurrentUser() user: AuthPrincipal, @Body() dto: DividendPostDto) {
+    await this.planLimits.assertFeature(user.organizationId, 'dividends');
     return this.dividendsService.post(
       user.organizationId,
       user.userId,

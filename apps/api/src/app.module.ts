@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { SettingsModule } from './settings/settings.module';
+import { AdminModule } from './admin/admin.module';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { OrganizationsModule } from './organizations/organizations.module';
@@ -28,6 +29,7 @@ import { DatabaseModule } from './database/database.module';
 @Module({
   imports: [
     SettingsModule,
+    AdminModule,
     DatabaseModule,
     AuthModule,
     OrganizationsModule,

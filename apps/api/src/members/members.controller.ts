@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { MembersService, MemberRow, NextOfKinRow } from './members.service';
+import { PlanLimitsService } from '../admin/plan-limits.service';
 import {
   MemberImportService,
   ImportPreviewResult,
@@ -42,14 +43,17 @@ export class MembersController {
   constructor(
     private readonly membersService: MembersService,
     private readonly memberImportService: MemberImportService,
+    private readonly planLimits: PlanLimitsService,
   ) {}
 
   @Post()
   @RequirePermissions('members.create')
-  create(
+  async create(
     @CurrentUser() principal: AuthPrincipal,
     @Body() dto: CreateMemberDto,
   ): Promise<MemberRow> {
+    // A cooperative on a plan with a member limit cannot grow past it.
+    await this.planLimits.assertCanAddMembers(principal.organizationId, 1);
     return this.membersService.create(
       principal.organizationId,
       principal.userId,

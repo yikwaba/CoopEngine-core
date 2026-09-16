@@ -42,6 +42,18 @@ if [ "$FAST" -eq 0 ]; then
   else
     echo "skipped (no DATABASE_URL)"
   fi
+
+  # Each spec onboards cooperatives with generated slugs and removes its users but not its
+  # cooperatives, so a development database grows a few hundred of them. Clear them here, where
+  # the suite can see them, instead of leaving the operator to wonder what the console shows.
+  if [ -n "$DBURL" ] && [ -x scripts/clean-test-tenants.sh ]; then
+    step "clearing the cooperatives the suite created"
+    if DATABASE_URL="$DBURL" bash scripts/clean-test-tenants.sh --apply >/tmp/verify-clean.log 2>&1; then
+      tail -1 /tmp/verify-clean.log | sed 's/^/  /'
+    else
+      echo "  (skipped, see /tmp/verify-clean.log)"
+    fi
+  fi
 fi
 
 step "build (all workspaces)"

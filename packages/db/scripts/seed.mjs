@@ -270,6 +270,58 @@ async function main() {
     );
   }
 
+
+  // 4b. Subscription plans (platform catalogue — editable in the admin console)
+  //
+  // Prices and limits are examples, not commercial terms: a cooperative's plan is changed with
+  // PATCH /admin/plans/:id, and nothing here is enforced until a subscription is assigned.
+  const SUBSCRIPTION_PLANS = [
+    {
+      code: 'STARTER',
+      name: 'Starter',
+      description: 'One branch, up to 250 members. Manual collections at the counter.',
+      price: '15000.00',
+      limits: { maxMembers: 250, maxBranches: 1, maxUsers: 5 },
+      features: { payroll: false, dividends: true, bulk: true, openingBalances: true },
+      sort: 10,
+    },
+    {
+      code: 'GROWTH',
+      name: 'Growth',
+      description: 'Up to 5 branches and 2,000 members, with payroll and bulk posting.',
+      price: '35000.00',
+      limits: { maxMembers: 2000, maxBranches: 5, maxUsers: 25 },
+      features: { payroll: true, dividends: true, bulk: true, openingBalances: true },
+      sort: 20,
+    },
+    {
+      code: 'ENTERPRISE',
+      name: 'Enterprise',
+      description: 'Unlimited branches and members, with payroll, dividends and bulk posting.',
+      price: '75000.00',
+      limits: {},
+      features: { payroll: true, dividends: true, bulk: true, openingBalances: true },
+      sort: 30,
+    },
+  ];
+
+  for (const plan of SUBSCRIPTION_PLANS) {
+    await pool.query(
+      `INSERT INTO plans (code, name, description, price_amount, billing_period, limits, features, sort_order)
+       VALUES ($1, $2, $3, $4, 'MONTHLY', $5::jsonb, $6::jsonb, $7)
+       ON CONFLICT (code) DO UPDATE
+         SET name = EXCLUDED.name,
+             description = EXCLUDED.description,
+             price_amount = EXCLUDED.price_amount,
+             limits = EXCLUDED.limits,
+             features = EXCLUDED.features,
+             sort_order = EXCLUDED.sort_order,
+             updated_at = now()`,
+      [plan.code, plan.name, plan.description, plan.price, JSON.stringify(plan.limits), JSON.stringify(plan.features), plan.sort],
+    );
+  }
+  console.log(`seeded subscription plans: ${SUBSCRIPTION_PLANS.map((p) => p.code).join(', ')}`);
+
   // 4. Dev SaaS admin user
   const { rows: existing } = await pool.query(
     `SELECT id FROM users WHERE email = $1`,
