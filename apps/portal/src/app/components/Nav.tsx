@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 const LINKS = [
   { href: '/front-desk', label: 'Front desk' },
   { href: '/', label: 'Dashboard' },
+  { href: '/approvals', label: 'Needs a decision' },
   { href: '/members', label: 'Members' },
   { href: '/loans', label: 'Loans' },
   { href: '/products', label: 'Products' },
@@ -22,6 +23,7 @@ const LINKS = [
   { href: '/interest', label: 'Interest' },
   { href: '/users', label: 'Users' },
   { href: '/admin/tenants', label: 'Cooperatives' },
+  { href: '/security', label: 'Security' },
 ];
 
 export default function Nav() {
