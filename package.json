@@ -9,6 +9,8 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
+    "verify:migrations": "node scripts/verify-migrations.mjs",
+    "verify:repo": "pnpm verify:migrations",
     "dev": "turbo run dev --parallel",
     "db:generate": "pnpm --filter @coopengine/db db:generate",
     "db:migrate": "pnpm --filter @coopengine/db db:migrate"

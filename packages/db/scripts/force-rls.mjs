@@ -58,9 +58,10 @@ const TABLES = [
 ];
 
 const BALANCED_JOURNAL_SQL = `
-CREATE OR REPLACE FUNCTION assert_balanced_journal()
+CREATE OR REPLACE FUNCTION public.assert_balanced_journal()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = ''
 AS $$
 DECLARE
   bad bigint;
@@ -69,7 +70,7 @@ BEGIN
     INTO bad
     FROM (
       SELECT jl.journal_entry_id
-        FROM journal_lines jl
+        FROM public.journal_lines jl
        GROUP BY jl.journal_entry_id
       HAVING count(*) < 2
           OR sum(jl.debit) <> sum(jl.credit)
@@ -82,11 +83,11 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_journal_lines_balanced ON journal_lines;
+DROP TRIGGER IF EXISTS trg_journal_lines_balanced ON public.journal_lines;
 CREATE TRIGGER trg_journal_lines_balanced
-AFTER INSERT OR UPDATE OR DELETE ON journal_lines
+AFTER INSERT OR UPDATE OR DELETE ON public.journal_lines
 FOR EACH STATEMENT
-EXECUTE FUNCTION assert_balanced_journal();
+EXECUTE FUNCTION public.assert_balanced_journal();
 `;
 
 const url =

@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint · Typecheck · Test · Build
+    name: Repository · Typecheck · Test · Build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -28,6 +28,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify repository invariants
+        run: pnpm verify:repo
 
       # Workspace typechecking resolves @coopengine/* declarations from their
       # built dist, so packages are built before typechecking.

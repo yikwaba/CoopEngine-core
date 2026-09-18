@@ -253,6 +253,13 @@
       "when": 1789600815717,
       "tag": "0035_friendly_rhino",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789755000000,
+      "tag": "0036_harden_balanced_journal_search_path",
+      "breakpoints": true
     }
   ]
 }
