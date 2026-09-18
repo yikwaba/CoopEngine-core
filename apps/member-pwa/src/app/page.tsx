@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import {
   apiFetch,
   clearMemberSession,
+  logoutMemberSession,
   readMemberInfo,
   readMemberToken,
 } from '../lib/api';
@@ -238,16 +239,19 @@ export default function MemberDashboardPage() {
       });
   }
 
-  function signOut(): void {
-    clearMemberSession();
-    router.replace('/login');
+  async function signOut(): Promise<void> {
+    try {
+      await logoutMemberSession();
+    } finally {
+      router.replace('/login');
+    }
   }
 
   if (error) {
     return (
       <main style={{ padding: 24 }}>
         <p>{error}</p>
-        <button className="btn secondary" onClick={signOut}>
+        <button className="btn secondary" onClick={() => void signOut()}>
           Back to sign in
         </button>
       </main>
@@ -278,7 +282,7 @@ export default function MemberDashboardPage() {
           <button onClick={refresh} style={{ fontSize: 13, padding: '6px 10px' }}>
             ↻
           </button>
-          <button onClick={signOut} style={{ fontSize: 13, padding: '6px 10px' }}>
+          <button onClick={() => void signOut()} style={{ fontSize: 13, padding: '6px 10px' }}>
             Sign out
           </button>
         </div>

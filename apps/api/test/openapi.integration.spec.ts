@@ -64,6 +64,7 @@ describe('OpenAPI contract', () => {
       // member self-service
       '/api/v1/auth/member/request-otp',
       '/api/v1/auth/member/verify-otp',
+      '/api/v1/auth/member/logout',
       '/api/v1/member/dashboard',
       '/api/v1/member/virtual-account',
       '/api/v1/member/payments',

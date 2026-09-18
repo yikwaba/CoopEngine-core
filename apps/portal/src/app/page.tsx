@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import {
   apiFetch,
   clearSession,
+  logoutSession,
   readToken,
   API_BASE,
 } from '../lib/api';
@@ -72,16 +73,19 @@ export default function DashboardPage() {
     };
   }, [router]);
 
-  function signOut(): void {
-    clearSession();
-    router.replace('/login');
+  async function signOut(): Promise<void> {
+    try {
+      await logoutSession();
+    } finally {
+      router.replace('/login');
+    }
   }
 
   if (error) {
     return (
       <main style={{ padding: 40 }}>
         <p>{error}</p>
-        <button className="btn secondary" onClick={signOut}>
+        <button className="btn secondary" onClick={() => void signOut()}>
           Back to sign in
         </button>
       </main>
@@ -104,7 +108,7 @@ export default function DashboardPage() {
             API: {API_BASE}
           </p>
         </div>
-        <button className="btn secondary" onClick={signOut}>
+        <button className="btn secondary" onClick={() => void signOut()}>
           Sign out
         </button>
       </header>

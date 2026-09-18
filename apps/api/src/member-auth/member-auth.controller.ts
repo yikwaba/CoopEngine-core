@@ -63,4 +63,12 @@ export class MemberAuthController {
     setSessionCookies(res, { accessToken: session.accessToken }, ENV.jwtAccessTtlSeconds);
     return session;
   }
+
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  logout(@Res({ passthrough: true }) res: Response): void {
+    // Member access tokens are deliberately short-lived and are not backed by a refresh session.
+    // Removing the httpOnly cookies ends the browser session without exposing the token to JS.
+    clearSessionCookies(res);
+  }
 }

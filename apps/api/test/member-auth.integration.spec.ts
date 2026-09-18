@@ -131,6 +131,11 @@ describe('member self-service access', () => {
     const memberToken = ok.body.accessToken as string;
     expect(ok.body.member.memberNo).toBeGreaterThanOrEqual(1);
 
+    const accessCookie = (ok.headers['set-cookie'] as unknown as string[] | undefined)?.find((line) =>
+      line.startsWith('ce_at='),
+    );
+    expect(accessCookie).toBeTruthy();
+
     // Member dashboard: own balances only
     const dash = await request(app.getHttpServer())
       .get('/api/v1/member/dashboard')
@@ -166,5 +171,13 @@ describe('member self-service access', () => {
       .send({ organizationSlug: coop.slug, email: `ghost-${randomUUID().slice(0, 6)}@coopengine.test` });
     expect(unknown.status).toBe(200);
     expect(unknown.body.devCode).toBeUndefined();
+
+    const logout = await request(app.getHttpServer())
+      .post('/api/v1/auth/member/logout')
+      .set('Cookie', accessCookie as string);
+    expect(logout.status).toBe(204);
+    const cleared = logout.headers['set-cookie'] as unknown as string[] | undefined;
+    expect(cleared?.some((line) => line.startsWith('ce_at='))).toBe(true);
+    expect(cleared?.some((line) => /Expires=Thu, 01 Jan 1970|Max-Age=0/i.test(line))).toBe(true);
   });
 });

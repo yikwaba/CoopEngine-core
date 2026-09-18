@@ -63,6 +63,15 @@ export function clearMemberSession(): void {
   localStorage.removeItem(MEMBER_SESSION_MARKER);
 }
 
+/** Clear the API's httpOnly cookie as well as the local signed-in marker. */
+export async function logoutMemberSession(): Promise<void> {
+  try {
+    await apiFetch<void>('/auth/member/logout', undefined, { method: 'POST', body: '{}' });
+  } finally {
+    clearMemberSession();
+  }
+}
+
 export const MEMBER_SESSION_MARKER = 'coopengine_member_session';
 
 /** Non-null when a session is believed to exist; the cookie itself is invisible here. */
@@ -91,8 +100,8 @@ export function readMemberInfo(): {
 
 /** Fetch a PDF with the member's token and hand it to the browser as a download. */
 export async function downloadMemberPdf(path: string, filename: string): Promise<void> {
-  const token = readMemberToken();
   const res = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
     cache: 'no-store',
   });
   if (!res.ok) {

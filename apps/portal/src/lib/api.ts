@@ -81,6 +81,18 @@ export function clearSession(): void {
   localStorage.removeItem(SESSION_MARKER);
 }
 
+/**
+ * End the server-side session before removing the browser's local marker.
+ * Clearing localStorage alone does not remove an httpOnly cookie and therefore is not logout.
+ */
+export async function logoutSession(): Promise<void> {
+  try {
+    await apiFetch<void>('/auth/logout', undefined, { method: 'POST', body: '{}' });
+  } finally {
+    clearSession();
+  }
+}
+
 export function readToken(): string | null {
   if (typeof window === 'undefined') return null;
   localStorage.removeItem(TOKEN_KEY);
