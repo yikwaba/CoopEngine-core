@@ -274,6 +274,13 @@
       "when": 1790706433665,
       "tag": "0039_approval_engine",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1790708985077,
+      "tag": "0040_approval_policy_band_versioning",
+      "breakpoints": true
     }
   ]
 }

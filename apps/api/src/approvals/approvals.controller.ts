@@ -46,6 +46,16 @@ class CreateApprovalRequestDto {
   payload?: Record<string, unknown>;
 }
 
+class DecideApprovalRequestDto {
+  @IsIn(['APPROVE', 'REJECT'])
+  decision!: 'APPROVE' | 'REJECT';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comment?: string;
+}
+
 @Controller('approvals')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class ApprovalsController {
@@ -62,6 +72,17 @@ export class ApprovalsController {
     @Body() dto: CreateApprovalRequestDto,
   ) {
     return this.approvals.createRequest(principal.organizationId, principal.userId, dto);
+  }
+
+  @Post('requests/:id/decisions')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('savings.approve', 'payroll.approve', 'loans.approve', 'ledger.approve')
+  decideRequest(
+    @CurrentUser() principal: AuthPrincipal,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: DecideApprovalRequestDto,
+  ) {
+    return this.approvals.decideRequest(principal.organizationId, principal.userId, id, dto);
   }
 
   /** Everything waiting for a decision, with what this caller can act on. */

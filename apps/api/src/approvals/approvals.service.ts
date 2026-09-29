@@ -1,4 +1,4 @@
-import { Inject, Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
@@ -204,6 +204,195 @@ export class ApprovalsService {
           approverUserId: step.approver_user_id,
           status: 'PENDING',
         })),
+      };
+    });
+  }
+
+  /** Decide only the current step, as the role or named user frozen on it. */
+  async decideRequest(
+    organizationId: string | null,
+    actorUserId: string,
+    requestId: string,
+    input: { decision: 'APPROVE' | 'REJECT'; comment?: string },
+  ) {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (client) => {
+      const found = await client.query<{
+        id: string;
+        status: string;
+        current_step: number;
+        total_steps: number;
+        requested_by: string;
+        kind: string;
+      }>(
+        `SELECT id, status, current_step, total_steps, requested_by, kind
+           FROM approval_requests
+          WHERE organization_id = $1 AND id = $2
+          FOR UPDATE`,
+        [orgId, requestId],
+      );
+      if (found.rowCount !== 1) throw new NotFoundException('Approval request not found');
+      const approval = found.rows[0]!;
+      if (approval.status !== 'PENDING') {
+        throw new ConflictException(`Approval request is already ${approval.status}`);
+      }
+      if (approval.requested_by === actorUserId) {
+        throw new ConflictException('You raised this request; a different user must approve it');
+      }
+
+      const stepResult = await client.query<{
+        id: string;
+        step_no: number;
+        approver_role_code: string | null;
+        approver_user_id: string | null;
+        status: string;
+      }>(
+        `SELECT id, step_no, approver_role_code, approver_user_id, status
+           FROM approval_steps
+          WHERE organization_id = $1 AND request_id = $2 AND step_no = $3
+          FOR UPDATE`,
+        [orgId, requestId, approval.current_step],
+      );
+      if (stepResult.rowCount !== 1) {
+        throw new ConflictException(`Approval request has no step ${approval.current_step}`);
+      }
+      const step = stepResult.rows[0]!;
+      if (step.status !== 'PENDING') {
+        throw new ConflictException(`Approval step ${step.step_no} is already ${step.status}`);
+      }
+
+      let authorized = step.approver_user_id === actorUserId;
+      let delegatedFrom: string | null = null;
+      if (!authorized && step.approver_role_code) {
+        const role = await client.query(
+          `SELECT 1
+             FROM user_roles ur
+             JOIN roles r ON r.id = ur.role_id
+            WHERE ur.organization_id = $1
+              AND ur.user_id = $2
+              AND r.code = $3
+            LIMIT 1`,
+          [orgId, actorUserId, step.approver_role_code],
+        );
+        authorized = role.rowCount === 1;
+      }
+      if (!authorized && step.approver_user_id) {
+        const delegation = await client.query(
+          `SELECT id
+             FROM approval_delegations
+            WHERE organization_id = $1
+              AND from_user_id = $2
+              AND to_user_id = $3
+              AND is_active = true
+              AND valid_from <= now()
+              AND (valid_to IS NULL OR valid_to >= now())
+              AND (kind IS NULL OR kind = $4)
+            ORDER BY valid_from DESC
+            LIMIT 1`,
+          [orgId, step.approver_user_id, actorUserId, approval.kind],
+        );
+        if (delegation.rowCount === 1) {
+          authorized = true;
+          delegatedFrom = step.approver_user_id;
+        }
+      }
+      if (!authorized) {
+        const required = step.approver_user_id
+          ? 'the named approver or their active delegate'
+          : `the ${step.approver_role_code} role`;
+        throw new ForbiddenException(`Current approval step requires ${required}`);
+      }
+      if (delegatedFrom) {
+        await client.query(
+          `INSERT INTO approval_actions
+             (organization_id, request_id, step_no, actor_user_id, action, comment)
+           VALUES ($1, $2, $3, $4, 'DELEGATE', $5)`,
+          [
+            orgId,
+            requestId,
+            step.step_no,
+            actorUserId,
+            `Acting under active delegation from user ${delegatedFrom}`,
+          ],
+        );
+      }
+
+      if (input.decision === 'REJECT') {
+        await client.query(
+          `UPDATE approval_steps
+              SET status = 'REJECTED', acted_by = $1, acted_at = now(), comment = $2
+            WHERE id = $3`,
+          [actorUserId, input.comment ?? null, step.id],
+        );
+        await client.query(
+          `INSERT INTO approval_actions
+             (organization_id, request_id, step_no, actor_user_id, action, comment)
+           VALUES ($1, $2, $3, $4, 'REJECT', $5)`,
+          [orgId, requestId, step.step_no, actorUserId, input.comment ?? null],
+        );
+        await client.query(
+          `UPDATE approval_requests
+              SET status = 'REJECTED', decided_at = now(), decided_by = $1
+            WHERE id = $2`,
+          [actorUserId, requestId],
+        );
+        return {
+          id: requestId,
+          status: 'REJECTED',
+          currentStep: approval.current_step,
+          decidedStep: step.step_no,
+          nextApproverRoleCode: null,
+        };
+      }
+
+      await client.query(
+        `UPDATE approval_steps
+            SET status = 'APPROVED', acted_by = $1, acted_at = now(), comment = $2
+          WHERE id = $3`,
+        [actorUserId, input.comment ?? null, step.id],
+      );
+      await client.query(
+        `INSERT INTO approval_actions
+           (organization_id, request_id, step_no, actor_user_id, action, comment)
+         VALUES ($1, $2, $3, $4, 'APPROVE', $5)`,
+        [orgId, requestId, step.step_no, actorUserId, input.comment ?? null],
+      );
+
+      if (step.step_no === approval.total_steps) {
+        await client.query(
+          `UPDATE approval_requests
+              SET status = 'APPROVED', decided_at = now(), decided_by = $1
+            WHERE id = $2`,
+          [actorUserId, requestId],
+        );
+        return {
+          id: requestId,
+          status: 'APPROVED',
+          currentStep: approval.current_step,
+          decidedStep: step.step_no,
+          nextApproverRoleCode: null,
+        };
+      }
+
+      const nextStepNo = step.step_no + 1;
+      await client.query(`UPDATE approval_requests SET current_step = $1 WHERE id = $2`, [
+        nextStepNo,
+        requestId,
+      ]);
+      const next = await client.query<{ approver_role_code: string | null }>(
+        `SELECT approver_role_code FROM approval_steps
+          WHERE organization_id = $1 AND request_id = $2 AND step_no = $3`,
+        [orgId, requestId, nextStepNo],
+      );
+      if (next.rowCount !== 1) {
+        throw new ConflictException(`Approval chain is missing step ${nextStepNo}`);
+      }
+      return {
+        id: requestId,
+        status: 'PENDING',
+        currentStep: nextStepNo,
+        decidedStep: step.step_no,
+        nextApproverRoleCode: next.rows[0]!.approver_role_code,
       };
     });
   }
