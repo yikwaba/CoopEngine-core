@@ -304,8 +304,8 @@ async function main() {
       sort: 30,
     },
     {
-      code: 'ENTERPRISE',
-      name: 'Enterprise',
+      code: 'PROFESSIONAL',
+      name: 'Professional',
       priceAmount: '0.00',
       billingPeriod: 'MONTHLY',
       limits: {},

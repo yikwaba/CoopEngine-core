@@ -267,6 +267,13 @@
       "when": 1790690820285,
       "tag": "0037_ledger_guard_refinements",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1790700351335,
+      "tag": "0038_ledger_immutability_restored",
+      "breakpoints": true
     }
   ]
 }
