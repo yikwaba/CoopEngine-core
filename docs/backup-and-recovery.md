@@ -52,3 +52,13 @@ recovered; `sum(debit) = sum(credit)` held in the restored copy.
    that prune the local disk would have filled in about 17 days. Backblaze is the archive of record.
 3. There is still no off-host automation that *invents* the recovery host; recovery is run by hand
    with the script above.
+
+## A silent failure this drill exposed
+
+The WAL-shipping timer never worked: `rclone` refuses `--quiet` together with `--log-level`, so every
+run exited immediately with `CRITICAL: Can't set -q and --log-level`. The offsite objects that appeared
+during this work came from manual copies, not from the scheduled job. Fixed by dropping `--quiet`;
+both `wal/` and `base/` prefixes now verify after a scripted run.
+
+Lesson recorded: **verify a timer's effect, not just its existence.** A timer that runs and fails
+looks identical to a timer that runs and succeeds until you check the destination.
