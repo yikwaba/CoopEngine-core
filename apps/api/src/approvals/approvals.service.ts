@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
@@ -85,6 +85,128 @@ export class ApprovalsService {
     JOURNAL: 'ledger.approve',
     PAYROLL: 'payroll.approve',
   };
+
+  /**
+   * Raise a request against exactly one active policy and snapshot its steps.
+   *
+   * Policy selection is deliberately strict. A gap or overlap is a configuration
+   * error and blocks the transaction: silently auto-approving, or arbitrarily
+   * choosing one of two policies, would turn bad configuration into money movement.
+   */
+  async createRequest(
+    organizationId: string | null,
+    requesterUserId: string,
+    input: {
+      kind: 'WITHDRAWAL' | 'PAYROLL' | 'LOAN' | 'JOURNAL' | 'EXPENSE';
+      entityType: string;
+      entityId: string;
+      amount: number;
+      summary?: string;
+      payload?: Record<string, unknown>;
+    },
+  ) {
+    const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool, orgId, async (client) => {
+      const matched = await client.query<{
+        id: string;
+        version: number;
+      }>(
+        `SELECT id, version
+           FROM approval_policies
+          WHERE organization_id = $1
+            AND kind = $2
+            AND is_active = true
+            AND min_amount <= $3::numeric
+            AND (max_amount IS NULL OR max_amount >= $3::numeric)
+          ORDER BY version DESC, created_at DESC
+          FOR UPDATE`,
+        [orgId, input.kind, input.amount],
+      );
+
+      if (matched.rowCount !== 1) {
+        const reason = matched.rowCount === 0 ? 'no active policy covers this amount' : 'active policies overlap';
+        throw new ConflictException(
+          `Approval policy configuration error for ${input.kind} at NGN ${input.amount}: ${reason}`,
+        );
+      }
+      const policy = matched.rows[0]!;
+      const policySteps = await client.query<{
+        step_no: number;
+        approver_role_code: string | null;
+        approver_user_id: string | null;
+      }>(
+        `SELECT step_no, approver_role_code, approver_user_id
+           FROM approval_policy_steps
+          WHERE organization_id = $1 AND policy_id = $2
+          ORDER BY step_no`,
+        [orgId, policy.id],
+      );
+      if (policySteps.rowCount === 0) {
+        throw new ConflictException(`Approval policy ${policy.id} has no approval steps`);
+      }
+
+      const inserted = await client.query<{
+        id: string;
+        amount: string;
+        status: string;
+        current_step: number;
+        total_steps: number;
+      }>(
+        `INSERT INTO approval_requests
+           (organization_id, kind, entity_type, entity_id, amount, summary, payload,
+            requested_by, policy_id, policy_version, total_steps, current_step)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, 1)
+         RETURNING id, amount, status, current_step, total_steps`,
+        [
+          orgId,
+          input.kind,
+          input.entityType,
+          input.entityId,
+          input.amount,
+          input.summary ?? null,
+          JSON.stringify(input.payload ?? {}),
+          requesterUserId,
+          policy.id,
+          policy.version,
+          policySteps.rowCount,
+        ],
+      );
+      const request = inserted.rows[0]!;
+
+      for (const step of policySteps.rows) {
+        await client.query(
+          `INSERT INTO approval_steps
+             (organization_id, request_id, step_no, approver_role_code, approver_user_id)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [orgId, request.id, step.step_no, step.approver_role_code, step.approver_user_id],
+        );
+      }
+      await client.query(
+        `INSERT INTO approval_actions
+           (organization_id, request_id, actor_user_id, action)
+         VALUES ($1, $2, $3, 'SUBMIT')`,
+        [orgId, request.id, requesterUserId],
+      );
+
+      return {
+        id: request.id,
+        kind: input.kind,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        amount: request.amount,
+        status: request.status,
+        policyVersion: policy.version,
+        currentStep: request.current_step,
+        totalSteps: request.total_steps,
+        steps: policySteps.rows.map((step) => ({
+          stepNo: step.step_no,
+          approverRoleCode: step.approver_role_code,
+          approverUserId: step.approver_user_id,
+          status: 'PENDING',
+        })),
+      };
+    });
+  }
 
   /** Everything pending, newest first, annotated with what this caller may do about it. */
   async inbox(
