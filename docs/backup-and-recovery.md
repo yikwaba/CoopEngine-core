@@ -16,7 +16,8 @@ exists, what was measured, and how it is proven.
 
 - **RPO ≤ 5 minutes** — `archive_timeout = 300` means at most five minutes of committed work can be
   lost, even on an idle server. Previously: 24 hours (nightly dump only), with `archive_mode = off`.
-- **RTO** — the recovery drill measured **3 seconds** to redo, reach a consistent recovery state,
+- **RTO, measured end to end from offsite artefacts** — see the fresh-host drill below.
+- **RTO (local)** — the recovery drill measured **3 seconds** to redo, reach a consistent recovery state,
   promote and accept connections. That figure is *recovery from a locally staged base backup*; a true
   disaster recovery (fetch from Backblaze, decrypt, extract, replay) adds transfer time and has not
   been measured — it is the next drill to run, and it should be run to a fresh host, not the source.
@@ -62,3 +63,16 @@ both `wal/` and `base/` prefixes now verify after a scripted run.
 
 Lesson recorded: **verify a timer's effect, not just its existence.** A timer that runs and fails
 looks identical to a timer that runs and succeeds until you check the destination.
+
+## Fresh-host drill (restore from offsite only)
+
+Run with the live platform serving. Base backup and WAL were downloaded **from Backblaze**, a scratch
+cluster was built on a different port, WAL was replayed to the end of the archive and promoted, then
+the data was checked. Measured transfer and recovery times are recorded in the run log
+(`dr-drill-from-offsite-*.log`) — this is the number that matters for a real disaster, because it
+includes fetching the artefacts rather than assuming they are already local.
+
+Also found during the credential rotation: the repository carried the development database password
+as a hard-coded fallback in `packages/db/src/client.ts` (and its build output). Removed — the fallback
+now carries no password, and every environment supplies `DATABASE_URL`. The rotated password made the
+committed one worthless, which is the argument for rotating on discovery rather than on a schedule.

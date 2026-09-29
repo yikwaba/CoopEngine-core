@@ -9,8 +9,11 @@
 import { Pool, PoolClient } from 'pg';
 import { TENANT_GUC } from './schema';
 
+// No credential is committed here on purpose: every environment supplies DATABASE_URL
+// (api.env on the server, the service container in CI). A hard-coded fallback meant the
+// development password lived in the repository — found during the credential rotation.
 export const DEFAULT_DATABASE_URL =
-  'postgres://coopengine:ff3f816bba09d8289c23a1b7914272f6e29e23c7b4bd9eaf@127.0.0.1:5432/coopengine';
+  'postgres://coopengine@127.0.0.1:5432/coopengine';
 
 export function createPool(connectionString: string | undefined): Pool {
   return new Pool({
