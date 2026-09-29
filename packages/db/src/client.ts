@@ -14,6 +14,11 @@ export const DEFAULT_DATABASE_URL =
 
 export function createPool(connectionString: string | undefined): Pool {
   return new Pool({
+    // Test runners only: lets teardown clear ledger/audit rows, which the immutability
+    // guards (migrations 0036/0037) otherwise refuse. Production never sets this variable.
+    ...(process.env.COOPENGINE_TEST_MAINTENANCE === 'on'
+      ? { options: '-c app.maintenance=on' }
+      : {}),
     connectionString: connectionString ?? process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
     max: 10,
   });
