@@ -95,3 +95,5 @@ if [ ${#FAILED[@]} -eq 0 ]; then
 fi
 echo "FAILED: ${FAILED[*]}"
 exit 1
+
+export COOPENGINE_TEST_MAINTENANCE=on

@@ -1,3 +1,4 @@
+process.env.COOPENGINE_TEST_MAINTENANCE = 'on';
 import { defineConfig } from 'vitest/config';
 import swc from 'unplugin-swc';
 
