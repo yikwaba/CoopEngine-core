@@ -126,7 +126,13 @@ const ROLE_TEMPLATES = {
     'payroll.approve',
     'payroll.post',
   ],
-  CHAIRMAN: ['reports.view', 'reports.export', 'loans.approve', 'members.approve'],
+  CHAIRMAN: [
+    'reports.view',
+    'reports.export',
+    'loans.approve',
+    'savings.approve',
+    'members.approve',
+  ],
   SECRETARY: [
     'members.create',
     'members.edit',
@@ -157,7 +163,7 @@ const ROLE_TEMPLATES = {
   LOAN_OFFICER: ['loans.review', 'reports.view',
     'members.lookup',
   ],
-  CREDIT_COMMITTEE: ['loans.approve'],
+  CREDIT_COMMITTEE: ['loans.approve', 'savings.approve'],
   PAYROLL_OFFICER: ['payroll.upload', 'reports.view'],
   AUDITOR: ['reports.view', 'reports.export', 'audit.view',
     'members.lookup',
@@ -304,13 +310,13 @@ async function main() {
       sort: 30,
     },
     {
-      code: 'PROFESSIONAL',
-      name: 'Professional',
-      priceAmount: '0.00',
-      billingPeriod: 'MONTHLY',
+      code: 'ENTERPRISE',
+      name: 'Enterprise',
+      description: 'More than 2,000 members or custom operational requirements. Contact sales.',
+      price: '0.00',
       limits: {},
-      features: {},
-      sortOrder: 40,
+      features: { payroll: true, dividends: true, bulk: true, openingBalances: true },
+      sort: 40,
     },
   ];
 

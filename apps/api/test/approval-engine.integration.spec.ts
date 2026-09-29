@@ -17,7 +17,7 @@ import { ADMIN_PASSWORD, ensureRbacSeeded, TEST_DATABASE_URL } from './helpers';
 
 const suffix = randomUUID().slice(0, 8);
 const slug = `engine-${suffix}`;
-const adminEmail = `engine-${suffix}@coopengine.test`;
+const adminEmail = `engine-${suffix}@approval-engine.invalid`;
 const password = 'CoopPass123!';
 const auth = (token: string) => ({ Authorization: ['Bearer', token].join(' ') });
 
@@ -62,7 +62,7 @@ describe('FR-020 approval engine', () => {
     requesterId = login.body.user.id as string;
 
     const inviteAndLogin = async (roleCode: string, label: string) => {
-      const email = `${label}-${suffix}@coopengine.test`;
+      const email = `${label}-${suffix}@approval-engine.invalid`;
       const invited = await http
         .post('/api/v1/users')
         .set(auth(token))
@@ -136,6 +136,17 @@ describe('FR-020 approval engine', () => {
         client.release();
       }
     }
+    const emails = [
+      adminEmail,
+      `treasurer-${suffix}@approval-engine.invalid`,
+      `chairman-${suffix}@approval-engine.invalid`,
+      `credit-${suffix}@approval-engine.invalid`,
+    ];
+    await pool.query(
+      `DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE email = ANY($1::varchar[]))`,
+      [emails],
+    );
+    await pool.query(`DELETE FROM users WHERE email = ANY($1::varchar[])`, [emails]);
     await pool.end();
     await app.close();
   });

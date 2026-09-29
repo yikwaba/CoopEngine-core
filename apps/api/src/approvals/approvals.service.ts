@@ -1,5 +1,5 @@
 import { Inject, Injectable, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
 import { LedgerService } from '../ledger/ledger.service';
@@ -106,7 +106,25 @@ export class ApprovalsService {
     },
   ) {
     const orgId = this.requireOrg(organizationId);
-    return withTenant(this.pool, orgId, async (client) => {
+    return withTenant(this.pool, orgId, (client) =>
+      this.createRequestInTransaction(client, orgId, requesterUserId, input),
+    );
+  }
+
+  /** Same creation path for a caller that already owns the tenant transaction. */
+  async createRequestInTransaction(
+    client: PoolClient,
+    orgId: string,
+    requesterUserId: string,
+    input: {
+      kind: 'WITHDRAWAL' | 'PAYROLL' | 'LOAN' | 'JOURNAL' | 'EXPENSE';
+      entityType: string;
+      entityId: string;
+      amount: number;
+      summary?: string;
+      payload?: Record<string, unknown>;
+    },
+  ) {
       const matched = await client.query<{
         id: string;
         version: number;
@@ -205,7 +223,6 @@ export class ApprovalsService {
           status: 'PENDING',
         })),
       };
-    });
   }
 
   /** Decide only the current step, as the role or named user frozen on it. */
