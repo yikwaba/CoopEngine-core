@@ -97,3 +97,6 @@ echo "FAILED: ${FAILED[*]}"
 exit 1
 
 export COOPENGINE_TEST_MAINTENANCE=on
+
+# strip any connection secrets that test failures may have serialised into the run logs
+bash "$(dirname "$0")/redact-logs.sh" 2>/dev/null || true
