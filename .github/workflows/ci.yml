@@ -84,6 +84,9 @@ jobs:
       - name: Build packages
         run: pnpm build
 
+      - name: Test-only ledger maintenance flag
+        run: echo "COOPENGINE_TEST_MAINTENANCE=on" >> $GITHUB_ENV
+
       - name: Apply migrations
         working-directory: packages/db
         run: pnpm db:migrate
