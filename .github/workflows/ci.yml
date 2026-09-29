@@ -87,6 +87,9 @@ jobs:
       - name: Test-only ledger maintenance flag
         run: echo "COOPENGINE_TEST_MAINTENANCE=on" >> $GITHUB_ENV
 
+      - name: Migration history is append-only
+        run: node scripts/verify-migration-history.mjs
+
       - name: Apply migrations
         working-directory: packages/db
         run: pnpm db:migrate

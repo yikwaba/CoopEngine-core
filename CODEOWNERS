@@ -1,0 +1,12 @@
+# Ownership of the collision-prone area.
+#
+# packages/db was edited by two agents at once and the result was that one agent's applied migrations
+# were deleted by the other. The directory is now single-owner, and the migration history is enforced
+# by scripts/verify-migration-history.mjs (wired into verify-all.sh and CI).
+
+# Platform owner
+*                       @yikwaba
+
+# Migrations, guard functions, seed and the pool: one owner at a time.
+/packages/db/           @yikwaba
+/packages/db/migrations/ @yikwaba

@@ -1,0 +1,9 @@
+This directory is owned by one contributor at a time. Two agents editing it concurrently already
+destroyed a round of applied migrations.
+
+Rules that are now enforced by scripts/verify-migration-history.mjs (runs in verify-all.sh and CI):
+  1. An applied migration file is append-only. Never edit or delete one — add a new migration.
+  2. Two migrations may not share a numeric prefix.
+  3. Every .sql file must be recorded in CHECKSUMS.json; after adding a new migration run
+     `node scripts/verify-migration-history.mjs --record`.
+Changes to guard functions, triggers or the seed belong in a NEW migration, not in an edited old one.
