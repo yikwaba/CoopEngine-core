@@ -47,7 +47,8 @@ recovered; `sum(debit) = sum(credit)` held in the restored copy.
 ## Gaps, stated plainly
 
 1. Full disaster recovery to a **fresh host** has not been drilled (transfer + decrypt + restore).
-2. The WAL archive is not independently pruned — retention is handled by the Object Lock on the
-   offsite bucket, and locally by the weekly base-backup rotation.
+2. Local WAL retention is one day (`wal-ship.sh` prunes after the offsite copy succeeds). With
+   `archive_timeout = 300` a forced 16 MB segment lands every five minutes (~4.6 GB/day), so without
+   that prune the local disk would have filled in about 17 days. Backblaze is the archive of record.
 3. There is still no off-host automation that *invents* the recovery host; recovery is run by hand
    with the script above.

@@ -37,7 +37,7 @@ if (/supabase|pooler|amazonaws/.test(url)) {
   process.exit(2);
 }
 
-const pool = new Pool({ connectionString: url });
+const pool = new Pool({ connectionString: url, options: '-c app.maintenance=on' });
 
 async function withScan(runner) {
   const client = await pool.connect();
