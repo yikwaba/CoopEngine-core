@@ -13,7 +13,27 @@ FAST=0
 DBURL="$(grep '^DATABASE_URL=' /root/coopengine/api.env 2>/dev/null | cut -d= -f2- || true)"
 FAILED=()
 
+# The ledger and approval guards refuse to rewrite posted records, so test teardown
+# has to opt out explicitly. This must be set BEFORE any pool is created: the shared
+# factory reads it once per connection. It used to be exported at the BOTTOM of this
+# script, after the integration step had already run — so the integration run never
+# had it, and 36 of 40 spec files failed in teardown while all 110 tests passed.
+export COOPENGINE_TEST_MAINTENANCE=on
+
+# Always scrub test logs, including on failure or interruption. PostgreSQL connection
+# errors can serialise the connection string and therefore the database password.
+trap 'bash "$(dirname "$0")/redact-logs.sh" 2>/dev/null || true' EXIT
+
 step() { printf '\n=== %s ===\n' "$1"; }
+
+step "migration history"
+# Applied migrations are immutable: deletion, rewrite, duplicate prefixes and an
+# unrecorded SQL file all make the repository fail before any tests run.
+if node scripts/verify-migration-history.mjs; then
+  echo "ok"
+else
+  echo "FAILED"; FAILED+=("migration history integrity")
+fi
 
 step "typecheck"
 if pnpm typecheck >/tmp/verify-typecheck.log 2>&1; then echo "ok"; else echo "FAILED"; tail -20 /tmp/verify-typecheck.log; FAILED+=("typecheck"); fi
@@ -95,14 +115,3 @@ if [ ${#FAILED[@]} -eq 0 ]; then
 fi
 echo "FAILED: ${FAILED[*]}"
 exit 1
-
-export COOPENGINE_TEST_MAINTENANCE=on
-
-# strip any connection secrets that test failures may have serialised into the run logs
-bash "$(dirname "$0")/redact-logs.sh" 2>/dev/null || true
-
-# migration history is append-only: applied migrations cannot be edited or deleted
-if ! node scripts/verify-migration-history.mjs; then
-  echo "FAILED: migration history integrity"
-  exit 1
-fi
