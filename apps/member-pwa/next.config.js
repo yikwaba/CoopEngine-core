@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Keep verification artifacts separate from the `.next` tree used by the
+  // running member app. See the matching staff-portal configuration.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   /**
    * The HTML shell must never be reused from a cache. A stale shell keeps serving an
    * old client bundle — which is exactly how a page kept reporting "Failed to fetch"

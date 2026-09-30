@@ -20,6 +20,11 @@ FAILED=()
 # had it, and 36 of 40 spec files failed in teardown while all 110 tests passed.
 export COOPENGINE_TEST_MAINTENANCE=on
 
+# Turbo's `test` task depends on `build`, so this must be exported before tests,
+# not merely on the explicit build command below.
+export NEXT_DIST_DIR=.next-verify
+VERIFY_NEXT_DIR="$NEXT_DIST_DIR"
+
 # Always scrub test logs, including on failure or interruption. PostgreSQL connection
 # errors can serialise the connection string and therefore the database password.
 trap 'bash "$(dirname "$0")/redact-logs.sh" 2>/dev/null || true' EXIT
@@ -77,6 +82,11 @@ if [ "$FAST" -eq 0 ]; then
 fi
 
 step "build (all workspaces)"
+# Never replace the Next.js artifacts underneath a running live server. Doing so
+# leaves the process serving HTML from one build while page chunks come from
+# another: the HTML is 200, page-specific JS is 400, and every browser reports a
+# client-side exception. Both Next apps read this in next.config.js; non-Next
+# workspaces ignore it.
 if pnpm build >/tmp/verify-build.log 2>&1; then
   echo "ok"
 else
@@ -95,7 +105,7 @@ for app in portal member-pwa; do
     echo "MISSING/incorrect $env_file"
     baked_ok=0
   fi
-  if grep -rqs "localhost:3999" "apps/$app/.next/static/chunks" 2>/dev/null; then
+  if grep -rqs "localhost:3999" "apps/$app/$VERIFY_NEXT_DIR/static/chunks" 2>/dev/null; then
     echo "$app bundle still contains localhost:3999"
     baked_ok=0
   fi
