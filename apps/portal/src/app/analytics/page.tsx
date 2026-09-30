@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken, API_BASE, downloadPdf } from '../../lib/api';
+import { apiFetch, apiResponse, clearSession, readToken, downloadPdf } from '../../lib/api';
 import Nav from '../components/Nav';
 
 interface BoardPack {
@@ -35,9 +35,7 @@ const money = (n: number) =>
 async function downloadBoardPack(): Promise<void> {
   const token = readToken();
   if (!token) return;
-  const res = await fetch(`${API_BASE}/reports/export/board-pack`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const res = await apiResponse('/reports/export/board-pack');
   if (!res.ok) throw new Error(`Board pack download failed (${res.status})`);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);

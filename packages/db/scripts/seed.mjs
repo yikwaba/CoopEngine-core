@@ -141,6 +141,15 @@ const ROLE_TEMPLATES = {
     'notifications.send',
     'reports.view',
   ],
+  CASHIER: [
+    'members.lookup',
+    'products.view',
+    'savings.post',
+    'savings.withdraw',
+    'shares.post',
+    'collections.capture',
+    'reports.view',
+  ],
   TREASURER: [
     'savings.post',
     'savings.withdraw',

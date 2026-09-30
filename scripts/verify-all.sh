@@ -27,7 +27,19 @@ VERIFY_NEXT_DIR="$NEXT_DIST_DIR"
 
 # Always scrub test logs, including on failure or interruption. PostgreSQL connection
 # errors can serialise the connection string and therefore the database password.
-trap 'bash "$(dirname "$0")/redact-logs.sh" 2>/dev/null || true' EXIT
+# Next mutates generated TypeScript metadata for a custom distDir, so snapshot and
+# restore the exact pre-run files; never leave verification artifacts in the repo.
+VERIFY_META_ARCHIVE="$(mktemp /tmp/coopengine-next-meta.XXXXXX.tar)"
+tar -cf "$VERIFY_META_ARCHIVE" \
+  apps/portal/next-env.d.ts apps/portal/tsconfig.json \
+  apps/member-pwa/next-env.d.ts apps/member-pwa/tsconfig.json
+cleanup_verify() {
+  bash "$(dirname "$0")/redact-logs.sh" 2>/dev/null || true
+  tar -xf "$VERIFY_META_ARCHIVE" -C /root/CoopEngine-core 2>/dev/null || true
+  rm -f "$VERIFY_META_ARCHIVE"
+  rm -rf apps/portal/.next-verify apps/member-pwa/.next-verify
+}
+trap cleanup_verify EXIT
 
 step() { printf '\n=== %s ===\n' "$1"; }
 
@@ -38,6 +50,20 @@ if node scripts/verify-migration-history.mjs; then
   echo "ok"
 else
   echo "FAILED"; FAILED+=("migration history integrity")
+fi
+
+step "browser cookie sessions"
+if node scripts/verify-cookie-session-clients.mjs; then
+  echo "ok"
+else
+  echo "FAILED"; FAILED+=("browser cookie sessions")
+fi
+
+step "business timezone"
+if node scripts/verify-business-timezone.mjs; then
+  echo "ok"
+else
+  echo "FAILED"; FAILED+=("business timezone")
 fi
 
 step "typecheck"

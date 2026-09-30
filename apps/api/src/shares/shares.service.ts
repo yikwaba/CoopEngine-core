@@ -128,7 +128,7 @@ export class SharesService {
       const period = await c.query(
         `SELECT id FROM ledger_periods
           WHERE organization_id = $1 AND status = 'OPEN'
-            AND now()::date BETWEEN start_date AND end_date
+            AND (now() AT TIME ZONE 'Africa/Lagos')::date BETWEEN start_date AND end_date
           ORDER BY start_date DESC LIMIT 1`,
         [orgId],
       );
@@ -269,7 +269,7 @@ export class SharesService {
       const period = await c.query(
         `SELECT id FROM ledger_periods
           WHERE organization_id = $1 AND status = 'OPEN'
-            AND now()::date BETWEEN start_date AND end_date
+            AND (now() AT TIME ZONE 'Africa/Lagos')::date BETWEEN start_date AND end_date
           ORDER BY start_date DESC LIMIT 1`,
         [orgId],
       );

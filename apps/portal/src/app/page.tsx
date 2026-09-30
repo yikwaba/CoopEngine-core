@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   apiFetch,
-  clearSession,
   logoutSession,
   readToken,
   API_BASE,
@@ -62,10 +61,9 @@ export default function DashboardPage() {
         setReady(true);
       } catch (err) {
         if (cancelled) return;
-        // Token likely expired/revoked -> back to login
-        clearSession();
+        // apiFetch handles a real 401. A 403, network fault, or failing dashboard
+        // module must remain visible instead of destroying a valid session.
         setError(err instanceof Error ? err.message : 'Failed to load dashboard');
-        router.replace('/login');
       }
     })();
     return () => {

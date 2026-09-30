@@ -86,7 +86,8 @@ interface MemberPayment {
 }
 
 const naira = (n: number): string =>
-  `₦${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  `₦${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const signedNaira = (n: number): string => `${n < 0 ? '-' : '+'}${naira(n)}`;
 
 export default function MemberDashboardPage() {
   const router = useRouter();
@@ -564,8 +565,7 @@ export default function MemberDashboardPage() {
                     — {t.description}
                   </span>
                   <span style={{ fontWeight: 600, color: t.signedAmount >= 0 ? '#067647' : '#b42318' }}>
-                    {t.signedAmount >= 0 ? '+' : ''}
-                    {naira(t.signedAmount)}
+                    {signedNaira(t.signedAmount)}
                   </span>
                 </li>
               ))}

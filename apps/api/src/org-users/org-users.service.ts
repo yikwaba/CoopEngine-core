@@ -219,6 +219,10 @@ export class OrgUsersService {
           [orgId, targetId, role.id],
         );
       }
+      // Access tokens carry a permission snapshot. Revoke every existing session
+      // atomically with the role change so removed authority disappears now, not
+      // when a token eventually expires.
+      await c.query(`DELETE FROM sessions WHERE user_id = $1`, [targetId]);
       await c.query(
         `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
          VALUES ($1, $2, 'users.roles_replaced', 'user', $3, $4)`,

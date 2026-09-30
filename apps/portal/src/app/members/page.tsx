@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken, API_BASE, downloadPdf } from '../../lib/api';
+import { apiFetch, apiResponse, readToken, downloadPdf } from '../../lib/api';
 
 interface MemberRow {
   id: string;
@@ -33,18 +33,15 @@ export default function MembersPage() {
         return;
       }
       try {
-        const res = await fetch(
-          `${API_BASE}/members?limit=${PAGE}&offset=${off}${q ? `&q=${encodeURIComponent(q)}` : ''}`,
-          { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' },
+        const res = await apiResponse(
+          `/members?limit=${PAGE}&offset=${off}${q ? `&q=${encodeURIComponent(q)}` : ''}`,
         );
         if (!res.ok) throw new Error(`Request failed (${res.status})`);
         const body = (await res.json()) as MemberRow[];
         setItems(body);
         setTotal(Number(res.headers.get('x-total-count') ?? body.length));
       } catch (err) {
-        clearSession();
         setError(err instanceof Error ? err.message : 'Failed to load members');
-        router.replace('/login');
       }
     },
     [router],

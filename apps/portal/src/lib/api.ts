@@ -21,20 +21,15 @@ export interface LoginOutcome {
   tokens?: SessionTokens;
 }
 
-export async function apiFetch<T>(
-  path: string,
-  _token?: string,
-  init?: RequestInit,
-): Promise<T> {
+export async function apiResponse(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    // The browser attaches the session cookie; there is no token to attach by hand.
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(init?.headers ?? {}),
     },
-    cache: 'no-store',
+    cache: init?.cache ?? 'no-store',
   });
   if (res.status === 401) {
     clearSession();
@@ -42,6 +37,15 @@ export async function apiFetch<T>(
       window.location.href = '/login';
     }
   }
+  return res;
+}
+
+export async function apiFetch<T>(
+  path: string,
+  _token?: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await apiResponse(path, init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

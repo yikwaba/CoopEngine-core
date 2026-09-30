@@ -77,6 +77,30 @@ afterAll(async () => {
 });
 
 describe('staff user administration', () => {
+  it('gives a cashier transaction-entry rights but never approval authority', async () => {
+    const coop = await onboardCoop('cash');
+    const adminAuth = { Authorization: ['Bearer', coop.tokens.accessToken].join(' ') };
+    const email = `cashier-${randomUUID().slice(0, 8)}@cashier-test.invalid`;
+    const invited = await request(app.getHttpServer())
+      .post('/api/v1/users')
+      .set(adminAuth)
+      .send({ email, roleCodes: ['CASHIER'] });
+    expect(invited.status).toBe(201);
+    expect(invited.body.roleCodes).toEqual(['CASHIER']);
+
+    const login = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({ email, password: invited.body.tempPassword });
+    expect(login.status).toBe(200);
+    const permissions = login.body.tokens.permissions as string[];
+    expect(permissions).toContain('savings.withdraw');
+    expect(permissions).toContain('savings.post');
+    expect(permissions).toContain('members.lookup');
+    expect(permissions).not.toContain('savings.approve');
+    expect(permissions).not.toContain('loans.approve');
+    expect(permissions).not.toContain('payroll.approve');
+  });
+
   it('invites, re-roles and suspends staff with permission guards', async () => {
     const coop = await onboardCoop('adm');
     const adminAuth = { Authorization: `Bearer ${coop.tokens.accessToken}` };
@@ -123,6 +147,11 @@ describe('staff user administration', () => {
       .send({ email: staffEmail, roleCodes: ['ACCOUNTANT'] });
     expect(reRole.status).toBe(200);
     expect(reRole.body.roleCodes).toEqual(['ACCOUNTANT']);
+
+    const oldRoleSession = await request(app.getHttpServer())
+      .get('/api/v1/reports/savings-book')
+      .set({ Authorization: ['Bearer', treasurerTok].join(' ') });
+    expect(oldRoleSession.status).toBe(401);
 
     // Build a deposit attempt via the accountant's fresh token
     const accountantLogin = await request(app.getHttpServer())

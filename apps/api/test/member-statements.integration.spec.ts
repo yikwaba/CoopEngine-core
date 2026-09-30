@@ -67,6 +67,11 @@ describe('member savings view and statements', () => {
       .send({ email: ADMIN.email, password: ADMIN.password, organizationSlug: slug })
       .expect(200);
     staffToken = login.body.tokens.accessToken as string;
+    await http
+      .post('/api/v1/ledger/periods')
+      .set({ Authorization: ['Bearer', staffToken].join(' ') })
+      .send({ code: new Date().toISOString().slice(0, 7) })
+      .expect(201);
 
     // Two members; only the first funds a savings account.
     const ids: Record<string, string> = {};
@@ -93,11 +98,16 @@ describe('member savings view and statements', () => {
       .send({})
       .expect(201);
     const accountId = (account.body.id ?? account.body.accountId) as string;
-    await http
+    const deposit = await http
       .post(`/api/v1/savings/accounts/${accountId}/deposits`)
-      .set({ Authorization: `Bearer ${staffToken}` })
-      .send({ amount: 5000, description: 'March savings' })
-      .expect(201);
+      .set({ Authorization: ['Bearer', staffToken].join(' ') })
+      .send({ amount: 5000, description: 'March savings' });
+    expect(deposit.status, JSON.stringify(deposit.body)).toBe(201);
+    await http
+      .post(`/api/v1/savings/accounts/${accountId}/withdrawals`)
+      .set({ Authorization: ['Bearer', staffToken].join(' ') })
+      .send({ amount: 2000, description: 'Member cash withdrawal' })
+      .expect(200);
 
     tokenA = await memberToken(A.email);
     tokenB = await memberToken(B.email);
@@ -113,10 +123,14 @@ describe('member savings view and statements', () => {
   it('shows the member their own balance and movements', async () => {
     const res = await http.get('/api/v1/member/savings').set({ Authorization: `Bearer ${tokenA}` });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(res.body.totalBalance).toBe(5000);
+    expect(res.body.totalBalance).toBe(3000);
     expect(res.body.accounts).toHaveLength(1);
-    expect(res.body.transactions.length).toBeGreaterThan(0);
-    expect(res.body.transactions[0]).toHaveProperty('runningBalance');
+    expect(res.body.transactions.length).toBeGreaterThan(1);
+    expect(res.body.transactions[0]).toMatchObject({
+      type: 'WITHDRAWAL',
+      amount: -2000,
+      runningBalance: 3000,
+    });
   });
 
   it('shows a member with no account an empty (but valid) view', async () => {
