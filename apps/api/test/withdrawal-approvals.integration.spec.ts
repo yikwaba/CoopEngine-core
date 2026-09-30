@@ -16,6 +16,7 @@ import { createPool } from '@coopengine/db';
 import { ADMIN_PASSWORD, ensureRbacSeeded, TEST_DATABASE_URL } from './helpers';
 
 const ADMIN_EMAIL = 'admin@coopengine.dev';
+const suffix = randomUUID().slice(0, 8);
 let app: INestApplication;
 let pool: Pool;
 
@@ -31,9 +32,40 @@ describe('savings withdrawal approvals', () => {
   });
 
   afterAll(async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.internal_scan', 'on', true)`);
+      const org = await client.query<{ id: string }>(
+        `SELECT id FROM organizations WHERE slug = $1`,
+        [`appr-${suffix}`],
+      );
+      await client.query('COMMIT');
+      if (org.rows[0]) {
+        await client.query('BEGIN');
+        await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [org.rows[0].id]);
+        await client.query(`DELETE FROM organizations WHERE id = $1`, [org.rows[0].id]);
+        await client.query('COMMIT');
+        await client.query('BEGIN');
+        await client.query(`SELECT set_config('app.internal_scan', 'on', true)`);
+        await client.query(`DELETE FROM org_lookups WHERE slug = $1`, [`appr-${suffix}`]);
+        await client.query('COMMIT');
+      }
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+    const testEmails = [
+      `appr-${suffix}@withdrawal-approval.invalid`,
+      `approver-${suffix}@withdrawal-approval.invalid`,
+      `chairman-${suffix}@withdrawal-approval.invalid`,
+      `wd-${suffix}@withdrawal-approval.invalid`,
+    ];
     await pool.query(`DELETE FROM sessions WHERE user_id IN
-      (SELECT id FROM users WHERE email LIKE '%@coopengine.test')`);
-    await pool.query(`DELETE FROM users WHERE email LIKE '%@coopengine.test'`);
+      (SELECT id FROM users WHERE email = ANY($1::varchar[]))`, [testEmails]);
+    await pool.query(`DELETE FROM users WHERE email = ANY($1::varchar[])`, [testEmails]);
     await pool.end();
     await app.close();
   });
@@ -43,23 +75,22 @@ describe('savings withdrawal approvals', () => {
     const saasLogin = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
       .send({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD });
-    const suffix = randomUUID().slice(0, 8);
     await request(app.getHttpServer())
       .post('/api/v1/organizations')
       .set('Authorization', `Bearer ${saasLogin.body.tokens.accessToken}`)
       .send({
         name: 'approvals cooperative',
         slug: `appr-${suffix}`,
-        adminEmail: `appr-${suffix}@coopengine.test`,
+        adminEmail: `appr-${suffix}@withdrawal-approval.invalid`,
         adminPassword: 'CoopPass123!',
       });
     const officerLogin = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email: `appr-${suffix}@coopengine.test`, password: 'CoopPass123!' });
+      .send({ email: `appr-${suffix}@withdrawal-approval.invalid`, password: 'CoopPass123!' });
     const officer = { Authorization: `Bearer ${officerLogin.body.tokens.accessToken}` };
 
     // a second staff member who may approve
-    const approverEmail = `approver-${suffix}@coopengine.test`;
+    const approverEmail = `approver-${suffix}@withdrawal-approval.invalid`;
     const invited = await request(app.getHttpServer())
       .post('/api/v1/users')
       .set(officer)
@@ -68,10 +99,21 @@ describe('savings withdrawal approvals', () => {
     const approverLogin = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
       .send({ email: approverEmail, password: invited.body.tempPassword });
-    const approver = { Authorization: `Bearer ${approverLogin.body.tokens.accessToken}` };
+    const approver = { Authorization: ['Bearer', approverLogin.body.tokens.accessToken].join(' ') };
+
+    const chairmanEmail = `chairman-${suffix}@withdrawal-approval.invalid`;
+    const chairmanInvite = await request(app.getHttpServer())
+      .post('/api/v1/users')
+      .set(officer)
+      .send({ email: chairmanEmail, roleCodes: ['CHAIRMAN'] });
+    expect(chairmanInvite.status).toBe(201);
+    const chairmanLogin = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({ email: chairmanEmail, password: chairmanInvite.body.tempPassword });
+    const chairman = { Authorization: ['Bearer', chairmanLogin.body.tokens.accessToken].join(' ') };
 
     // member + savings account funded with 100,000
-    const memberEmail = `wd-${suffix}@coopengine.test`;
+    const memberEmail = `wd-${suffix}@withdrawal-approval.invalid`;
     const created = await request(app.getHttpServer())
       .post('/api/v1/members')
       .set(officer)
@@ -111,6 +153,40 @@ describe('savings withdrawal approvals', () => {
     expect(setPolicy.status).toBe(200);
     expect(setPolicy.body.threshold).toBe(5000);
 
+    // Activate the FR-020 lower band for this cooperative. The legacy threshold still
+    // decides whether to park the withdrawal; the engine owns every decision after that.
+    const policyClient = await pool.connect();
+    try {
+      await policyClient.query('BEGIN');
+      await policyClient.query(`SELECT set_config('app.internal_scan', 'on', true)`);
+      const org = await policyClient.query<{ id: string }>(
+        `SELECT id FROM organizations WHERE slug = $1`,
+        [`appr-${suffix}`],
+      );
+      const orgId = org.rows[0]!.id;
+      await policyClient.query(`SELECT set_config('app.internal_scan', 'off', true)`);
+      await policyClient.query(`SELECT set_config('app.tenant_id', $1, true)`, [orgId]);
+      const policy = await policyClient.query<{ id: string }>(
+        `INSERT INTO approval_policies
+           (organization_id, kind, min_amount, max_amount, version, description)
+         VALUES ($1, 'WITHDRAWAL', 0, 500000, 1, 'Withdrawal lower band')
+         RETURNING id`,
+        [orgId],
+      );
+      await policyClient.query(
+        `INSERT INTO approval_policy_steps
+           (organization_id, policy_id, step_no, approver_role_code)
+         VALUES ($1, $2, 1, 'TREASURER'), ($1, $2, 2, 'CHAIRMAN')`,
+        [orgId, policy.rows[0]!.id],
+      );
+      await policyClient.query('COMMIT');
+    } catch (error) {
+      await policyClient.query('ROLLBACK');
+      throw error;
+    } finally {
+      policyClient.release();
+    }
+
     const parked = await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/withdrawals`)
       .set(officer)
@@ -133,21 +209,37 @@ describe('savings withdrawal approvals', () => {
     expect(selfApprove.status).toBe(409);
     expect(await balanceOf()).toBe(90000);
 
-    // ---- 4. a different approver posts it, once ---------------------------
-    const approved = await request(app.getHttpServer())
+    // ---- 4. ordered engine approvals; only the final step posts ------------
+    const firstStep = await request(app.getHttpServer())
       .post(`/api/v1/savings/withdrawals/${requestId}/approve`)
       .set(approver)
       .send({});
+    expect(firstStep.status).toBe(200);
+    expect(firstStep.body).toMatchObject({
+      requestId,
+      approvalStatus: 'PENDING',
+      currentStep: 2,
+      nextApproverRoleCode: 'CHAIRMAN',
+    });
+    expect(firstStep.body.journalEntryId).toBeUndefined();
+    expect(await balanceOf()).toBe(90000); // Treasurer cannot move money
+
+    const approved = await request(app.getHttpServer())
+      .post(`/api/v1/savings/withdrawals/${requestId}/approve`)
+      .set(chairman)
+      .send({});
     expect(approved.status).toBe(200);
+    expect(approved.body.approvalStatus).toBe('APPROVED');
     expect(approved.body.journalEntryId).toBeTruthy();
     expect(await balanceOf()).toBe(65000);
 
     const replay = await request(app.getHttpServer())
       .post(`/api/v1/savings/withdrawals/${requestId}/approve`)
-      .set(approver)
+      .set(chairman)
       .send({});
-    expect(replay.status).toBe(409);
-    expect(await balanceOf()).toBe(65000); // never pays twice
+    expect(replay.status).toBe(200);
+    expect(replay.body.journalEntryId).toBe(approved.body.journalEntryId);
+    expect(await balanceOf()).toBe(65000); // replay/recovery never pays twice
 
     // ---- 5. rejection leaves the money alone -----------------------------
     const parked2 = await request(app.getHttpServer())
@@ -161,6 +253,29 @@ describe('savings withdrawal approvals', () => {
     expect(rejected.status).toBe(200);
     expect(rejected.body.status).toBe('REJECTED');
     expect(await balanceOf()).toBe(65000);
+    const rejectionClient = await pool.connect();
+    try {
+      await rejectionClient.query('BEGIN');
+      await rejectionClient.query(`SELECT set_config('app.internal_scan', 'on', true)`);
+      const org = await rejectionClient.query<{ id: string }>(
+        `SELECT id FROM organizations WHERE slug = $1`,
+        [`appr-${suffix}`],
+      );
+      await rejectionClient.query(`SELECT set_config('app.internal_scan', 'off', true)`);
+      await rejectionClient.query(`SELECT set_config('app.tenant_id', $1, true)`, [org.rows[0]!.id]);
+      const linked = await rejectionClient.query<{ status: string }>(
+        `SELECT status FROM approval_requests
+          WHERE entity_type = 'savings_withdrawal_request' AND entity_id = $1`,
+        [parked2.body.requestId],
+      );
+      await rejectionClient.query('COMMIT');
+      expect(linked.rows[0]?.status).toBe('REJECTED');
+    } catch (error) {
+      await rejectionClient.query('ROLLBACK');
+      throw error;
+    } finally {
+      rejectionClient.release();
+    }
 
     // ---- 6. member self-service always needs staff approval ---------------
     const otp = await request(app.getHttpServer())

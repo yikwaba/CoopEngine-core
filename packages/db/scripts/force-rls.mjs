@@ -55,6 +55,14 @@ const TABLES = [
   'subscriptions',
   'payment_intents',
   'provider_transactions',
+  // FR-020 approval engine: each carries organization_id, and a table that can
+  // be reached without the tenant predicate is a leak.
+  'approval_policies',
+  'approval_policy_steps',
+  'approval_requests',
+  'approval_steps',
+  'approval_actions',
+  'approval_delegations',
 ];
 
 const BALANCED_JOURNAL_SQL = `

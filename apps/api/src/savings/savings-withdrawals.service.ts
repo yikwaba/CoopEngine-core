@@ -9,6 +9,7 @@ import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
 import { SavingsService, SavingsAccountRow } from './savings.service';
+import { ApprovalsService } from '../approvals/approvals.service';
 
 export type WithdrawalDecision =
   | { kind: 'POSTED'; account: SavingsAccountRow }
@@ -50,6 +51,7 @@ export class SavingsWithdrawalsService {
   constructor(
     @Inject(DB_POOL) private readonly pool: Pool,
     private readonly savings: SavingsService,
+    private readonly approvals: ApprovalsService,
   ) {}
 
   private requireOrg(organizationId: string | null): string {
@@ -154,6 +156,30 @@ export class SavingsWithdrawalsService {
         )
       ).rows[0] as { id: string };
 
+      // A tenant opts into the engine by defining at least one active withdrawal
+      // policy. From that point the engine is authoritative: a gap or overlap rolls
+      // this transaction back, so a parked withdrawal can never exist without its
+      // approval request. Member-originated requests remain on the legacy staff
+      // approval path until approval_requests can carry member identity (0041).
+      if (source === 'STAFF' && actorUserId) {
+        const configured = await c.query(
+          `SELECT 1 FROM approval_policies
+            WHERE organization_id = $1 AND kind = 'WITHDRAWAL' AND is_active = true
+            LIMIT 1`,
+          [orgId],
+        );
+        if (configured.rowCount === 1) {
+          await this.approvals.createRequestInTransaction(c, orgId, actorUserId, {
+            kind: 'WITHDRAWAL',
+            entityType: 'savings_withdrawal_request',
+            entityId: id.id,
+            amount: round2(amount),
+            summary: description ?? `Savings withdrawal from account ${accountId}`,
+            payload: { accountId, memberId: account.member_id, source },
+          });
+        }
+      }
+
       await c.query(
         `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
          VALUES ($1, $2, 'savings.withdrawal.requested', 'savings_withdrawal_request', $3, $4)`,
@@ -218,17 +244,45 @@ export class SavingsWithdrawalsService {
     });
   }
 
-  /** Approve and post. The approver must be a different person from the requester. */
+  /**
+   * Advance an engine-linked request, or use the legacy single approver when the
+   * cooperative has not activated FR-020 policies. Only a final engine decision
+   * posts money. A retry after approval/posting converges on the same journal.
+   */
   async approve(
     organizationId: string | null,
     approverUserId: string,
     requestId: string,
-  ): Promise<{ requestId: string; account: SavingsAccountRow; journalEntryId: string | null }> {
+  ): Promise<
+    | {
+        requestId: string;
+        approvalStatus: 'PENDING';
+        currentStep: number;
+        nextApproverRoleCode: string | null;
+      }
+    | {
+        requestId: string;
+        approvalStatus: 'APPROVED';
+        account: SavingsAccountRow;
+        journalEntryId: string | null;
+      }
+  > {
     const orgId = this.requireOrg(organizationId);
     const pending = await withTenant(this.pool, orgId, async (c) => {
       const { rows } = await c.query(
-        `SELECT id, account_id, amount, description, status, requested_by_user_id
-           FROM savings_withdrawal_requests WHERE id = $1 FOR UPDATE`,
+        `SELECT r.id, r.account_id, r.amount, r.description, r.status,
+                r.requested_by_user_id, r.journal_entry_id,
+                ar.id AS approval_request_id, ar.status AS approval_status
+           FROM savings_withdrawal_requests r
+           LEFT JOIN LATERAL (
+             SELECT id, status FROM approval_requests
+              WHERE organization_id = r.organization_id
+                AND entity_type = 'savings_withdrawal_request'
+                AND entity_id = r.id
+              ORDER BY created_at DESC LIMIT 1
+           ) ar ON true
+          WHERE r.id = $1
+          FOR UPDATE OF r`,
         [requestId],
       );
       const r = rows[0] as
@@ -239,16 +293,54 @@ export class SavingsWithdrawalsService {
             description: string | null;
             status: string;
             requested_by_user_id: string | null;
+            journal_entry_id: string | null;
+            approval_request_id: string | null;
+            approval_status: string | null;
           }
         | undefined;
       if (!r) throw new NotFoundException('Withdrawal request not found');
-      if (r.status !== 'PENDING') {
-        throw new ConflictException(`Request is ${r.status} and can no longer be approved`);
-      }
       return r;
     });
 
-    if (pending.requested_by_user_id && pending.requested_by_user_id === approverUserId) {
+    // Successful replay or crash recovery after the row was marked approved.
+    if (pending.status === 'APPROVED') {
+      return {
+        requestId,
+        approvalStatus: 'APPROVED',
+        account: await this.savings.getAccount(orgId, pending.account_id),
+        journalEntryId: pending.journal_entry_id,
+      };
+    }
+    if (pending.status !== 'PENDING') {
+      throw new ConflictException(`Request is ${pending.status} and can no longer be approved`);
+    }
+
+    if (pending.approval_request_id) {
+      if (pending.approval_status === 'REJECTED' || pending.approval_status === 'CANCELLED') {
+        throw new ConflictException(`Approval request is already ${pending.approval_status}`);
+      }
+      if (pending.approval_status === 'PENDING') {
+        const decision = await this.approvals.decideRequest(
+          orgId,
+          approverUserId,
+          pending.approval_request_id,
+          { decision: 'APPROVE' },
+        );
+        if (decision.status === 'PENDING') {
+          return {
+            requestId,
+            approvalStatus: 'PENDING',
+            currentStep: decision.currentStep,
+            nextApproverRoleCode: decision.nextApproverRoleCode,
+          };
+        }
+      }
+      // APPROVED (whether before this call or by the final decision above) falls
+      // through to exactly-once posting below.
+    } else if (
+      pending.requested_by_user_id &&
+      pending.requested_by_user_id === approverUserId
+    ) {
       throw new ConflictException(
         'A withdrawal request must be approved by a different user (segregation of duties)',
       );
@@ -265,8 +357,19 @@ export class SavingsWithdrawalsService {
         pending.description ?? 'Approved withdrawal',
         idempotencyKey,
       );
-    } catch (e) {
-      throw e;
+    } catch (error) {
+      // If the journal committed but the request-row update did not (process death,
+      // timeout), the idempotency unique key refuses a second posting. Verify that
+      // exact journal and continue the recovery rather than trapping the request.
+      const existing = await withTenant(this.pool, orgId, async (c) =>
+        c.query(
+          `SELECT id FROM journal_entries
+            WHERE organization_id = $1 AND idempotency_key = $2`,
+          [orgId, idempotencyKey],
+        ),
+      );
+      if (existing.rowCount !== 1) throw error;
+      account = await this.savings.getAccount(orgId, pending.account_id);
     }
 
     return withTenant(this.pool, orgId, async (c) => {
@@ -274,12 +377,12 @@ export class SavingsWithdrawalsService {
         `SELECT id FROM journal_entries WHERE organization_id = $1 AND idempotency_key = $2`,
         [orgId, idempotencyKey],
       );
-      const journalEntryId = ((entry.rows[0] as { id: string } | undefined)?.id ?? null);
+      const journalEntryId = (entry.rows[0] as { id: string } | undefined)?.id ?? null;
       await c.query(
         `UPDATE savings_withdrawal_requests
             SET status = 'APPROVED', decided_by_user_id = $2, decided_at = now(),
                 journal_entry_id = $3
-          WHERE id = $1`,
+          WHERE id = $1 AND status = 'PENDING'`,
         [requestId, approverUserId, journalEntryId],
       );
       await c.query(
@@ -292,7 +395,7 @@ export class SavingsWithdrawalsService {
           JSON.stringify({ amount: Number(pending.amount), journalEntryId }),
         ],
       );
-      return { requestId, account, journalEntryId };
+      return { requestId, approvalStatus: 'APPROVED' as const, account, journalEntryId };
     });
   }
 
@@ -303,20 +406,65 @@ export class SavingsWithdrawalsService {
     notes?: string,
   ): Promise<{ requestId: string; status: 'REJECTED' }> {
     const orgId = this.requireOrg(organizationId);
-    return withTenant(this.pool, orgId, async (c) => {
+    const found = await withTenant(this.pool, orgId, async (c) => {
       const { rows } = await c.query(
-        `SELECT status FROM savings_withdrawal_requests WHERE id = $1 FOR UPDATE`,
+        `SELECT r.status, r.requested_by_user_id,
+                ar.id AS approval_request_id, ar.status AS approval_status
+           FROM savings_withdrawal_requests r
+           LEFT JOIN LATERAL (
+             SELECT id, status FROM approval_requests
+              WHERE organization_id = r.organization_id
+                AND entity_type = 'savings_withdrawal_request'
+                AND entity_id = r.id
+              ORDER BY created_at DESC LIMIT 1
+           ) ar ON true
+          WHERE r.id = $1
+          FOR UPDATE OF r`,
         [requestId],
       );
-      const r = rows[0] as { status: string } | undefined;
-      if (!r) throw new NotFoundException('Withdrawal request not found');
-      if (r.status !== 'PENDING') {
-        throw new ConflictException(`Request is ${r.status} and can no longer be rejected`);
+      return rows[0] as
+        | {
+            status: string;
+            requested_by_user_id: string | null;
+            approval_request_id: string | null;
+            approval_status: string | null;
+          }
+        | undefined;
+    });
+    if (!found) throw new NotFoundException('Withdrawal request not found');
+    if (found.status === 'REJECTED') return { requestId, status: 'REJECTED' };
+    if (found.status !== 'PENDING') {
+      throw new ConflictException(`Request is ${found.status} and can no longer be rejected`);
+    }
+
+    if (found.approval_request_id) {
+      if (found.approval_status === 'APPROVED') {
+        throw new ConflictException('Approval request is already APPROVED');
       }
+      if (found.approval_status === 'PENDING') {
+        await this.approvals.decideRequest(
+          orgId,
+          approverUserId,
+          found.approval_request_id,
+          { decision: 'REJECT', comment: notes },
+        );
+      }
+      // REJECTED means a previous attempt completed the engine decision but died
+      // before updating the withdrawal row; continue and converge below.
+    } else if (
+      found.requested_by_user_id &&
+      found.requested_by_user_id === approverUserId
+    ) {
+      throw new ConflictException(
+        'A withdrawal request must be rejected by a different user (segregation of duties)',
+      );
+    }
+
+    return withTenant(this.pool, orgId, async (c) => {
       await c.query(
         `UPDATE savings_withdrawal_requests
             SET status = 'REJECTED', decided_by_user_id = $2, decided_at = now(), decision_notes = $3
-          WHERE id = $1`,
+          WHERE id = $1 AND status = 'PENDING'`,
         [requestId, approverUserId, notes?.slice(0, 240) ?? null],
       );
       await c.query(
