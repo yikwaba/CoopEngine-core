@@ -6,19 +6,19 @@
  *   node scripts/clean-test-tenants.mjs --apply         # delete them
  *   node scripts/clean-test-tenants.mjs --keep=sunrise,other
  *
- * Every integration spec onboards cooperatives with generated slugs and logins ending in
- * @coopengine.test, and deletes its users but not its cooperatives — so a development database
- * accumulates hundreds of them, which the admin console then faithfully lists.
- *
- * A cooperative is removed only when EVERY user attached to it is a test account. A single real
- * user anywhere in it keeps it, so this cannot swallow a cooperative somebody is using. The
- * per-cooperative user check runs in tenant scope, because user_roles is row-level secured: a
- * cross-tenant join silently reports "no users" and would make every cooperative look abandoned.
+ * Every integration spec onboards cooperatives with generated slugs and dedicated
+ * non-deliverable test domains. The cleaner recognizes every test-only namespace;
+ * a new isolated namespace must be added here before its spec lands.
  */
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
 
-const TEST_EMAIL = '%@coopengine.test';
+const TEST_EMAILS = [
+  '%@coopengine.test',
+  '%@approval-engine.invalid',
+  '%@withdrawal-approval.invalid',
+  '%@cashier-test.invalid',
+];
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
 const keep = new Set(
@@ -78,12 +78,12 @@ for (const org of orgs) {
   const counts = await withTenant(pool, org.id, async (client) => {
     const { rows } = await client.query(
       `SELECT
-         count(*) FILTER (WHERE u.email LIKE $1) AS test_users,
-         count(*) FILTER (WHERE u.email NOT LIKE $1) AS real_users,
+         count(*) FILTER (WHERE u.email LIKE ANY($1::text[])) AS test_users,
+         count(*) FILTER (WHERE NOT (u.email LIKE ANY($1::text[]))) AS real_users,
          (SELECT count(*) FROM members m WHERE m.organization_id = $2) AS members
        FROM user_roles ur JOIN users u ON u.id = ur.user_id
       WHERE ur.organization_id = $2`,
-      [TEST_EMAIL, org.id],
+      [TEST_EMAILS, org.id],
     );
     return rows[0];
   });
