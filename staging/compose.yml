@@ -1,0 +1,106 @@
+name: coopengine-recovery-staging
+x-app: &app
+  image: coopengine-recovery-staging:${STAGING_SOURCE_SHA:?Run prepare first}
+  build:
+    context: ..
+    dockerfile: staging/Dockerfile
+    args:
+      STAGING_SOURCE_SHA: ${STAGING_SOURCE_SHA}
+  networks: [isolated]
+  init: true
+  security_opt: [no-new-privileges:true]
+services:
+  postgres:
+    image: postgres:16-alpine
+    networks: [isolated]
+    environment:
+      POSTGRES_USER: staging_admin
+      POSTGRES_PASSWORD: ${STAGING_ADMIN_PASSWORD:?Run prepare first}
+      STAGING_OWNER_PASSWORD: ${STAGING_OWNER_PASSWORD:?Run prepare first}
+      STAGING_APP_PASSWORD: ${STAGING_APP_PASSWORD:?Run prepare first}
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-staging.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U staging_admin -d postgres']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  migrate:
+    <<: *app
+    environment:
+      DATABASE_URL: postgresql://staging_owner:${STAGING_OWNER_PASSWORD}@postgres:5432/coopengine_staging
+      DATABASE_SSL: 'false'
+      COOPENGINE_ENVIRONMENT: isolated-staging
+      SEED_ADMIN_EMAIL: platform@recovery.invalid
+      SEED_ADMIN_PASSWORD: ${STAGING_LOGIN_PASSWORD:?Run prepare first}
+    command: [bash, staging/migrate.sh]
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    <<: *app
+    environment:
+      NODE_ENV: development
+      PORT: '4399'
+      COOPENGINE_ENVIRONMENT: isolated-staging
+      DATABASE_URL: postgresql://staging_app:${STAGING_APP_PASSWORD}@postgres:5432/coopengine_staging
+      DATABASE_SSL: 'false'
+      JWT_ACCESS_SECRET: ${STAGING_JWT_SECRET:?Run prepare first}
+      INTERNAL_CRON_TOKEN: ${STAGING_CRON_SECRET:?Run prepare first}
+      CORS_ORIGINS: http://localhost:4310,http://localhost:4320
+      MEMBER_OTP_PROVIDER: dev
+      MONNIFY_PROVIDER: dev
+      MONNIFY_SECRET_KEY: ${STAGING_WEBHOOK_SECRET:?Run prepare first}
+      DOCUMENTS_DIR: /app/staging-documents
+      TZ: Africa/Lagos
+    volumes: [documents:/app/staging-documents]
+    command: [bash, -c, 'node scripts/staging/guard.mjs && exec node apps/api/dist/main.js']
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:4399/api/v1/health").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  portal:
+    <<: *app
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: '1'
+    command: [pnpm, --dir, apps/portal, start]
+    depends_on:
+      api: {condition: service_healthy}
+  member:
+    <<: *app
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: '1'
+    command: [pnpm, --dir, apps/member-pwa, start]
+    depends_on:
+      api: {condition: service_healthy}
+  fixtures:
+    <<: *app
+    environment:
+      DATABASE_URL: postgresql://staging_app:${STAGING_APP_PASSWORD}@postgres:5432/coopengine_staging
+      COOPENGINE_ENVIRONMENT: isolated-staging
+      API_BASE: http://api:4399/api/v1
+      STAGING_LOGIN_PASSWORD: ${STAGING_LOGIN_PASSWORD:?Run prepare first}
+    command: [node, scripts/staging/fixtures.mjs]
+    depends_on:
+      api: {condition: service_healthy}
+  gateway:
+    image: nginx:1.28-alpine
+    networks: [isolated, entry]
+    volumes: [./nginx.conf:/etc/nginx/nginx.conf:ro]
+    ports:
+      - 127.0.0.1:4399:8080
+      - 127.0.0.1:4310:8081
+      - 127.0.0.1:4320:8082
+    depends_on: [portal, member]
+networks:
+  isolated:
+    internal: true
+  entry: {}
+volumes:
+  database: {}
+  documents: {}
