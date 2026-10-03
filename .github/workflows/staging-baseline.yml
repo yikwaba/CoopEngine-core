@@ -22,6 +22,12 @@ jobs:
         run: |
           node --test scripts/staging/guard.test.mjs
           bash -n scripts/staging/run.sh staging/init-db.sh staging/migrate.sh
+      - name: Prepare and mask private synthetic credentials
+        run: |
+          node scripts/staging/prepare.mjs
+          while IFS='=' read -r name value; do
+            if [ "$name" != STAGING_SOURCE_SHA ]; then echo "::add-mask::$value"; fi
+          done < .staging/compose.env
       - name: Build isolated stack
         run: bash scripts/staging/run.sh
       - name: Await synthetic fixtures and isolation baseline
@@ -34,6 +40,9 @@ jobs:
           curl --fail --silent http://localhost:4399/api/v1/health
           curl --fail --silent --output /dev/null http://localhost:4310/login
           curl --fail --silent --output /dev/null http://localhost:4320/login
+      - name: Inspect failed synthetic startup
+        if: failure()
+        run: docker compose --project-name coopengine-recovery-staging --env-file .staging/compose.env -f staging/compose.yml logs --no-color migrate api fixtures gateway
       - name: Stop isolated resources (retain no data)
         if: always()
         run: docker compose --project-name coopengine-recovery-staging --env-file .staging/compose.env -f staging/compose.yml down --volumes || true
