@@ -7,11 +7,11 @@ import { apiFetch, apiResponse, readToken } from '../../../lib/api';
 
 interface Member360 {
   member: { id: string; memberNo: number; firstName: string; lastName: string; email: string | null; status: string };
-  savings: { id: string; accountNo: number; currentBalance: number; status: string }[];
+  savings: { accountId: string; accountNo: number; productCode: string; balance: number; status: string }[];
   savingsTotal: number;
   shareBalance: number;
-  loans: { id: string; code: string; principal: number; outstandingPrincipal: number; status: string }[];
-  loansOutstanding: number;
+  loans: { id: string; productCode: string; principal: number; outstandingPrincipal: number; status: string }[];
+  loansOutstandingTotal: number;
 }
 
 const naira = (n: number): string => `₦${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
@@ -157,7 +157,7 @@ export default function MemberDetailPage() {
         </div>
         <div className="card">
           <p className="stat-label">Loan outstanding</p>
-          <p className="stat-value">{naira(data.loansOutstanding)}</p>
+          <p className="stat-value">{naira(data.loansOutstandingTotal)}</p>
         </div>
       </section>
 
@@ -178,9 +178,9 @@ export default function MemberDetailPage() {
             </thead>
             <tbody>
               {data.savings.map((a) => (
-                <tr key={a.id}>
+                <tr key={a.accountId}>
                   <td>#{a.accountNo}</td>
-                  <td>{naira(a.currentBalance)}</td>
+                  <td>{naira(a.balance)}</td>
                   <td>{a.status}</td>
                   <td style={{ width: 140 }}>
                     <input
@@ -200,7 +200,7 @@ export default function MemberDetailPage() {
                       disabled={busy || !amount}
                       onClick={() => {
                         setMode('DEPOSIT');
-                        void postMoney(a.id);
+                        void postMoney(a.accountId);
                       }}
                     >
                       Deposit
@@ -211,7 +211,7 @@ export default function MemberDetailPage() {
                       disabled={busy || !amount}
                       onClick={() => {
                         setMode('WITHDRAWAL');
-                        void postMoney(a.id);
+                        void postMoney(a.accountId);
                       }}
                     >
                       Withdraw
@@ -241,7 +241,7 @@ export default function MemberDetailPage() {
             <tbody>
               {data.loans.map((l) => (
                 <tr key={l.id}>
-                  <td>{l.code}</td>
+                  <td>{l.productCode}</td>
                   <td>{naira(l.principal)}</td>
                   <td>{naira(l.outstandingPrincipal)}</td>
                   <td>{l.status}</td>

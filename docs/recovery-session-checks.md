@@ -26,3 +26,9 @@ Local regression checks cover cookie credentials, pagination, binary responses, 
 6. Exercise document and CSV downloads when synthetic data supports them.
 
 F05 remains pending browser verification on the corrected build. Other recovery defects remain open.
+
+## Browser evidence — 4 October 2026, Lagos
+
+The corrected portal build `3b56ad683015c450cfb6974b7bc131b5251800b1` loaded the three-member list and Synthetic1 TenantA's record in the user's local browser. Member listing and record access passed. Other F05 download/list paths remain pending browser acceptance.
+
+The member record displayed `₦NaN` for loan outstanding. API contract inspection found the page read `loansOutstanding` instead of `loansOutstandingTotal`; it also used stale savings `id`/`currentBalance` and loan `code` fields. The follow-up change uses the API's `accountId`, `balance`, `productCode`, and `loansOutstandingTotal` fields without substituting guessed values. A source contract regression check verifies the page's fields and render/action expressions against the actual backend interface. Eight regression checks, portal typecheck and production build passed locally. Corrected balance display and financial action acceptance remain pending; the account-ID correction does not establish that deposits/withdrawals are safe or complete.
