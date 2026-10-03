@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken, API_BASE, downloadPdf } from '../../lib/api';
+import { apiFetch, apiResponse, readToken, downloadPdf } from '../../lib/api';
 
 interface LoanRow {
   id: string;
@@ -46,9 +46,9 @@ export default function LoansPage() {
         return;
       }
       try {
-        const res = await fetch(
-          `${API_BASE}/loans?limit=200${status ? `&status=${status}` : ''}`,
-          { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' },
+        const res = await apiResponse(
+          `/loans?limit=200${status ? `&status=${status}` : ''}`,
+          { cache: 'no-store' },
         );
         if (!res.ok) throw new Error(`Request failed (${res.status})`);
         const body = (await res.json()) as LoanRow[];
@@ -56,9 +56,7 @@ export default function LoansPage() {
         setTotal(Number(res.headers.get('x-total-count') ?? body.length));
         setError(null);
       } catch (err) {
-        clearSession();
         setError(err instanceof Error ? err.message : 'Failed to load loans');
-        router.replace('/login');
       }
     },
     [router],

@@ -1,8 +1,4 @@
-/**
- * Portal API client. The backend is a separate service; the portal talks to
- * it over HTTP with bearer tokens (never stores secrets beyond the session
- * access token, kept in localStorage for this staff-portal build).
- */
+/** Portal API client. Authentication uses the backend's HttpOnly session cookie. */
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3999/api/v1';
@@ -21,19 +17,11 @@ export interface LoginOutcome {
   tokens?: SessionTokens;
 }
 
-export async function apiFetch<T>(
-  path: string,
-  _token?: string,
-  init?: RequestInit,
-): Promise<T> {
+/** Raw authenticated response for paginated lists and binary downloads. */
+export async function apiResponse(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    // The browser attaches the session cookie; there is no token to attach by hand.
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
     cache: 'no-store',
   });
   if (res.status === 401) {
@@ -42,6 +30,21 @@ export async function apiFetch<T>(
       window.location.href = '/login';
     }
   }
+  return res;
+}
+
+export async function apiFetch<T>(
+  path: string,
+  _token?: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await apiResponse(path, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+  });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -99,18 +102,14 @@ export function readToken(): string | null {
   return localStorage.getItem(SESSION_MARKER);
 }
 
-/**
- * Fetch a PDF with the session token and hand it to the browser as a download.
- * A plain <a href> cannot carry the Authorization header, so documents are
- * fetched as a blob and saved through a temporary object URL.
- */
+/** Fetch a private PDF using the session cookie and save it as a browser download. */
 export async function downloadPdf(path: string, filename: string): Promise<void> {
   const token = readToken();
   if (!token) {
     throw new Error('Not signed in');
   }
   // The session cookie travels with this request; nothing is attached by hand.
-  const res = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
+  const res = await apiResponse(path);
   if (!res.ok) {
     throw new Error(`Could not generate the document (${res.status})`);
   }

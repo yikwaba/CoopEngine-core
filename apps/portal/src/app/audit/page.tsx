@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken, API_BASE } from '../../lib/api';
+import { apiFetch, apiResponse, readToken } from '../../lib/api';
 
 interface AuditRow {
   id: string;
@@ -35,8 +35,7 @@ export default function AuditPage() {
       try {
         const q = new URLSearchParams({ limit: String(PAGE), offset: String(off) });
         if (act) q.set('action', act);
-        const res = await fetch(`${API_BASE}/reports/audit-logs?${q.toString()}`, {
-          headers: { Authorization: `Bearer ${token}` },
+        const res = await apiResponse(`/reports/audit-logs?${q.toString()}`, {
           cache: 'no-store',
         });
         if (!res.ok) throw new Error(`Request failed (${res.status})`);
@@ -45,9 +44,7 @@ export default function AuditPage() {
         setTotal(Number(res.headers.get('x-total-count') ?? body.length));
         setError(null);
       } catch (err) {
-        clearSession();
         setError(err instanceof Error ? err.message : 'Failed to load audit log');
-        router.replace('/login');
       }
     },
     [router],

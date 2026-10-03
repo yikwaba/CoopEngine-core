@@ -9,7 +9,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { IsNumber, IsOptional, IsString, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { ReportsService } from './reports.service';
 import { BoardPackXlsxService } from './board-pack-xlsx.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -22,11 +23,16 @@ const REPORT_READ = ['reports.view', 'audit.view', 'settings.manage'];
 
 class AuditQueryDto {
   @IsOptional()
-  @IsNumber()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(500)
   limit?: number;
 
   @IsOptional()
-  @IsNumber()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
   offset?: number;
 
   @IsOptional()
