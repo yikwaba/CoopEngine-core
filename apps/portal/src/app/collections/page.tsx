@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken, API_BASE } from '../../lib/api';
+import { apiFetch, apiResponse, readToken } from '../../lib/api';
 
 interface VirtualAccount {
   id: string;
@@ -45,19 +45,17 @@ export default function CollectionsPage() {
     }
     try {
       const accs = await apiFetch<VirtualAccount[]>('/payments/virtual-accounts', token);
-      const res = await fetch(`${API_BASE}/payments/internal/notifications?limit=50`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await apiResponse(`/payments/internal/notifications?limit=50`, {
         cache: 'no-store',
       });
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
       const feedItems = (await res.json()) as PaymentFeedItem[];
       setAccounts(accs);
       setFeed(feedItems);
       setFeedTotal(Number(res.headers.get('x-total-count') ?? feedItems.length));
       setError(null);
     } catch (err) {
-      clearSession();
       setError(err instanceof Error ? err.message : 'Failed to load collections');
-      router.replace('/login');
     }
   }, [router]);
 

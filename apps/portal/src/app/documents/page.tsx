@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken, API_BASE } from '../../lib/api';
+import { apiFetch, apiResponse, readToken } from '../../lib/api';
 import Nav from '../components/Nav';
 
 interface DocRow {
@@ -37,8 +37,6 @@ export default function DocumentsPage() {
       setError(null);
     } catch (e) {
       if (String(e).includes('401')) {
-        clearSession();
-        router.replace('/login');
         return;
       }
       setError(e instanceof Error ? e.message : 'Could not load documents');
@@ -71,9 +69,7 @@ export default function DocumentsPage() {
   async function openDoc(id: string) {
     const token = readToken();
     if (!token) return;
-    const res = await fetch(`${API_BASE}/documents/${id}/download`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await apiResponse(`/documents/${id}/download`, {});
     if (!res.ok) {
       setError(`Download failed (${res.status})`);
       return;

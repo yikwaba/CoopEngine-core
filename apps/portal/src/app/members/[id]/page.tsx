@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { apiFetch, clearSession, readToken, API_BASE } from '../../../lib/api';
+import { apiFetch, apiResponse, readToken } from '../../../lib/api';
 
 interface Member360 {
   member: { id: string; memberNo: number; firstName: string; lastName: string; email: string | null; status: string };
@@ -19,9 +19,9 @@ const naira = (n: number): string => `₦${Number(n).toLocaleString(undefined, {
 async function downloadStatement(memberId: string, memberNo: number): Promise<void> {
   const token = readToken();
   if (!token) return;
-  const res = await fetch(
-    `${API_BASE}/reports/export/member-statement?memberId=${memberId}`,
-    { headers: { Authorization: `Bearer ${token}` } },
+  const res = await apiResponse(
+    `/reports/export/member-statement?memberId=${memberId}`,
+    {},
   );
   if (!res.ok) throw new Error(`Statement download failed (${res.status})`);
   const blob = await res.blob();
@@ -56,9 +56,7 @@ export default function MemberDetailPage() {
       setData(d);
       setError(null);
     } catch (err) {
-      clearSession();
       setError(err instanceof Error ? err.message : 'Failed to load member');
-      router.replace('/login');
     }
   }, [router, memberId]);
 
