@@ -34,3 +34,6 @@ next-env.d.ts.timestamp
 
 # local dev DB credentials (rotated; never commit)
 /packages/db/drizzle.config.ts
+
+# Private synthetic staging credentials
+.staging/
