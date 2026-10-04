@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - apps/api/src/auth/**
+      - apps/api/src/common/money.ts
+      - apps/api/src/loans/**
       - apps/portal/src/**
       - packages/db/migrations/**
       - staging/**

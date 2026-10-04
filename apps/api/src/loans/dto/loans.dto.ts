@@ -21,6 +21,7 @@ export class CreateLoanDto {
 
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
+  @Max(100_000_000_000)
   principal!: number;
 
   @IsInt()

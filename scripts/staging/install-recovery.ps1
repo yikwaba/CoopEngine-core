@@ -50,6 +50,7 @@ try {
     Invoke-RecoveryDocker -DockerArgs @('up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', 'api', 'portal')
     Invoke-RecoveryDocker -DockerArgs @('restart', 'gateway')
     Invoke-RecoveryDocker -DockerArgs @('run', '--rm', '--no-deps', 'fixtures', 'node', 'scripts/staging/recovery-smoke.mjs')
+    Invoke-RecoveryDocker -DockerArgs @('run', '--rm', '--no-deps', 'fixtures', 'node', 'scripts/staging/exact-money-smoke.mjs')
     foreach ($url in @('http://localhost:4310/login', 'http://localhost:4320/login')) {
         $page = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 30
         if ($page.StatusCode -ne 200) { throw 'A local login page did not load.' }

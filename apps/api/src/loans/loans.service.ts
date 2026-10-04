@@ -1,3 +1,4 @@
+import { flatLoanInstallments, loanCeiling, moneyDecimal, moneyKobo } from '../common/money';
 import {
   BadRequestException,
   ConflictException,
@@ -113,8 +114,9 @@ export class LoansService {
     dto: CreateLoanDto,
   ): Promise<LoanRow> {
     const orgId = this.requireOrg(organizationId);
-    const principal = round2(dto.principal);
-    if (principal <= 0) throw new BadRequestException('Invalid principal');
+    const principalKobo = moneyKobo(dto.principal);
+    const principal = moneyDecimal(principalKobo);
+    if (principalKobo <= 0n) throw new BadRequestException('Invalid principal');
     if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 60) {
       throw new BadRequestException('termMonths must be 1..60');
     }
@@ -157,13 +159,10 @@ export class LoansService {
           WHERE organization_id = $1 AND member_id = $2 AND status = 'ACTIVE'`,
         [orgId, dto.memberId],
       );
-      const savingsTotal = Number(
-        (savings.rows[0] as { total: string }).total,
-      );
-      const maxLoan = round2(savingsTotal * Number(p.multiplier));
-      if (principal > maxLoan) {
+      const maxLoanKobo = loanCeiling((savings.rows[0] as { total: string }).total, p.multiplier);
+      if (principalKobo > maxLoanKobo) {
         throw new BadRequestException(
-          `Principal ${principal} exceeds the ${p.multiplier}x savings limit of ${maxLoan}`,
+          `Principal ${principal} exceeds the ${p.multiplier}x savings limit of ${moneyDecimal(maxLoanKobo)}`,
         );
       }
 
@@ -403,7 +402,7 @@ export class LoansService {
           interest_rate_pa: string;
           interest_method: string;
         };
-        const principal = Number(loanRow.principal);
+        const principal = moneyDecimal(moneyKobo(loanRow.principal));
         await this.postDisbursement(
           c,
           orgId,
@@ -418,7 +417,7 @@ export class LoansService {
           loanId,
           Number(loanRow.term_months),
           principal,
-          Number(loanRow.interest_rate_pa),
+          loanRow.interest_rate_pa,
           loanRow.interest_method,
         );
         await c.query(
@@ -502,9 +501,9 @@ export class LoansService {
       if (!['DISBURSED', 'DEFAULTED'].includes(l.status)) {
         throw new ConflictException('Only disbursed or defaulted loans can be restructured');
       }
-      const outstanding = Number(l.outstanding_principal);
-      outstandingValue = outstanding;
-      if (outstanding <= 0) throw new ConflictException('Loan has no outstanding balance');
+      const outstanding = moneyDecimal(moneyKobo(l.outstanding_principal));
+      outstandingValue = Number(outstanding); // Legacy response boundary only; never feeds arithmetic.
+      if (moneyKobo(outstanding) <= 0n) throw new ConflictException('Loan has no outstanding balance');
 
       const paid = await c.query(
         `SELECT coalesce(max(seq), 0) AS max_seq, count(*) AS paid_count
@@ -523,7 +522,7 @@ export class LoansService {
         loanId,
         newTermMonths,
         outstanding,
-        Number(l.interest_rate_pa),
+        l.interest_rate_pa,
         l.interest_method,
         maxSeq,
       );
@@ -662,8 +661,8 @@ export class LoansService {
     orgId: string,
     loanId: string,
     termMonths: number,
-    principal: number,
-    interestRatePa: number,
+    principal: string,
+    interestRatePa: string,
     interestMethod: string,
     seqOffset = 0,
   ): Promise<void> {
@@ -672,21 +671,13 @@ export class LoansService {
         `Schedule generation only supports FLAT interest (got ${interestMethod})`,
       );
     }
-    const totalInterest = round2((principal * interestRatePa * termMonths) / 1200);
-    const basePrincipal = Math.floor((principal * 100) / termMonths) / 100;
-    const baseInterest = Math.floor((totalInterest * 100) / termMonths) / 100;
+    const installments=flatLoanInstallments(principal,interestRatePa,termMonths);
     const values: string[] = [];
     const params: unknown[] = [];
-    let remainingP = principal;
-    let remainingI = totalInterest;
     const today = new Date();
     for (let step = 1; step <= termMonths; step += 1) {
       const seq = step + seqOffset;
-      const last = step === termMonths;
-      const p = last ? round2(remainingP) : Math.min(basePrincipal, round2(remainingP));
-      const i = last ? round2(remainingI) : Math.min(baseInterest, round2(remainingI));
-      remainingP = round2(remainingP - p);
-      remainingI = round2(remainingI - i);
+      const {principal:p,interest:i}=installments[step-1]!;
       const due = new Date(today);
       due.setUTCMonth(due.getUTCMonth() + step);
       const base = params.length;
@@ -1101,7 +1092,7 @@ export class LoansService {
     actorUserId: string,
     loanId: string,
     memberId: string,
-    principal: number,
+    principal: string,
   ): Promise<void> {
     const period = await c.query(
       `SELECT id FROM ledger_periods
@@ -1160,7 +1151,7 @@ export class LoansService {
         orgId,
         entryId,
         idByCode.get('1020'),
-        String(round2(principal)),
+        principal,
         memberId,
         idByCode.get('1000'),
       ],
