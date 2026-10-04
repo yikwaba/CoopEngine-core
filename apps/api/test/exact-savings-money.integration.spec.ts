@@ -60,9 +60,9 @@ describe('exact savings postings, balances and interest (PostgreSQL)',()=>{
   const f=await fixture();await f.deposit(100000000000).expect(201);await f.withdraw(99999999999.99).expect(200);
   expect((await f.proof()).current_balance).toBe('0.01');await f.withdraw(0.01).expect(200);const p=await f.proof();expect(p.current_balance).toBe('0.00');expect(p.liability).toBe('0.00');expect(p.debit).toBe('200000000000.00');expect(p.credit).toBe(p.debit);
  });
- it('rolls back overflow, invalid precision and repeated keys without extra projections',async()=>{
-  const f=await fixture();await f.deposit(0.23,randomUUID()).expect(201);const key=randomUUID();await f.deposit(0.23,key).expect(201);
-  const before=await f.proof();await f.deposit(0.23,key).expect(409);await f.deposit(0.001).expect(400);await f.deposit(100000000000.01).expect(400);expect(await f.proof()).toEqual(before);
+ it('rejects invalid amounts and replays repeated keys without extra projections',async()=>{
+  const f=await fixture();await f.deposit(0.23,randomUUID()).expect(201);const key=randomUUID();const original=await f.deposit(0.23,key).expect(201);
+  const before=await f.proof();expect((await f.deposit(0.23,key).expect(201)).body).toEqual(original.body);await f.deposit(0.001).expect(400);await f.deposit(100000000000.01).expect(400);expect(await f.proof()).toEqual(before);
   await f.tenant(c=>c.query('UPDATE member_savings_accounts SET current_balance=$1 WHERE id=$2',['99999999999999999.99',f.account]));
   const max=await f.proof();await f.deposit(0.01).expect(400);expect(await f.proof()).toEqual(max);
  });
