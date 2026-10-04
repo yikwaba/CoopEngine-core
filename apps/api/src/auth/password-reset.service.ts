@@ -82,7 +82,7 @@ export class PasswordResetService {
       if (!consumed.rows[0]) throw new BadRequestException('Reset link is invalid or expired');
       const id = user.rows[0].id;
       const passwordHash = await bcrypt.hash(password, 12);
-      await client.query('UPDATE users SET password_hash=$1,updated_at=now() WHERE id=$2', [passwordHash, id]);
+      await client.query('UPDATE users SET password_hash=$1,auth_version=auth_version+1,updated_at=now() WHERE id=$2', [passwordHash, id]);
       await client.query('UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL', [id]);
       await client.query('UPDATE password_reset_tokens SET consumed_at=now() WHERE user_id=$1 AND consumed_at IS NULL', [id]);
       await client.query(`INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)

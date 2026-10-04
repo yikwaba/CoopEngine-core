@@ -288,6 +288,13 @@
       "when": 1791068400000,
       "tag": "0041_staff_password_reset",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1791108300000,
+      "tag": "0042_session_authority",
+      "breakpoints": true
     }
   ]
 }
