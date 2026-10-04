@@ -8,6 +8,7 @@ on:
       - apps/api/src/savings/**
       - apps/api/src/shares/**
       - apps/api/src/payroll/**
+      - apps/api/src/ledger/**
       - apps/portal/src/**
       - packages/db/migrations/**
       - staging/**
