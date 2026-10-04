@@ -14,7 +14,7 @@ Use evidence per slice. Draft PR, passing CI, user-reported local acceptance and
 | Current permission resolution and remaining staff session races | PR #10; CI #121 (338 unit/148 API integration tests) and isolated-staging #5 passed; user reported recovery update passed on 4 October | Broader REC-03/04 limits recorded in recovery-session-authority.md |
 | Privileged MFA bootstrap, recovery codes and challenge replay | PR #11; thirteen new PostgreSQL regressions plus isolated Chromium/installer checks; check results and exact test counts are recorded in the PR | Full REC-05 limits recorded in recovery-privileged-mfa.md; user reported local RECOVERY UPDATE PASSED on 4 October at 12:49 Africa/Lagos; production acceptance remains separate |
 
-| Global TOTP replay and sensitive-action gates | Next draft stacked batch; local unit/portal checks pass, PostgreSQL/browser verification pending | Evidence and remaining limits in recovery-totp-step-up.md |
+| Global TOTP replay and sensitive-action gates | PR #12 implementation ce63e77f6b0399837bc4b650c50463bdbcd32231; CI #125 passed 366 API unit / 170 API PostgreSQL integration / 17 portal tests; isolated staging #9 passed installer and Chromium cancellation/verified-retry journeys | User local installation pending; remaining REC-05 limits in recovery-totp-step-up.md |
 
 ## Next P0 recovery priorities
 
