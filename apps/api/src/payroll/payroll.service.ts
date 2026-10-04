@@ -1,3 +1,4 @@
+import { moneyDecimal, moneyKobo } from '../common/money';
 import {
   BadRequestException,
   ConflictException,
@@ -28,8 +29,7 @@ export interface PayrollCommitResult {
   skipped: { row: number; reason: string }[];
 }
 
-const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
-const MAX_AMOUNT = 100_000_000;
+const MAX_AMOUNT_KOBO = 10_000_000_000n;
 
 const NORM = (h: string): string => h.trim().toLowerCase().replace(/\s+/g, '');
 const REQUIRED_HEADERS = ['memberNo', 'amount'];
@@ -38,7 +38,7 @@ const REQUIRED_HEADERS = ['memberNo', 'amount'];
 interface ValidRow {
   memberNo: number;
   memberId: string;
-  amount: number;
+  amount: string;
 }
 
 @Injectable()
@@ -86,16 +86,15 @@ export class PayrollService {
       const memberNoRaw = (cells[indexOf('memberNo')] ?? '').trim();
       const amountRaw = (cells[indexOf('amount')] ?? '').trim();
       const memberNo = Number(memberNoRaw);
-      const amount = Number(amountRaw);
+      let amount = 0n;
       const reasons: string[] = [];
       if (!Number.isInteger(memberNo) || memberNo < 1) {
         reasons.push('memberNo must be a positive integer');
       }
-      if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_AMOUNT) {
-        reasons.push('amount must be > 0');
-      } else if (round2(amount) !== amount) {
-        reasons.push('amount supports at most 2 decimals');
-      }
+      try {
+        amount = moneyKobo(amountRaw);
+        if (amount <= 0n || amount > MAX_AMOUNT_KOBO) reasons.push('amount must be > 0 and at most 100000000');
+      } catch { reasons.push('amount must be a decimal with at most 2 places'); }
       if (memberNo >= 1 && seenMembers.has(memberNo)) {
         reasons.push(`duplicate memberNo ${memberNo} in file`);
       }
@@ -104,13 +103,13 @@ export class PayrollService {
         continue;
       }
       seenMembers.add(memberNo);
-      valid.push({ memberNo, memberId: '', amount: round2(amount) });
+      valid.push({ memberNo, memberId: '', amount: moneyDecimal(amount) });
     }
 
     // Resolve members + persist the preview batch inside one tenant tx (RLS)
     const batchId = randomUUID();
-    let totalAmount = 0;
-    const rowsJson: { memberNo: number; memberId: string; amount: number }[] = [];
+    let totalAmount = 0n;
+    const rowsJson: ValidRow[] = [];
     await withTenant(this.pool, orgId, async (c) => {
       const memberNos = [...new Set(valid.map((v) => v.memberNo))];
       const memberById = new Map<number, { id: string; status: string }>();
@@ -133,7 +132,7 @@ export class PayrollService {
           stillValid.push({ ...v, memberId: member.id });
         }
       }
-      totalAmount = round2(stillValid.reduce((a, v) => a + v.amount, 0));
+      totalAmount = stillValid.reduce((sum, v) => sum + moneyKobo(v.amount), 0n);
       rowsJson.push(
         ...stillValid.map((v) => ({ memberNo: v.memberNo, memberId: v.memberId, amount: v.amount })),
       );
@@ -148,7 +147,7 @@ export class PayrollService {
           stillValid.length,
           errors.length,
           JSON.stringify(rowsJson),
-          String(totalAmount),
+          moneyDecimal(totalAmount),
           actorUserId,
         ],
       );
@@ -161,7 +160,7 @@ export class PayrollService {
         totalRows: parsed.length - 1,
         valid: rowsJson.length,
         invalid: errors.length,
-        totalAmount,
+        totalAmount: Number(moneyDecimal(totalAmount)),
       },
       errors,
     };
@@ -179,12 +178,12 @@ export class PayrollService {
   ): Promise<PayrollCommitResult> {
     const skipped: { row: number; reason: string }[] = [];
     let committed = 0;
-    let totalPosted = 0;
+    let totalPosted = 0n;
 
     await withTenant(this.pool, orgId, async (c) => {
       const batch = await c.query(
         `SELECT id, status, rows FROM payroll_batches
-          WHERE organization_id = $1 AND id = $2`,
+          WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
         [orgId, batchId],
       );
       const b = batch.rows[0] as
@@ -203,28 +202,30 @@ export class PayrollService {
       const rows = (b.rows ?? []) as {
         memberNo: number;
         memberId: string;
-        amount: number;
+        amount: string | number;
       }[];
 
       // Re-validate members are still ACTIVE inside the transaction
-      const amountsByMember = new Map<string, number>();
+      const amountsByMember = new Map<string, bigint>();
       const memberNos = rows.map((r) => r.memberNo);
       const members = await c.query(
         `SELECT id, member_no FROM members
-          WHERE organization_id = $1 AND member_no = ANY($2::bigint[]) AND status = 'ACTIVE'`,
+          WHERE organization_id = $1 AND member_no = ANY($2::bigint[]) AND status = 'ACTIVE' ORDER BY id FOR UPDATE`,
         [orgId, memberNos],
       );
       const activeIds = new Set(
         (members.rows as { id: string }[]).map((r) => r.id),
       );
       for (const row of rows) {
+        const value = moneyKobo(row.amount);
+        if (value <= 0n || value > MAX_AMOUNT_KOBO) throw new BadRequestException('Invalid stored payroll amount');
         if (!activeIds.has(row.memberId)) {
           skipped.push({ row: row.memberNo, reason: 'member no longer ACTIVE' });
           continue;
         }
         amountsByMember.set(
           row.memberId,
-          round2((amountsByMember.get(row.memberId) ?? 0) + row.amount),
+          (amountsByMember.get(row.memberId) ?? 0n) + value,
         );
       }
       if (amountsByMember.size === 0) {
@@ -237,12 +238,12 @@ export class PayrollService {
         `SELECT a.id, a.member_id, a.account_no, a.current_balance
            FROM member_savings_accounts a
           WHERE a.organization_id = $1 AND a.member_id = ANY($2::uuid[])
-            AND a.status = 'ACTIVE'`,
+            AND a.status = 'ACTIVE' ORDER BY a.id FOR UPDATE OF a`,
         [orgId, memberIds],
       );
       const accountByMember = new Map<
         string,
-        { id: string; accountNo: number; currentBalance: number }
+        { id: string; accountNo: number; currentBalance: bigint }
       >();
       for (const r of accounts.rows as {
         id: string;
@@ -253,7 +254,7 @@ export class PayrollService {
         accountByMember.set(r.member_id, {
           id: r.id,
           accountNo: Number(r.account_no),
-          currentBalance: Number(r.current_balance),
+          currentBalance: moneyKobo(r.current_balance),
         });
       }
       await c.query(
@@ -292,7 +293,7 @@ export class PayrollService {
         accountByMember.set(memberId, {
           id: row.id,
           accountNo: Number(row.account_no),
-          currentBalance: 0,
+          currentBalance: 0n,
         });
       }
 
@@ -345,7 +346,7 @@ export class PayrollService {
       const missing = ['1000', '2000'].find((code) => !idByCode.has(code));
       if (missing) throw new BadRequestException(`Unknown account code: ${missing}`);
 
-      const total = round2([...amountsByMember.values()].reduce((a, b) => a + b, 0));
+      const total = [...amountsByMember.values()].reduce((sum, value) => sum + value, 0n);
       // Line values: 1 cash debit (Dr 1000 total) + 1 credit per member (Cr 2000)
       const values: string[] = [];
       const params: unknown[] = [];
@@ -361,9 +362,9 @@ export class PayrollService {
         );
         params.push(orgId, entryId, accountId, debit, credit, memberId);
       };
-      pushLine(idByCode.get('1000')!, String(total), '0', null);
+      pushLine(idByCode.get('1000')!, moneyDecimal(total), '0', null);
       for (const [memberId, amount] of amountsByMember) {
-        pushLine(idByCode.get('2000')!, '0', String(round2(amount)), memberId);
+        pushLine(idByCode.get('2000')!, '0', moneyDecimal(amount), memberId);
       }
       await c.query(
         `INSERT INTO journal_lines (organization_id, journal_entry_id, account_id, debit, credit, member_id)
@@ -374,16 +375,16 @@ export class PayrollService {
       // Update balances + transaction projections
       for (const [memberId, amount] of amountsByMember) {
         const account = accountByMember.get(memberId)!;
-        const balance = round2(account.currentBalance + amount);
+        const balance = account.currentBalance + amount;
         await c.query(
           `UPDATE member_savings_accounts SET current_balance = $1
             WHERE organization_id = $2 AND id = $3`,
-          [String(balance), orgId, account.id],
+          [moneyDecimal(balance), orgId, account.id],
         );
         await c.query(
           `INSERT INTO savings_transactions (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
            VALUES ($1, $2, $3, 'DEPOSIT', $4, $5)`,
-          [orgId, account.id, entryId, String(amount), String(balance)],
+          [orgId, account.id, entryId, moneyDecimal(amount), moneyDecimal(balance)],
         );
       }
 
@@ -408,13 +409,13 @@ export class PayrollService {
           orgId,
           actorUserId,
           batchId,
-          JSON.stringify({ entryNo, total, members: amountsByMember.size }),
+          JSON.stringify({ entryNo, total: moneyDecimal(total), members: amountsByMember.size }),
         ],
       );
       committed = amountsByMember.size;
       totalPosted = total;
     });
-    return { batchId, committed, totalAmount: totalPosted, skipped };
+    return { batchId, committed, totalAmount: Number(moneyDecimal(totalPosted)), skipped };
   }
 
   /** Upload staged a preview; this puts it in front of an approver. */
@@ -423,7 +424,7 @@ export class PayrollService {
     return withTenant(this.pool, orgId, async (c) => {
       const { rows } = await c.query(
         `SELECT id, status, valid_rows, total_amount FROM payroll_batches
-          WHERE organization_id = $1 AND id = $2`,
+          WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
         [orgId, batchId],
       );
       const batch = rows[0] as
@@ -575,36 +576,37 @@ export class PayrollService {
       );
       const postedRows = ((rows[0] as { rows: unknown } | undefined)?.rows ?? []) as {
         memberId: string;
-        amount: number;
+        amount: string | number;
       }[];
 
       for (const row of postedRows) {
         const account = await c.query(
           `SELECT id, current_balance FROM member_savings_accounts
             WHERE organization_id = $1 AND member_id = $2 AND status = 'ACTIVE'
-            ORDER BY opened_at LIMIT 1`,
+            ORDER BY opened_at LIMIT 1 FOR UPDATE`,
           [orgId, row.memberId],
         );
         const acc = account.rows[0] as { id: string; current_balance: string } | undefined;
         if (!acc) continue;
-        const balance = round2(Number(acc.current_balance));
-        if (balance < round2(row.amount)) {
+        const balance = moneyKobo(acc.current_balance);
+        const value = moneyKobo(row.amount);
+        if (balance < value) {
           throw new ConflictException(
-            `Member ${row.memberId} has only ${balance} in savings; the ${row.amount} this batch ` +
+            `Member ${row.memberId} has only ${moneyDecimal(balance)} in savings; the ${row.amount} this batch ` +
               'credited has already been used, so it must be resolved by hand',
           );
         }
-        const after = round2(balance - row.amount);
+        const after = balance - value;
         await c.query(
           `UPDATE member_savings_accounts SET current_balance = $1
             WHERE organization_id = $2 AND id = $3`,
-          [String(after), orgId, acc.id],
+          [moneyDecimal(after), orgId, acc.id],
         );
         await c.query(
           `INSERT INTO savings_transactions
              (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
            VALUES ($1, $2, $3, 'WITHDRAWAL', $4, $5)`,
-          [orgId, acc.id, reversed[0] ?? null, String(-round2(row.amount)), String(after)],
+          [orgId, acc.id, reversed[0] ?? null, moneyDecimal(-value), moneyDecimal(after)],
         );
       }
     });
@@ -666,7 +668,10 @@ export class PayrollService {
         [orgId, batchId],
       );
       if (!rows[0]) throw new NotFoundException('Payroll batch not found');
-      return rows[0];
+      const result = rows[0] as Record<string, unknown>;
+      return { ...result, rows: Array.isArray(result.rows)
+        ? result.rows.map((row: Record<string, unknown>) => ({ ...row, amount: Number(row.amount) }))
+        : result.rows };
     });
   }
 }
