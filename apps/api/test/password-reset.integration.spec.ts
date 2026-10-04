@@ -132,7 +132,7 @@ describe('staff password recovery (real PostgreSQL)', () => {
     const a = await staff(); await ask(a.email); const token = deliveries[0].token;
     const before = await pool.query('SELECT password_hash FROM users WHERE id=$1', [a.id]);
     await pool.query(`CREATE FUNCTION reset_test_reject_audit() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN IF NEW.action='auth.password.reset' AND NEW.actor_user_id='${a.id}'::uuid THEN RAISE EXCEPTION 'test reset audit failure'; END IF; RETURN NEW; END $$`);
+      BEGIN IF NEW.action='auth.password.reset' AND NEW.actor_user_id='${a.id}'::uuid THEN RAISE EXCEPTION 'test reset audit failure'; END IF; RETURN NEW; END; $$`);
     await pool.query('CREATE TRIGGER reset_test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION reset_test_reject_audit()');
     try {
       expect((await confirm(token)).status).toBe(500);

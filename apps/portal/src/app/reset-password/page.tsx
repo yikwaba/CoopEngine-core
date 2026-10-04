@@ -1,10 +1,11 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { apiFetch, clearSession } from '../../lib/api';
 import { resetTokenFromFragment } from '../../lib/password-reset';
 
 export default function ResetPasswordPage() {
+  const loaded = useRef(false);
   const [token, setToken] = useState('');
   const [ready, setReady] = useState(false);
   const [password, setPassword] = useState('');
@@ -13,6 +14,10 @@ export default function ResetPasswordPage() {
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
+    // Development Strict Mode replays effects; keep the in-memory token after
+    // its one-time removal from the URL.
+    if (loaded.current) return;
+    loaded.current = true;
     setToken(resetTokenFromFragment(window.location.hash));
     window.history.replaceState(null, '', window.location.pathname);
     setReady(true);
