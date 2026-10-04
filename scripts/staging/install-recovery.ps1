@@ -33,6 +33,8 @@ try {
     Invoke-RecoveryDocker -DockerArgs @('config', '--quiet')
     Invoke-RecoveryDocker -DockerArgs @('build', 'api')
 
+    Invoke-RecoveryDocker -DockerArgs @('up', '-d', '--wait', '--wait-timeout', '180', 'postgres')
+
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $backupDir = Join-Path $root '.staging\backups'
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
@@ -48,12 +50,20 @@ try {
     # Apply append-only migrations without reseeding users, passwords or RBAC.
     Invoke-RecoveryDocker -DockerArgs @('run', '--rm', '--no-deps', 'migrate', 'bash', '-c', 'node scripts/staging/guard.mjs && cd packages/db && pnpm db:migrate && cd /app && node scripts/staging/grants.mjs')
     Invoke-RecoveryDocker -DockerArgs @('up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', 'api', 'portal')
+    Invoke-RecoveryDocker -DockerArgs @('up', '-d', '--no-deps', 'member', 'gateway')
     Invoke-RecoveryDocker -DockerArgs @('restart', 'gateway')
     Invoke-RecoveryDocker -DockerArgs @('run', '--rm', '--no-deps', 'fixtures', 'node', 'scripts/staging/recovery-smoke.mjs')
     Invoke-RecoveryDocker -DockerArgs @('run', '--rm', '--no-deps', 'fixtures', 'node', 'scripts/staging/exact-money-smoke.mjs')
     foreach ($url in @('http://localhost:4310/login', 'http://localhost:4320/login')) {
-        $page = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 30
-        if ($page.StatusCode -ne 200) { throw 'A local login page did not load.' }
+        $ready = $false
+        for ($attempt = 0; $attempt -lt 30; $attempt++) {
+            try {
+                $page = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 3
+                if ($page.StatusCode -eq 200) { $ready = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 2
+        }
+        if (!$ready) { throw "A local login page did not load: $url. Inspect gateway and web container logs." }
     }
     Write-Host 'RECOVERY UPDATE PASSED. API checks and both login pages passed. Production was not changed.'
 } finally { Pop-Location }

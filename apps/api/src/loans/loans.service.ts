@@ -768,8 +768,8 @@ export class LoansService {
     idempotencyKey?: string,
   ): Promise<{ loan: LoanRow }> {
     const orgId = this.requireOrg(organizationId);
-    const value = round2(amount);
-    if (value <= 0) throw new BadRequestException('Invalid repayment amount');
+    const value = moneyKobo(amount);
+    if (value <= 0n) throw new BadRequestException('Invalid repayment amount');
     await withTenant(this.pool, orgId, async (c) => {
       if (idempotencyKey) {
         const dup = await c.query(
@@ -813,64 +813,57 @@ export class LoansService {
       if (rows.length === 0) {
         throw new ConflictException('Loan has no outstanding installments');
       }
-      const totalRemaining = round2(
-        rows.reduce(
-          (acc, r) =>
-            acc +
-            Number(r.principal_due) +
-            Number(r.interest_due) -
-            Number(r.paid_principal) -
-            Number(r.paid_interest),
-          0,
-        ),
-      );
+      const totalRemaining = rows.reduce((acc, r) =>
+        acc + moneyKobo(r.principal_due) + moneyKobo(r.interest_due)
+          - moneyKobo(r.paid_principal) - moneyKobo(r.paid_interest), 0n);
       if (value > totalRemaining) {
         throw new BadRequestException(
-          `Repayment ${value} exceeds the outstanding balance of ${totalRemaining}`,
+          `Repayment ${moneyDecimal(value)} exceeds the outstanding balance of ${moneyDecimal(totalRemaining)}`,
         );
       }
 
       // Allocate: interest before principal within each installment in due order
       let remaining = value;
-      let principalPortion = 0;
-      let interestPortion = 0;
+      let principalPortion = 0n;
+      let interestPortion = 0n;
       for (const row of rows) {
-        if (remaining <= 0) break;
-        const remInterest = round2(
-          Number(row.interest_due) - Number(row.paid_interest),
-        );
-        const takeInterest = Math.min(remInterest, remaining);
-        const remPrincipal = round2(
-          Number(row.principal_due) - Number(row.paid_principal),
-        );
-        const takePrincipal = Math.min(remPrincipal, remaining - takeInterest);
-        if (takeInterest > 0 || takePrincipal > 0) {
-          const newPaidInterest = round2(Number(row.paid_interest) + takeInterest);
-          const newPaidPrincipal = round2(Number(row.paid_principal) + takePrincipal);
-          const done =
-            newPaidInterest >= Number(row.interest_due) &&
-            newPaidPrincipal >= Number(row.principal_due);
+        if (remaining <= 0n) break;
+        const remInterest = moneyKobo(row.interest_due) - moneyKobo(row.paid_interest);
+        const remPrincipal = moneyKobo(row.principal_due) - moneyKobo(row.paid_principal);
+        if (remInterest < 0n || remPrincipal < 0n) {
+          throw new ConflictException('Repayment schedule contains overpaid amounts');
+        }
+        const takeInterest = remInterest < remaining ? remInterest : remaining;
+        const availablePrincipal = remaining - takeInterest;
+        const takePrincipal = remPrincipal < availablePrincipal ? remPrincipal : availablePrincipal;
+        if (takeInterest > 0n || takePrincipal > 0n) {
+          const newPaidInterest = moneyKobo(row.paid_interest) + takeInterest;
+          const newPaidPrincipal = moneyKobo(row.paid_principal) + takePrincipal;
+          const done = newPaidInterest === moneyKobo(row.interest_due)
+            && newPaidPrincipal === moneyKobo(row.principal_due);
           await c.query(
             `UPDATE loan_repayments
                 SET paid_interest = $1, paid_principal = $2,
                     status = $3
               WHERE organization_id = $4 AND id = $5`,
             [
-              String(newPaidInterest),
-              String(newPaidPrincipal),
+              moneyDecimal(newPaidInterest),
+              moneyDecimal(newPaidPrincipal),
               done ? 'PAID' : 'PARTIAL',
               orgId,
               row.id,
             ],
           );
-          interestPortion = round2(interestPortion + takeInterest);
-          principalPortion = round2(principalPortion + takePrincipal);
-          remaining = round2(remaining - takeInterest - takePrincipal);
+          interestPortion += takeInterest;
+          principalPortion += takePrincipal;
+          remaining -= takeInterest + takePrincipal;
         }
       }
 
       // Journal: Dr Cash / Cr Loan Receivables (principal) + Cr Interest Income
-      const entryId = randomUUID();
+      if (remaining !== 0n || principalPortion + interestPortion !== value) {
+        throw new ConflictException('Repayment allocation does not conserve the amount');
+      }
       await this.postRepaymentJournal(
         c,
         orgId,
@@ -884,9 +877,9 @@ export class LoansService {
         description,
       );
 
-      const outstanding = round2(
-        Number(loanRow.outstanding_principal) - principalPortion,
-      );
+      const outstandingKobo = moneyKobo(loanRow.outstanding_principal) - principalPortion;
+      if (outstandingKobo < 0n) throw new ConflictException('Repayment exceeds outstanding principal');
+      const outstanding = moneyDecimal(outstandingKobo);
       await c.query(
         `UPDATE loans
             SET outstanding_principal = $1,
@@ -911,9 +904,9 @@ export class LoansService {
           actorUserId,
           loanId,
           JSON.stringify({
-            amount: value,
-            principal: principalPortion,
-            interest: interestPortion,
+            amount: moneyDecimal(value),
+            principal: moneyDecimal(principalPortion),
+            interest: moneyDecimal(interestPortion),
             outstanding,
           }),
         ],
@@ -929,9 +922,9 @@ export class LoansService {
     actorUserId: string,
     loanId: string,
     memberId: string,
-    amount: number,
-    principalPortion: number,
-    interestPortion: number,
+    amount: bigint,
+    principalPortion: bigint,
+    interestPortion: bigint,
     idempotencyKey: string | null,
     description: string | undefined,
   ): Promise<void> {
@@ -965,7 +958,7 @@ export class LoansService {
         entryId,
         orgId,
         periodId,
-        description ?? `Loan repayment ${String(amount)}`,
+        description ?? `Loan repayment ${moneyDecimal(amount)}`,
         loanId,
         entryNo,
         idempotencyKey,
@@ -985,18 +978,18 @@ export class LoansService {
     if (missing) throw new BadRequestException(`Unknown account code: ${missing}`);
     // Lines: 1 debit + up to 2 credits (interest credit only when > 0)
     const creditClauses: string[] = [];
-    const params: unknown[] = [orgId, entryId, idByCode.get('1000'), String(round2(amount)), memberId];
-    if (principalPortion > 0) {
+    const params: unknown[] = [orgId, entryId, idByCode.get('1000'), moneyDecimal(amount), memberId];
+    if (principalPortion > 0n) {
       creditClauses.push(
         `($1, $2, $${params.length + 1}, '0', $${params.length + 2}, $5)`,
       );
-      params.push(idByCode.get('1020'), String(round2(principalPortion)));
+      params.push(idByCode.get('1020'), moneyDecimal(principalPortion));
     }
-    if (interestPortion > 0) {
+    if (interestPortion > 0n) {
       creditClauses.push(
         `($1, $2, $${params.length + 1}, '0', $${params.length + 2}, $5)`,
       );
-      params.push(idByCode.get('4000'), String(round2(interestPortion)));
+      params.push(idByCode.get('4000'), moneyDecimal(interestPortion));
     }
     if (creditClauses.length === 0) {
       throw new BadRequestException('Nothing to post — both portions are zero');

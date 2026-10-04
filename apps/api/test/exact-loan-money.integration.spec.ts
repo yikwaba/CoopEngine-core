@@ -40,6 +40,56 @@ describe('exact loan origination, schedule and journal amounts (PostgreSQL)',()=
   await request(app.getHttpServer()).post(`/api/v1/loans/${id}/approve`).set(auth()).expect(200);
   await request(app.getHttpServer()).post(`/api/v1/loans/${id}/disburse`).set(auth()).send({}).expect(200);
  }
+ async function repaymentLoan(principal:number,rate:number,months:number){
+  await qualifyingBalance('60000000000.00');
+  await tenant(c=>c.query('UPDATE loan_products SET interest_rate_pa=$1 WHERE id=$2',[String(rate),cash]));
+  const id=(await apply(principal,months).expect(201)).body.id;await disburse(id);return id;
+ }
+ const repay=(id:string,amount:number,key?:string)=>request(app.getHttpServer()).post(`/api/v1/loans/${id}/repayments`).set(auth()).send({amount,...(key?{idempotencyKey:key}:{})});
+ async function repaymentProof(id:string){
+  return tenant(async c=>(await c.query(`SELECT l.status,l.outstanding_principal,
+   (SELECT sum(paid_principal)::text FROM loan_repayments WHERE loan_id=l.id) AS paid_principal,
+   (SELECT sum(paid_interest)::text FROM loan_repayments WHERE loan_id=l.id) AS paid_interest,
+   (SELECT sum(debit)::text FROM journal_lines WHERE journal_entry_id IN(SELECT id FROM journal_entries WHERE source_id=l.id AND source='LOAN_REPAYMENT')) AS debit,
+   (SELECT sum(credit)::text FROM journal_lines WHERE journal_entry_id IN(SELECT id FROM journal_entries WHERE source_id=l.id AND source='LOAN_REPAYMENT')) AS credit,
+   (SELECT count(*)::int FROM journal_entries WHERE source_id=l.id AND source='LOAN_REPAYMENT') AS entries
+   FROM loans l WHERE id=$1`,[id])).rows[0]);
+ }
+ it('conserves 115 one-kobo repayments and closes exactly at zero',async()=>{
+  const id=await repaymentLoan(1.15,0,5);
+  for(let n=0;n<115;n++)await repay(id,0.01).expect(200);
+  expect(await repaymentProof(id)).toEqual({status:'COMPLETED',outstanding_principal:'0.00',paid_principal:'1.15',paid_interest:'0.00',debit:'1.15',credit:'1.15',entries:115});
+  await repay(id,0.01).expect(409);
+ });
+ it('allocates interest first in installment order with exact partial payments',async()=>{
+  const id=await repaymentLoan(1.15,120,5); // total interest 0.58: four 0.11, final 0.14
+  await repay(id,0.10).expect(200);await repay(id,0.24).expect(200);await repay(id,0.01).expect(200);
+  const rows=await tenant(async c=>(await c.query('SELECT paid_principal,paid_interest,status FROM loan_repayments WHERE loan_id=$1 ORDER BY seq',[id])).rows);
+  expect(rows[0]).toEqual({paid_principal:'0.23',paid_interest:'0.11',status:'PAID'});
+  expect(rows[1]).toEqual({paid_principal:'0.00',paid_interest:'0.01',status:'PARTIAL'});
+  const partial=await repaymentProof(id);expect(partial.outstanding_principal).toBe('0.92');expect(partial.debit).toBe('0.35');expect(partial.credit).toBe('0.35');
+  await repay(id,1.38).expect(200);
+  expect(await repaymentProof(id)).toEqual({status:'COMPLETED',outstanding_principal:'0.00',paid_principal:'1.15',paid_interest:'0.58',debit:'1.73',credit:'1.73',entries:4});
+ });
+ it('rejects one-kobo overpayment without changing balances or journals',async()=>{
+  const id=await repaymentLoan(1.15,0,5),before=await repaymentProof(id);
+  await repay(id,1.16).expect(400);expect(await repaymentProof(id)).toEqual(before);
+ });
+ it('posts the maximum supported numeric repayment without precision loss',async()=>{
+  const id=await repaymentLoan(100000000000,0,60);await repay(id,99999999999.99).expect(200);
+  expect((await repaymentProof(id)).outstanding_principal).toBe('0.01');await repay(id,0.01).expect(200);
+  const proof=await repaymentProof(id);expect(proof.debit).toBe('100000000000.00');expect(proof.credit).toBe(proof.debit);expect(proof.status).toBe('COMPLETED');
+ });
+ it('rolls back allocation and outstanding balance when the accounting period is closed',async()=>{
+  const id=await repaymentLoan(1.15,0,5),before=await repaymentProof(id);
+  await tenant(c=>c.query("UPDATE ledger_periods SET status='CLOSED' WHERE status='OPEN'"));
+  try{await repay(id,0.23).expect(409);expect(await repaymentProof(id)).toEqual(before);}
+  finally{await tenant(c=>c.query("UPDATE ledger_periods SET status='OPEN' WHERE now()::date BETWEEN start_date AND end_date"));}
+ });
+ it('rejects duplicate repayment keys without another allocation',async()=>{
+  const id=await repaymentLoan(1.15,0,5),key=randomUUID();await repay(id,0.23,key).expect(200);
+  const before=await repaymentProof(id);await repay(id,0.23,key).expect(409);expect(await repaymentProof(id)).toEqual(before);
+ });
  it('accepts the exact 3x boundary and rejects one additional kobo without persisting a loan',async()=>{
   await qualifyingBalance('1.15');await apply(3.45,5).expect(201);
   const before=await tenant(async c=>(await c.query('SELECT count(*)::int AS n FROM loans')).rows[0].n);
