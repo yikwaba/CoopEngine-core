@@ -141,4 +141,17 @@ describe('atomic payroll reversal (PostgreSQL)',()=>{
   const pairs=await f.tenant(async c=>(await c.query(`SELECT st.signed_amount,je.reversal_of_entry_id FROM savings_transactions st JOIN journal_entries je ON je.id=st.journal_entry_id WHERE st.type='WITHDRAWAL'`)).rows);expect(pairs.map(r=>r.signed_amount).sort()).toEqual(['-0.01','-0.23']);expect(new Set(pairs.map(r=>r.reversal_of_entry_id)).size).toBe(2);
  });
 
+ it('rolls back a journal-stage failure without any correction or counter change',async()=>{
+  const {f,id}=await posted(),before=await snapshot(f);
+  await pool.query(`CREATE FUNCTION payroll_test_fail_journal() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='journal.reversed' AND NEW.organization_id='${f.org}'::uuid THEN RAISE EXCEPTION 'synthetic journal reversal failure'; END IF; RETURN NEW; END; $$`);
+  await pool.query('CREATE TRIGGER payroll_test_fail_journal BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION payroll_test_fail_journal()');
+  try{await reverse(f,id).expect(500);expect(await snapshot(f)).toEqual(before);}finally{await pool.query('DROP TRIGGER payroll_test_fail_journal ON audit_logs');await pool.query('DROP FUNCTION payroll_test_fail_journal()');}
+ });
+ it('rolls back all financial corrections when batch-state finalization fails',async()=>{
+  const {f,id}=await posted(),before=await snapshot(f);
+  await pool.query(`CREATE FUNCTION payroll_test_fail_state() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.status='REVERSED' AND NEW.organization_id='${f.org}'::uuid THEN RAISE EXCEPTION 'synthetic payroll state failure'; END IF; RETURN NEW; END; $$`);
+  await pool.query('CREATE TRIGGER payroll_test_fail_state BEFORE UPDATE ON payroll_batches FOR EACH ROW EXECUTE FUNCTION payroll_test_fail_state()');
+  try{await reverse(f,id).expect(500);expect(await snapshot(f)).toEqual(before);}finally{await pool.query('DROP TRIGGER payroll_test_fail_state ON payroll_batches');await pool.query('DROP FUNCTION payroll_test_fail_state()');}
+ });
+
 });
