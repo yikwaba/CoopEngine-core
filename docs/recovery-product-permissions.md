@@ -17,3 +17,7 @@ The products controller declared `products.view` and `products.manage` permissio
 A real PostgreSQL integration test uses the complete app, active sessions, two synthetic organizations and valid restricted test JWTs. It verifies 401/403 writes leave product and audit snapshots unchanged; permitted create/update/status operations persist and produce six audit events; a second organization's manager cannot list or mutate the first organization's products. Restricted JWTs exercise signed-claim enforcement, not role-assignment administration.
 
 No production deployment, migration, role-template change, or financial posting is included. Real PostgreSQL results must be recorded after CI completes; passing mocked-service tests alone does not establish persistence acceptance.
+
+## Authorized loan update discovered during verification
+
+CI #112 reproduced a 500 on the authorized loan-product edit path: ProductsService updated loan_products.updated_at, but migration 0009 and the current schema contain no such column. Loan status updates had the same assumption. Match these two queries to the existing schema; retain savings updated_at updates. The real database test exercises both edit and status paths and must pass before reporting this recovery complete. No schema migration is required.
