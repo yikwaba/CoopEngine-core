@@ -1,3 +1,4 @@
+import { financialIntent } from '../common/financial-intent';
 import { flatLoanInstallments, loanCeiling, moneyDecimal, moneyKobo } from '../common/money';
 import {
   BadRequestException,
@@ -345,7 +346,7 @@ export class LoansService {
     await withTenant(this.pool, orgId, async (c) => {
       const { rows } = await c.query(
         `SELECT l.id, l.status, l.member_id FROM loans l
-          WHERE l.organization_id = $1 AND l.id = $2`,
+          WHERE l.organization_id = $1 AND l.id = $2 FOR UPDATE`,
         [orgId, loanId],
       );
       const current = rows[0] as
@@ -392,7 +393,7 @@ export class LoansService {
           `SELECT l.id, l.member_id, l.principal, l.term_months,
                   l.interest_rate_pa, l.interest_method
              FROM loans l
-            WHERE l.organization_id = $1 AND l.id = $2`,
+            WHERE l.organization_id = $1 AND l.id = $2 FOR UPDATE`,
           [orgId, loanId],
         );
         const loanRow = loan.rows[0] as {
@@ -770,17 +771,9 @@ export class LoansService {
     const orgId = this.requireOrg(organizationId);
     const value = moneyKobo(amount);
     if (value <= 0n) throw new BadRequestException('Invalid repayment amount');
-    await withTenant(this.pool, orgId, async (c) => {
-      if (idempotencyKey) {
-        const dup = await c.query(
-          `SELECT 1 FROM journal_entries
-            WHERE organization_id = $1 AND idempotency_key = $2 LIMIT 1`,
-          [orgId, idempotencyKey],
-        );
-        if (dup.rows[0]) {
-          throw new ConflictException('idempotencyKey has already been used');
-        }
-      }
+    return financialIntent(this.pool,orgId,'loans.repayment',idempotencyKey,
+      {actorUserId,loanId,amount:moneyDecimal(value),description:description??null},async (c,journalKey) => {
+
       const loan = await c.query(
         `SELECT l.id, l.member_id, l.status, l.outstanding_principal
            FROM loans l WHERE l.organization_id = $1 AND l.id = $2 FOR UPDATE`,
@@ -873,7 +866,7 @@ export class LoansService {
         value,
         principalPortion,
         interestPortion,
-        idempotencyKey ?? null,
+        journalKey ?? null,
         description,
       );
 
@@ -911,9 +904,9 @@ export class LoansService {
           }),
         ],
       );
+      const result=await c.query(`${selectLoan} WHERE l.organization_id=$1 AND l.id=$2`,[orgId,loanId]);
+      return {loan:this.mapLoan(result.rows[0])};
     });
-    const loan = await this.getLoan(orgId, loanId);
-    return { loan };
   }
 
   private async postRepaymentJournal(

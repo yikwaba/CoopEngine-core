@@ -1,3 +1,4 @@
+import { financialIntent } from '../common/financial-intent';
 import { moneyDecimal, moneyKobo } from '../common/money';
 import {
   BadRequestException,
@@ -87,9 +88,10 @@ export class SharesService {
     const orgId = this.requireOrg(organizationId);
     const value = moneyKobo(amount);
     if (value <= 0n) throw new BadRequestException('Invalid redemption amount');
-    await withTenant(this.pool, orgId, async (c) => {
+    return financialIntent(this.pool,orgId,'shares.redeem',idempotencyKey,
+      {actorUserId,memberId,amount:moneyDecimal(value),description:description??null},async (c,journalKey) => {
       const member = await c.query(
-        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
+        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2 FOR NO KEY UPDATE`,
         [orgId, memberId],
       );
       const m = member.rows[0] as { id: string; status: string } | undefined;
@@ -97,16 +99,7 @@ export class SharesService {
       if (m.status !== 'ACTIVE') {
         throw new ConflictException('Only ACTIVE members can redeem shares');
       }
-      if (idempotencyKey) {
-        const dup = await c.query(
-          `SELECT 1 FROM journal_entries
-            WHERE organization_id = $1 AND idempotency_key = $2 LIMIT 1`,
-          [orgId, idempotencyKey],
-        );
-        if (dup.rows[0]) {
-          throw new ConflictException('idempotencyKey has already been used');
-        }
-      }
+
       const existing = await c.query(
         `SELECT id, current_balance FROM member_share_accounts
           WHERE organization_id = $1 AND member_id = $2 FOR UPDATE`,
@@ -157,7 +150,7 @@ export class SharesService {
           description ?? `Share redemption ${moneyDecimal(value)}`,
           accountId,
           entryNo,
-          idempotencyKey ?? null,
+          journalKey ?? null,
           actorUserId,
         ],
       );
@@ -207,8 +200,8 @@ export class SharesService {
           JSON.stringify({ source: 'SHARE_REDEMPTION', entryNo, value: moneyDecimal(value) }),
         ],
       );
+      return this.getAccountTx(c,orgId,memberId);
     });
-    return this.getAccount(orgId, memberId);
   }
 
   /** Purchase share capital: Dr Cash / Cr Member Share Capital (3000). */
@@ -223,9 +216,10 @@ export class SharesService {
     const orgId = this.requireOrg(organizationId);
     const value = moneyKobo(amount);
     if (value <= 0n) throw new BadRequestException('Invalid purchase amount');
-    await withTenant(this.pool, orgId, async (c) => {
+    return financialIntent(this.pool,orgId,'shares.purchase',idempotencyKey,
+      {actorUserId,memberId,amount:moneyDecimal(value),description:description??null},async (c,journalKey) => {
       const member = await c.query(
-        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
+        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2 FOR NO KEY UPDATE`,
         [orgId, memberId],
       );
       const m = member.rows[0] as { id: string; status: string } | undefined;
@@ -233,17 +227,7 @@ export class SharesService {
       if (m.status !== 'ACTIVE') {
         throw new ConflictException('Only ACTIVE members can buy shares');
       }
-      if (idempotencyKey) {
-        const dup = await c.query(
-          `SELECT 1 FROM journal_entries
-            WHERE organization_id = $1 AND idempotency_key = $2 LIMIT 1`,
-          [orgId, idempotencyKey],
-        );
-        if (dup.rows[0]) {
-          throw new ConflictException('idempotencyKey has already been used');
-        }
-      }
-      // Auto-open the share account on first purchase
+
       const existing = await c.query(
         `SELECT id, current_balance FROM member_share_accounts
           WHERE organization_id = $1 AND member_id = $2 FOR UPDATE`,
@@ -298,7 +282,7 @@ export class SharesService {
           description ?? `Share purchase ${moneyDecimal(value)}`,
           accountId,
           entryNo,
-          idempotencyKey ?? null,
+          journalKey ?? null,
           actorUserId,
         ],
       );
@@ -347,8 +331,8 @@ export class SharesService {
           JSON.stringify({ entryNo, source: 'SHARE_PURCHASE', accountId }),
         ],
       );
+      return this.getAccountTx(c,orgId,memberId);
     });
-    return this.getAccount(orgId, memberId);
   }
 
   async statement(

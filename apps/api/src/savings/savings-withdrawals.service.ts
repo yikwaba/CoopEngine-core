@@ -1,3 +1,4 @@
+import { financialIntent } from '../common/financial-intent';
 import { moneyDecimal, moneyKobo } from '../common/money';
 import {
   BadRequestException,
@@ -104,16 +105,17 @@ export class SavingsWithdrawalsService {
     accountId: string,
     amount: number,
     description?: string,
+    idempotencyKey?: string,
   ): Promise<WithdrawalDecision> {
     const orgId = this.requireOrg(organizationId);
     const value = moneyKobo(amount);
     if (value <= 0n) throw new BadRequestException('Invalid amount');
 
-    const threshold = await withTenant(this.pool, orgId, async (c) => {
-      const result = await c.query('SELECT withdrawal_approval_threshold FROM organizations WHERE id=$1', [orgId]);
-      const raw = result.rows[0]?.withdrawal_approval_threshold as string | null | undefined;
-      return raw == null ? null : moneyKobo(raw);
-    });
+    return financialIntent<WithdrawalDecision>(this.pool,orgId,'savings.withdrawal.request',idempotencyKey,
+      {actorUserId,source,memberId,accountId,amount:moneyDecimal(value),description:description??null},async(c,journalKey)=>{
+    const result = await c.query('SELECT withdrawal_approval_threshold FROM organizations WHERE id=$1', [orgId]);
+    const raw = result.rows[0]?.withdrawal_approval_threshold as string | null | undefined;
+    const threshold = raw == null ? null : moneyKobo(raw);
     const needsApproval =
       source === 'MEMBER' || (threshold !== null && (threshold === 0n || value > threshold));
 
@@ -124,11 +126,11 @@ export class SavingsWithdrawalsService {
         accountId,
         amount,
         description,
+        undefined,c,journalKey,
       );
       return { kind: 'POSTED', account };
     }
 
-    return withTenant(this.pool, orgId, async (c) => {
       const acc = await c.query(
         `SELECT a.id, a.member_id, a.status FROM member_savings_accounts a
           WHERE a.id = $1 AND a.organization_id = $2`,
