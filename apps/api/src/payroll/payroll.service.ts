@@ -500,7 +500,7 @@ export class PayrollService {
     reason: string,
   ) {
     const orgId = this.requireOrg(organizationId);
-    if (!reason?.trim()) throw new BadRequestException('A rejection reason is required');
+    if (typeof reason !== 'string' || !reason.trim()) throw new BadRequestException('A rejection reason is required');
     return withTenant(this.pool, orgId, async (c) => {
       const { rows } = await c.query(
         `UPDATE payroll_batches
@@ -530,108 +530,112 @@ export class PayrollService {
     reason: string,
   ) {
     const orgId = this.requireOrg(organizationId);
-    if (!reason?.trim()) throw new BadRequestException('A reversal reason is required');
+    if (typeof reason !== 'string' || !reason.trim()) throw new BadRequestException('A reversal reason is required');
 
-    const batch = await withTenant(this.pool, orgId, async (c) => {
-      const { rows } = await c.query(
-        `SELECT id, status, journal_entry_ids, total_amount FROM payroll_batches
-          WHERE organization_id = $1 AND id = $2`,
-        [orgId, batchId],
+    return withTenant(this.pool, orgId, async (c) => {
+      const batchResult = await c.query(
+        `SELECT id,status,journal_entry_ids FROM payroll_batches
+          WHERE organization_id=$1 AND id=$2 FOR UPDATE`, [orgId,batchId],
       );
-      return rows[0] as
-        | { id: string; status: string; journal_entry_ids: string[]; total_amount: string }
-        | undefined;
-    });
-    if (!batch) throw new NotFoundException('Payroll batch not found');
-    if (batch.status !== 'POSTED') {
-      throw new ConflictException('Only a posted batch can be reversed');
-    }
-
-    const entries = Array.isArray(batch.journal_entry_ids) ? batch.journal_entry_ids : [];
-    if (entries.length === 0) {
-      // Fall back to the source stamp, in case a batch was posted before this column existed.
-      const found = await withTenant(this.pool, orgId, (c) =>
-        c.query(
-          `SELECT id FROM journal_entries
-            WHERE organization_id = $1 AND source_type = 'payroll_batch' AND source_id = $2
-              AND status = 'POSTED'`,
-          [orgId, batchId],
-        ),
+      const batch = batchResult.rows[0];
+      if (!batch) throw new NotFoundException('Payroll batch not found');
+      if (batch.status !== 'POSTED') throw new ConflictException('Only a posted batch can be reversed');
+      const sources = await c.query(
+        `SELECT id,status FROM journal_entries WHERE organization_id=$1
+          AND source_type='payroll_batch' AND source_id=$2 ORDER BY id FOR UPDATE`, [orgId,batchId],
       );
-      entries.push(...(found.rows as { id: string }[]).map((r) => r.id));
-    }
-
-    const reversed: string[] = [];
-    for (const entryId of entries) {
-      const result = await this.ledger.reverse(orgId, actorUserId, entryId, reason.trim());
-      reversed.push((result.reversal as { id?: string })?.id ?? entryId);
-    }
-
-    // Reversing the journal balances the books; it does not by itself move the money back out of
-    // the members' savings accounts, so that is done here — in the same place the posting put it
-    // in, and with the same refusal to overdraw: if a member has already spent it, an officer has
-    // to deal with that rather than the system quietly inventing a negative balance.
-    await withTenant(this.pool, orgId, async (c) => {
-      const { rows } = await c.query(
-        `SELECT rows FROM payroll_batches WHERE organization_id = $1 AND id = $2`,
-        [orgId, batchId],
+      const entries = sources.rows.map((r) => r.id as string);
+      const manifest: unknown = batch.journal_entry_ids;
+      if (!Array.isArray(manifest)) throw new ConflictException('Payroll journal links require reconciliation');
+      // Historical empty manifests may use the source stamp, but never guess missing or foreign links.
+      if (!entries.length || sources.rows.some((r) => r.status !== 'POSTED') ||
+          (manifest.length > 0 && (new Set(manifest).size !== entries.length ||
+            manifest.length !== entries.length || entries.some((id) => !manifest.includes(id))))) {
+        throw new ConflictException('Payroll journals require reconciliation before reversal');
+      }
+      const credits = new Map<string,bigint>();
+      const creditKey = (entryId: string,memberId: string) => `${entryId}:${memberId}`;
+      const lines = await c.query(
+        `SELECT jl.journal_entry_id,jl.member_id,jl.debit,jl.credit,coa.code
+           FROM journal_lines jl JOIN chart_of_accounts coa ON coa.id=jl.account_id
+          WHERE jl.organization_id=$1 AND jl.journal_entry_id=ANY($2::uuid[])`, [orgId,entries],
       );
-      const postedRows = ((rows[0] as { rows: unknown } | undefined)?.rows ?? []) as {
-        memberId: string;
-        amount: string | number;
-      }[];
-
-      for (const row of postedRows) {
-        const account = await c.query(
-          `SELECT id, current_balance FROM member_savings_accounts
-            WHERE organization_id = $1 AND member_id = $2 AND status = 'ACTIVE'
-            ORDER BY opened_at LIMIT 1 FOR UPDATE`,
-          [orgId, row.memberId],
-        );
-        const acc = account.rows[0] as { id: string; current_balance: string } | undefined;
-        if (!acc) continue;
-        const balance = moneyKobo(acc.current_balance);
-        const value = moneyKobo(row.amount);
-        if (balance < value) {
-          throw new ConflictException(
-            `Member ${row.memberId} has only ${moneyDecimal(balance)} in savings; the ${row.amount} this batch ` +
-              'credited has already been used, so it must be resolved by hand',
+      for (const line of lines.rows) {
+        const debit=moneyKobo(line.debit),credit=moneyKobo(line.credit);
+        if (line.code === '1000' && !line.member_id && debit>0n && credit===0n) continue;
+        if (line.code !== '2000' || !line.member_id || credit<=0n || debit!==0n) {
+          throw new ConflictException('Unsupported payroll journal; reconcile before reversal');
+        }
+        const key=creditKey(line.journal_entry_id,line.member_id);
+        credits.set(key,(credits.get(key)??0n)+credit);
+      }
+      // Posted projections identify the exact account and actual credited amount, including skips.
+      const movements = await c.query(
+        `SELECT st.account_id,st.journal_entry_id,st.type,st.signed_amount,a.member_id
+           FROM savings_transactions st LEFT JOIN member_savings_accounts a ON a.id=st.account_id
+          WHERE st.organization_id=$1 AND st.journal_entry_id=ANY($2::uuid[])
+          ORDER BY st.account_id,st.id`, [orgId,entries],
+      );
+      const projectedCredits = new Map<string,bigint>();
+      const debits = new Map<string,Map<string,bigint>>();
+      for (const movement of movements.rows) {
+        const value=moneyKobo(movement.signed_amount);
+        if (!movement.member_id || movement.type !== 'DEPOSIT' || value<=0n) {
+          throw new ConflictException('Payroll savings projections require reconciliation');
+        }
+        const key=creditKey(movement.journal_entry_id,movement.member_id);
+        projectedCredits.set(key,(projectedCredits.get(key)??0n)+value);
+        const byEntry=debits.get(movement.account_id)??new Map<string,bigint>();
+        byEntry.set(movement.journal_entry_id,(byEntry.get(movement.journal_entry_id)??0n)+value);
+        debits.set(movement.account_id,byEntry);
+      }
+      if (!credits.size || credits.size!==projectedCredits.size ||
+          [...credits].some(([key,value])=>projectedCredits.get(key)!==value)) {
+        throw new ConflictException('Payroll journal and savings projections disagree; reconcile before reversal');
+      }
+      const accounts = await c.query(
+        `SELECT id,current_balance,status FROM member_savings_accounts
+          WHERE organization_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR UPDATE`,
+        [orgId,[...debits.keys()]],
+      );
+      if (accounts.rows.length !== debits.size) throw new ConflictException('A posted savings account is missing');
+      for (const account of accounts.rows) {
+        const total=[...debits.get(account.id)!.values()].reduce((sum,value)=>sum+value,0n);
+        if (account.status !== 'ACTIVE' || moneyKobo(account.current_balance)<total) {
+          throw new ConflictException('A posted savings account is unavailable or has insufficient balance; no reversal made');
+        }
+      }
+      const reversals = new Map<string,string>();
+      for (const entryId of entries) {
+        reversals.set(entryId,await this.ledger.reverseInTransaction(c,orgId,actorUserId,entryId,reason.trim(),batchId));
+      }
+      for (const account of accounts.rows) {
+        let balance=moneyKobo(account.current_balance);
+        for (const [entryId,value] of debits.get(account.id)!) {
+          balance-=value;
+          await c.query(
+            `INSERT INTO savings_transactions
+              (organization_id,account_id,journal_entry_id,type,signed_amount,running_balance)
+             VALUES ($1,$2,$3,'WITHDRAWAL',$4,$5)`,
+            [orgId,account.id,reversals.get(entryId),moneyDecimal(-value),moneyDecimal(balance)],
           );
         }
-        const after = balance - value;
         await c.query(
-          `UPDATE member_savings_accounts SET current_balance = $1
-            WHERE organization_id = $2 AND id = $3`,
-          [moneyDecimal(after), orgId, acc.id],
-        );
-        await c.query(
-          `INSERT INTO savings_transactions
-             (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
-           VALUES ($1, $2, $3, 'WITHDRAWAL', $4, $5)`,
-          [orgId, acc.id, reversed[0] ?? null, moneyDecimal(-value), moneyDecimal(after)],
+          `UPDATE member_savings_accounts SET current_balance=$1 WHERE organization_id=$2 AND id=$3`,
+          [moneyDecimal(balance),orgId,account.id],
         );
       }
-    });
-
-    await withTenant(this.pool, orgId, async (c) => {
       await c.query(
-        `UPDATE payroll_batches
-            SET status = 'REVERSED', reversed_by = $1, reversed_at = now(), reversal_reason = $4
-          WHERE organization_id = $2 AND id = $3`,
-        [actorUserId, orgId, batchId, reason.trim()],
+        `UPDATE payroll_batches SET status='REVERSED',reversed_by=$1,reversed_at=now(),reversal_reason=$4
+          WHERE organization_id=$2 AND id=$3`, [actorUserId,orgId,batchId,reason.trim()],
       );
       await c.query(
-        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
-         VALUES ($1, $2, 'payroll.reversed', 'payroll_batch', $3, $4::jsonb)`,
-        [
-          orgId,
-          actorUserId,
-          batchId,
-          JSON.stringify({ reason: reason.trim(), entriesReversed: reversed.length }),
-        ],
+        `INSERT INTO audit_logs (organization_id,actor_user_id,action,entity_type,entity_id,metadata)
+         VALUES ($1,$2,'payroll.reversed','payroll_batch',$3,$4::jsonb)`,
+        [orgId,actorUserId,batchId,JSON.stringify({reason:reason.trim(),entriesReversed:reversals.size})],
       );
+      return {id:batchId,status:'REVERSED',entriesReversed:reversals.size};
     });
-    return { id: batchId, status: 'REVERSED', entriesReversed: reversed.length };
   }
 
   /** Batch history: what was uploaded, who submitted it, where it stands. */

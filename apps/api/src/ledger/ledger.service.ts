@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
 import {
@@ -415,88 +415,85 @@ export class LedgerService {
     reason: string,
   ): Promise<{ reversal: JournalEntryRow }> {
     const orgId = this.requireOrg(organizationId);
-    if (!reason?.trim()) {
+    if (typeof reason !== 'string' || !reason.trim()) {
       throw new BadRequestException('A reversal reason is required');
     }
-    const reversalId = randomUUID();
-    await withTenant(this.pool, orgId, async (c) => {
-      const current = await this.requireState(c, orgId, journalId, 'POSTED');
-      const original = await this.getJournal(orgId, journalId);
-
-      await c.query(
-        `INSERT INTO journal_entries
-           (id, organization_id, period_id, entry_date, description, source,
-            source_type, source_id, status, created_by, reversal_of_entry_id)
-         VALUES ($1, $2, $3, $4, $5, 'REVERSAL', 'journal_entry', $6, 'POSTED', $7, $6)`,
-        [
-          reversalId,
-          orgId,
-          current.period_id,
-          original.entry.entryDate,
-          `Reversal of entry #${original.entry.entryNo ?? ''}: ${reason}`,
-          journalId,
-          actorUserId,
-        ],
-      );
-      const codes = [...new Set(original.lines.map((l) => l.accountCode))];
-      const accRes = await c.query(
-        `SELECT id, code FROM chart_of_accounts
-          WHERE organization_id = $1 AND code = ANY($2::varchar[])`,
-        [orgId, codes],
-      );
-      const idByCode = new Map<string, string>();
-      for (const r of accRes.rows as { id: string; code: string }[]) {
-        idByCode.set(r.code, r.id);
-      }
-      // Single multi-row insert (statement-level balance trigger).
-      const values: string[] = [];
-      const params: unknown[] = [];
-      original.lines.forEach((line) => {
-        const base = params.length;
-        values.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`);
-        params.push(
-          orgId,
-          reversalId,
-          idByCode.get(line.accountCode),
-          String(round2(line.credit)), // debit mirrors the original credit
-          String(round2(line.debit)), // credit mirrors the original debit
-          `Reversal: ${reason}`,
-        );
-      });
-      await c.query(
-        `INSERT INTO journal_lines (organization_id, journal_entry_id, account_id, debit, credit, memo)
-         VALUES ${values.join(', ')}`,
-        params,
-      );
-      const seq = await c.query(
-        `UPDATE org_counters SET journal_seq = journal_seq + 1, updated_at = now()
-          WHERE organization_id = $1 RETURNING journal_seq`,
-        [orgId],
-      );
-      const reversalNo = Number(
-        (seq.rows[0] as { journal_seq: string | number }).journal_seq,
-      );
-      await c.query(
-        `UPDATE journal_entries SET entry_no = $1, posted_by = $2, posted_at = now()
-          WHERE id = $3`,
-        [reversalNo, actorUserId, reversalId],
-      );
-      await c.query(
-        `UPDATE journal_entries SET status = 'REVERSED' WHERE id = $1`,
-        [journalId],
-      );
-      await c.query(
-        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
-         VALUES ($1, $2, 'journal.reversed', 'journal_entry', $3, $4)`,
-        [
-          orgId,
-          actorUserId,
-          journalId,
-          JSON.stringify({ reversalId, entryNo: reversalNo, reason }),
-        ],
-      );
-    });
+    const reversalId = await withTenant(this.pool, orgId, (c) =>
+      this.reverseInTransaction(c, orgId, actorUserId, journalId, reason.trim()),
+    );
     return { reversal: (await this.getJournal(orgId, reversalId)).entry };
+  }
+
+  /** Caller owns this tenant transaction; no nested connection or early commit. */
+  async reverseInTransaction(
+    c: PoolClient, orgId: string, actorUserId: string, journalId: string,
+    reason: string, payrollBatchId?: string,
+  ): Promise<string> {
+    if (typeof reason !== 'string' || !reason.trim()) throw new BadRequestException('A reversal reason is required');
+    const { rows } = await c.query(
+      `SELECT id, status, period_id, entry_date::text, entry_no, source, source_type, source_id
+         FROM journal_entries WHERE organization_id=$1 AND id=$2 FOR UPDATE`,
+      [orgId, journalId],
+    );
+    const original = rows[0];
+    if (!original) throw new NotFoundException('Journal entry not found');
+    if (original.status !== 'POSTED') throw new ConflictException('Only a posted journal can be reversed');
+    if (['PAYROLL','PAYROLL_DEDUCTION'].includes(original.source) || original.source_type === 'payroll_batch') {
+      if (!payrollBatchId || original.source_type !== 'payroll_batch' || original.source_id !== payrollBatchId) {
+        throw new ConflictException('Reverse payroll through its batch to reconcile savings atomically');
+      }
+    } else if (payrollBatchId) throw new ConflictException('Journal does not belong to this payroll batch');
+    const period = await c.query(
+      `SELECT status FROM ledger_periods WHERE organization_id=$1 AND id=$2 FOR SHARE`,
+      [orgId, original.period_id],
+    );
+    if (period.rows[0]?.status !== 'OPEN') throw new ConflictException('The original accounting period must be OPEN to reverse');
+    const existing = await c.query(
+      `SELECT id FROM journal_entries WHERE organization_id=$1 AND reversal_of_entry_id=$2`,
+      [orgId, journalId],
+    );
+    if (existing.rowCount) throw new ConflictException('Journal already has a reversal; reconciliation is required');
+    const totals = await c.query(
+      `SELECT count(*)::int AS lines,sum(debit)::text AS debit,sum(credit)::text AS credit
+         FROM journal_lines WHERE organization_id=$1 AND journal_entry_id=$2`, [orgId,journalId],
+    );
+    const total=totals.rows[0];
+    if (total.lines<2 || !total.debit || total.debit!==total.credit || /^0(?:\.0+)?$/.test(total.debit)) {
+      throw new ConflictException('Original journal is not balanced; reconciliation is required');
+    }
+    const reversalId = randomUUID();
+    await c.query(
+      `INSERT INTO journal_entries
+        (id, organization_id, period_id, entry_date, description, source, source_type, source_id,
+         status, created_by, reversal_of_entry_id)
+       VALUES ($1,$2,$3,$4,$5,'REVERSAL','journal_entry',$6,'POSTED',$7,$6)`,
+      [reversalId, orgId, original.period_id, original.entry_date,
+       `Reversal of entry #${original.entry_no ?? ''}: ${reason.trim()}`, journalId, actorUserId],
+    );
+    // Mirror SQL NUMERIC values and original account/member links without Number conversion.
+    await c.query(
+      `INSERT INTO journal_lines (organization_id, journal_entry_id, account_id, debit, credit, memo, member_id)
+       SELECT organization_id,$1,account_id,credit,debit,$2,member_id FROM journal_lines
+        WHERE organization_id=$3 AND journal_entry_id=$4 ORDER BY id`,
+      [reversalId, `Reversal: ${reason.trim()}`, orgId, journalId],
+    );
+    const seq = await c.query(
+      `UPDATE org_counters SET journal_seq=journal_seq+1,updated_at=now()
+        WHERE organization_id=$1 RETURNING journal_seq`, [orgId],
+    );
+    if (!seq.rows[0]) throw new ConflictException('Organization journal counter is missing');
+    await c.query(
+      `UPDATE journal_entries SET entry_no=$1,posted_by=$2,posted_at=now()
+        WHERE organization_id=$3 AND id=$4`,
+      [seq.rows[0].journal_seq,actorUserId,orgId,reversalId],
+    );
+    await c.query(`UPDATE journal_entries SET status='REVERSED' WHERE organization_id=$1 AND id=$2`, [orgId,journalId]);
+    await c.query(
+      `INSERT INTO audit_logs (organization_id,actor_user_id,action,entity_type,entity_id,metadata)
+       VALUES ($1,$2,'journal.reversed','journal_entry',$3,$4::jsonb)`,
+      [orgId,actorUserId,journalId,JSON.stringify({reversalId,entryNo:Number(seq.rows[0].journal_seq),reason:reason.trim()})],
+    );
+    return reversalId;
   }
 
   // -------------------------------------------------------------- helpers
