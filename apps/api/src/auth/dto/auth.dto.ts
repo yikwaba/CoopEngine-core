@@ -42,6 +42,7 @@ export class MfaDisableDto {
 export class MfaLoginVerifyDto {
   @IsString()
   @MinLength(16)
+  @MaxLength(512)
   mfaToken!: string;
 
   @IsString()
@@ -51,6 +52,24 @@ export class MfaLoginVerifyDto {
   @IsOptional()
   @IsString()
   organizationSlug?: string;
+}
+
+export class MfaRecoveryDto {
+  @IsString()
+  @Length(64,64)
+  @Matches(/^[a-f0-9]{64}$/)
+  mfaToken!: string;
+
+  @IsString()
+  @Matches(/^[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{8}){3}$/)
+  recoveryCode!: string;
+}
+
+export class MfaRecoveryCodesDto extends MfaVerifySetupDto {
+  @IsString()
+  @MinLength(8)
+  @MaxLength(72)
+  password!: string;
 }
 
 export class RequestPasswordResetDto {

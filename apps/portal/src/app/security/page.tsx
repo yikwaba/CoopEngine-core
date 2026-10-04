@@ -1,11 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { apiFetch, clearSession, readToken } from '../../lib/api';
+import { EnrollmentPanel, RecoveryCodesPanel } from '../../components/mfa-panels';
+import { apiFetch, clearSession, readToken, storeSession, LoginOutcome } from '../../lib/api';
 
 interface Me {
   user: { id: string; email: string; mfaEnabled: boolean };
   organizationId: string | null;
+  organizationSlug: string | null;
   permissions: string[];
 }
 
@@ -24,6 +26,9 @@ export default function SecurityPage() {
   const [otpauthUrl, setOtpauthUrl] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [password, setPassword] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -43,11 +48,12 @@ export default function SecurityPage() {
     setError(null);
     setNotice(null);
     try {
-      const res = await apiFetch<{ secret: string; otpauthUrl: string }>(
+      const res = await apiFetch<{ secret: string; otpauthUrl: string; mfaToken: string }>(
         '/auth/mfa/setup',
         readToken() ?? undefined,
         { method: 'POST', body: JSON.stringify({}) },
       );
+      setMfaToken(res.mfaToken);
       setSecret(res.secret);
       setOtpauthUrl(res.otpauthUrl);
     } catch (err) {
@@ -61,10 +67,12 @@ export default function SecurityPage() {
     setBusy(true);
     setError(null);
     try {
-      await apiFetch('/auth/mfa/verify-setup', readToken() ?? undefined, {
+      const outcome = await apiFetch<LoginOutcome>('/auth/mfa/enroll', undefined, {
         method: 'POST',
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ mfaToken, code, organizationSlug: me?.organizationSlug ?? undefined }),
       });
+      if (!outcome.tokens) throw new Error('Finish setup from sign-in with your cooperative short name.');
+      storeSession(outcome.tokens, me?.user.email ?? ''); setCodes(outcome.recoveryCodes ?? []); setMfaToken(null);
       setSecret(null);
       setOtpauthUrl(null);
       setCode('');
@@ -87,13 +95,20 @@ export default function SecurityPage() {
         body: JSON.stringify({ code }),
       });
       setCode('');
-      setNotice('Two-step verification is off.');
-      await load();
+      clearSession(); window.location.href = '/login';
     } catch (err) {
       setError(err instanceof Error ? err.message : 'That code was not accepted');
     } finally {
       setBusy(false);
     }
+  }
+
+  async function regenerateCodes() {
+    setBusy(true); setError(null);
+    try {
+      const result = await apiFetch<{ recoveryCodes: string[] }>('/auth/mfa/recovery-codes', undefined, { method: 'POST', body: JSON.stringify({ password, code }) });
+      setCodes(result.recoveryCodes); setPassword(''); setCode('');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not generate recovery codes'); } finally { setBusy(false); }
   }
 
   if (!me && !error) return <p className="muted">Loading…</p>;
@@ -115,7 +130,7 @@ export default function SecurityPage() {
   }
 
   const on = me?.user.mfaEnabled === true;
-  const grouped = secret ? secret.replace(/(.{4})/g, '$1 ').trim() : '';
+
 
   return (
     <div className="stack">
@@ -132,8 +147,8 @@ export default function SecurityPage() {
         </h2>
         <p className="muted">
           With this on, signing in needs your password <em>and</em> a six-digit code from your
-          authenticator app. It is the single most useful thing you can do to protect an account
-          that can move money or administer the platform.
+          authenticator app. Production privileged accounts must keep this enabled; local recovery
+          accounts follow their cooperative's security policy.
         </p>
 
         {notice && <p className="notice">{notice}</p>}
@@ -145,48 +160,18 @@ export default function SecurityPage() {
           </button>
         )}
 
-        {!on && secret && (
-          <div className="stack">
-            <p>
-              Open your authenticator app (Google Authenticator, Authy, 1Password, Microsoft
-              Authenticator), choose <strong>Add account → Enter a setup key</strong>, and use:
-            </p>
-            <p className="code">{grouped}</p>
-            <p className="muted">
-              Account name: <code>{me?.user.email}</code> · Type: time-based (TOTP). If your app can
-              take a link instead: <code className="wrap">{otpauthUrl}</code>
-            </p>
-            <label>
-              Then enter the six-digit code it shows
-              <input
-                inputMode="numeric"
-                maxLength={6}
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-                placeholder="123456"
-              />
-            </label>
-            <div className="row">
-              <button disabled={busy || code.length !== 6} onClick={() => void confirmSetup()}>
-                {busy ? 'Checking…' : 'Turn on'}
-              </button>
-              <button
-                className="link"
-                onClick={() => {
-                  setSecret(null);
-                  setCode('');
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
+        {!on && secret && <EnrollmentPanel enrollment={{ secret, otpauthUrl: otpauthUrl ?? '' }} code={code} setCode={setCode} busy={busy} confirm={confirmSetup} />}
+        {codes && <RecoveryCodesPanel codes={codes} done={() => setCodes(null)} />}
+
 
         {on && (
           <div className="stack">
+            <h3>Recovery codes</h3>
+            <p>Generate a new set with your password and an authenticator code. This replaces all older recovery codes.</p>
+            <label>Password<input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} /></label>
+            <button disabled={busy || !password || code.length !== 6} onClick={() => void regenerateCodes()}>Generate recovery codes</button>
             <label>
-              To turn it off, enter a current code
+              Authenticator code (required to generate codes or turn verification off), enter a current code
               <input
                 inputMode="numeric"
                 maxLength={6}
@@ -209,9 +194,9 @@ export default function SecurityPage() {
       <section className="card">
         <h2>Why this is here</h2>
         <p className="muted">
-          A cooperative can already require two-step verification from its own staff (Security
-          policies in its settings), and the platform owner account holds administration over every
-          cooperative. Until now that could only be switched on through the API.
+          Cooperatives can require two-step verification in Security policies. Production privileged
+          roles cannot opt out. If you lose your authenticator, sign in with your password and a
+          recovery code to enroll a replacement; recovery does not bypass verification.
         </p>
       </section>
     </div>

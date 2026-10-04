@@ -45,7 +45,8 @@
     "0039_approval_engine.sql": "076d0600a8287368210637cc97e6126807b9aac00d91de25ddd02d5ddd254e85",
     "0040_approval_policy_band_versioning.sql": "e6686e778948a5444fbd4ca46a8e50625d4fb3411b5627e9a7d3d43b27f3048d",
     "0041_staff_password_reset.sql": "aaa38ead7bbbbe075032b12910a73ce73821327d86ca6349aba8585cdc0febf8",
-    "0042_session_authority.sql": "477974f99d3c26fddec3afc175b2020daa651ab757bd398b6d82b1ae6b363681"
+    "0042_session_authority.sql": "477974f99d3c26fddec3afc175b2020daa651ab757bd398b6d82b1ae6b363681",
+    "0043_mfa_enrollment_recovery.sql": "b6d82f4d116e307e3d61c75800ba125044eef7f46a98c14631070f3625f6f398"
   },
   "journalTags": [
     "0000_marvelous_blue_shield",
@@ -89,6 +90,7 @@
     "0039_approval_engine",
     "0040_approval_policy_band_versioning",
     "0041_staff_password_reset",
-    "0042_session_authority"
+    "0042_session_authority",
+    "0043_mfa_enrollment_recovery"
   ]
 }

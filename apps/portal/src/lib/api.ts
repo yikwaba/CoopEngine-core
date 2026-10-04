@@ -14,6 +14,9 @@ export interface LoginOutcome {
   requiresOrgSelection?: boolean;
   requiresMfa?: boolean;
   mfaToken?: string;
+  requiresMfaEnrollment?: boolean;
+  enrollment?: { secret: string; otpauthUrl: string };
+  recoveryCodes?: string[];
   tokens?: SessionTokens;
 }
 

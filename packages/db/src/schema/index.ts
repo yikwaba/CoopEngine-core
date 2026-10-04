@@ -14,6 +14,7 @@
 import {
   bigint,
   boolean,
+  check,
   date,
   index,
   integer,
@@ -1484,6 +1485,7 @@ export const sessions = pgTable(
     ),
     refreshTokenHash: text('refresh_token_hash').notNull().unique(),
     familyId: uuid('family_id').notNull().defaultRandom(),
+    mfaVerified: boolean('mfa_verified').notNull().default(false),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     ipAddress: text('ip_address'),
@@ -1497,6 +1499,31 @@ export const sessions = pgTable(
     index('sessions_user_family_idx').on(table.userId, table.familyId),
   ],
 );
+
+/** Global limited MFA credentials: no tenant/report API exposes these rows. */
+export const mfaChallenges = pgTable('mfa_challenges', {
+  tokenHash: varchar('token_hash', { length: 64 }).primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  authVersion: integer('auth_version').notNull(),
+  purpose: text('purpose').notNull(),
+  pendingSecret: text('pending_secret'),
+  attempts: integer('attempts').notNull().default(0),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, table => [
+  index('mfa_challenges_user_created_idx').on(table.userId, table.createdAt),
+  check('mfa_challenges_purpose_check', sql`${table.purpose} IN ('LOGIN','ENROLL')`),
+  check('mfa_challenges_attempts_check', sql`${table.attempts} BETWEEN 0 AND 5`),
+  check('mfa_challenges_check', sql`(${table.purpose}='ENROLL')=(${table.pendingSecret} IS NOT NULL)`),
+]);
+
+export const mfaRecoveryCodes = pgTable('mfa_recovery_codes', {
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  codeHash: varchar('code_hash', { length: 64 }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, table => [primaryKey({ columns: [table.userId, table.codeHash] })]);
 
 /**
  * Central audit log — deliberately NOT RLS-protected at DB level:

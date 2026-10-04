@@ -10,8 +10,9 @@ Use evidence per slice. Draft PR, passing CI, user-reported local acceptance and
 | Registered route permission policies | PR #6; automated policy inventory/denial checks | Tenant/branch/file/job/export isolation |
 | Staff password recovery | PR #7; user confirmed new password login, old password denial and reset-link replay denial | Production mail delivery, MFA recovery/bootstrap and full lifecycle matrix |
 | Atomic refresh and reset race | PR #8; CI #117 passed 138 API integration tests; user reported installation/logout working | Historical refresh families, member sessions and MFA lifecycle limits |
-| Production configuration guard | PR #9; CI #118 passed 338 unit/138 API integration tests; no production deployment | Combined local installation, actual OTP/payment delivery and existing simulated data review |
-| Current permission resolution and remaining staff session races | This branch; implementation and ten new PostgreSQL tests; CI/local installation are required gates | Broader REC-03/04 limits recorded in recovery-session-authority.md |
+| Production configuration guard | PR #9; combined PR #9/#10 installation reported passed by user on 4 October at 11:46 Africa/Lagos; no production deployment | Actual OTP/payment delivery and existing simulated data review |
+| Current permission resolution and remaining staff session races | PR #10; CI #121 (338 unit/148 API integration tests) and isolated-staging #5 passed; user reported recovery update passed on 4 October | Broader REC-03/04 limits recorded in recovery-session-authority.md |
+| Privileged MFA bootstrap, recovery codes and challenge replay | PR #11; thirteen new PostgreSQL regressions plus isolated Chromium/installer checks; check results and exact test counts are recorded in the PR | Full REC-05 limits recorded in recovery-privileged-mfa.md; user installation and production acceptance remain separate |
 
 ## Next P0 recovery priorities
 
