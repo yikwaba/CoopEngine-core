@@ -1,3 +1,4 @@
+import { moneyDecimal, moneyKobo } from '../common/money';
 import {
   BadRequestException,
   ConflictException,
@@ -27,8 +28,6 @@ export interface ShareTxnRow {
   description: string;
   createdAt: Date;
 }
-
-const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
 @Injectable()
 export class SharesService {
@@ -86,11 +85,11 @@ export class SharesService {
     idempotencyKey?: string,
   ): Promise<ShareAccountRow> {
     const orgId = this.requireOrg(organizationId);
-    const value = round2(amount);
-    if (value <= 0) throw new BadRequestException('Invalid redemption amount');
+    const value = moneyKobo(amount);
+    if (value <= 0n) throw new BadRequestException('Invalid redemption amount');
     await withTenant(this.pool, orgId, async (c) => {
       const member = await c.query(
-        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2`,
+        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
         [orgId, memberId],
       );
       const m = member.rows[0] as { id: string; status: string } | undefined;
@@ -110,17 +109,17 @@ export class SharesService {
       }
       const existing = await c.query(
         `SELECT id, current_balance FROM member_share_accounts
-          WHERE organization_id = $1 AND member_id = $2`,
+          WHERE organization_id = $1 AND member_id = $2 FOR UPDATE`,
         [orgId, memberId],
       );
       const account = existing.rows[0] as
         | { id: string; current_balance: string }
         | undefined;
       if (!account) throw new ConflictException('Member has no share account');
-      const balanceBefore = Number(account.current_balance);
+      const balanceBefore = moneyKobo(account.current_balance);
       if (value > balanceBefore) {
         throw new BadRequestException(
-          `Insufficient share balance (available ${balanceBefore})`,
+          `Insufficient share balance (available ${moneyDecimal(balanceBefore)})`,
         );
       }
       const accountId = account.id;
@@ -155,7 +154,7 @@ export class SharesService {
           entryId,
           orgId,
           periodId,
-          description ?? `Share redemption ${String(value)}`,
+          description ?? `Share redemption ${moneyDecimal(value)}`,
           accountId,
           entryNo,
           idempotencyKey ?? null,
@@ -182,21 +181,21 @@ export class SharesService {
           orgId,
           entryId,
           idByCode.get('3000'),
-          String(value),
+          moneyDecimal(value),
           memberId,
           idByCode.get('1000'),
         ],
       );
-      const balance = round2(balanceBefore - value);
+      const balance = balanceBefore - value;
       await c.query(
         `UPDATE member_share_accounts SET current_balance = $1
           WHERE organization_id = $2 AND id = $3`,
-        [String(balance), orgId, accountId],
+        [moneyDecimal(balance), orgId, accountId],
       );
       await c.query(
         `INSERT INTO share_transactions (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
          VALUES ($1, $2, $3, 'REDEMPTION', $4, $5)`,
-        [orgId, accountId, entryId, String(-value), String(balance)],
+        [orgId, accountId, entryId, moneyDecimal(-value), moneyDecimal(balance)],
       );
       await c.query(
         `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
@@ -205,7 +204,7 @@ export class SharesService {
           orgId,
           actorUserId,
           entryId,
-          JSON.stringify({ source: 'SHARE_REDEMPTION', entryNo, value }),
+          JSON.stringify({ source: 'SHARE_REDEMPTION', entryNo, value: moneyDecimal(value) }),
         ],
       );
     });
@@ -222,11 +221,11 @@ export class SharesService {
     idempotencyKey?: string,
   ): Promise<ShareAccountRow> {
     const orgId = this.requireOrg(organizationId);
-    const value = round2(amount);
-    if (value <= 0) throw new BadRequestException('Invalid purchase amount');
+    const value = moneyKobo(amount);
+    if (value <= 0n) throw new BadRequestException('Invalid purchase amount');
     await withTenant(this.pool, orgId, async (c) => {
       const member = await c.query(
-        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2`,
+        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
         [orgId, memberId],
       );
       const m = member.rows[0] as { id: string; status: string } | undefined;
@@ -247,14 +246,14 @@ export class SharesService {
       // Auto-open the share account on first purchase
       const existing = await c.query(
         `SELECT id, current_balance FROM member_share_accounts
-          WHERE organization_id = $1 AND member_id = $2`,
+          WHERE organization_id = $1 AND member_id = $2 FOR UPDATE`,
         [orgId, memberId],
       );
       let accountId: string;
-      let balanceBefore = 0;
+      let balanceBefore = 0n;
       if (existing.rows[0]) {
         accountId = (existing.rows[0] as { id: string }).id;
-        balanceBefore = Number(
+        balanceBefore = moneyKobo(
           (existing.rows[0] as { current_balance: string }).current_balance,
         );
       } else {
@@ -296,7 +295,7 @@ export class SharesService {
           entryId,
           orgId,
           periodId,
-          description ?? `Share purchase ${String(value)}`,
+          description ?? `Share purchase ${moneyDecimal(value)}`,
           accountId,
           entryNo,
           idempotencyKey ?? null,
@@ -322,21 +321,21 @@ export class SharesService {
           orgId,
           entryId,
           idByCode.get('1000'),
-          String(value),
+          moneyDecimal(value),
           memberId,
           idByCode.get('3000'),
         ],
       );
-      const balance = round2(balanceBefore + value);
+      const balance = balanceBefore + value;
       await c.query(
         `UPDATE member_share_accounts SET current_balance = $1
           WHERE organization_id = $2 AND id = $3`,
-        [String(balance), orgId, accountId],
+        [moneyDecimal(balance), orgId, accountId],
       );
       await c.query(
         `INSERT INTO share_transactions (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
          VALUES ($1, $2, $3, 'PURCHASE', $4, $5)`,
-        [orgId, accountId, entryId, String(value), String(balance)],
+        [orgId, accountId, entryId, moneyDecimal(value), moneyDecimal(balance)],
       );
       await c.query(
         `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)

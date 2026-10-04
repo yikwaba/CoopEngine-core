@@ -6,6 +6,7 @@ on:
       - apps/api/src/common/money.ts
       - apps/api/src/loans/**
       - apps/api/src/savings/**
+      - apps/api/src/shares/**
       - apps/portal/src/**
       - packages/db/migrations/**
       - staging/**
