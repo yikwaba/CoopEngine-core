@@ -60,8 +60,9 @@ class StatementQueryDto {
 export class WithdrawalPolicyDto {
   /** null disables approvals; 0 requires approval for every withdrawal; N for amounts above N. */
   @ValidateIf((o: { threshold?: number | null }) => o.threshold !== null)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(100_000_000_000)
   threshold!: number | null;
 }
 

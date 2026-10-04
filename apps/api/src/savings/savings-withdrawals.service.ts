@@ -1,3 +1,4 @@
+import { moneyDecimal, moneyKobo } from '../common/money';
 import {
   BadRequestException,
   ConflictException,
@@ -32,7 +33,6 @@ export interface WithdrawalRequestRow {
   journalEntryId: string | null;
 }
 
-const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 /**
  * Maker-checker control for savings withdrawals.
@@ -84,7 +84,7 @@ export class SavingsWithdrawalsService {
     return withTenant(this.pool, orgId, async (c) => {
       await c.query(`UPDATE organizations SET withdrawal_approval_threshold = $2 WHERE id = $1`, [
         orgId,
-        threshold === null ? null : String(round2(threshold)),
+        threshold === null ? null : moneyDecimal(moneyKobo(threshold)),
       ]);
       await c.query(
         `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
@@ -106,11 +106,16 @@ export class SavingsWithdrawalsService {
     description?: string,
   ): Promise<WithdrawalDecision> {
     const orgId = this.requireOrg(organizationId);
-    if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('Invalid amount');
+    const value = moneyKobo(amount);
+    if (value <= 0n) throw new BadRequestException('Invalid amount');
 
-    const { threshold } = await this.policy(orgId);
+    const threshold = await withTenant(this.pool, orgId, async (c) => {
+      const result = await c.query('SELECT withdrawal_approval_threshold FROM organizations WHERE id=$1', [orgId]);
+      const raw = result.rows[0]?.withdrawal_approval_threshold as string | null | undefined;
+      return raw == null ? null : moneyKobo(raw);
+    });
     const needsApproval =
-      source === 'MEMBER' || (threshold !== null && (threshold === 0 || amount > threshold));
+      source === 'MEMBER' || (threshold !== null && (threshold === 0n || value > threshold));
 
     if (!needsApproval && actorUserId) {
       const account = await this.savings.withdraw(
@@ -147,7 +152,7 @@ export class SavingsWithdrawalsService {
             orgId,
             accountId,
             account.member_id,
-            String(round2(amount)),
+            moneyDecimal(value),
             description?.slice(0, 240) ?? null,
             source,
             source === 'STAFF' ? actorUserId : null,
@@ -173,7 +178,7 @@ export class SavingsWithdrawalsService {
             kind: 'WITHDRAWAL',
             entityType: 'savings_withdrawal_request',
             entityId: id.id,
-            amount: round2(amount),
+            amount: Number(moneyDecimal(value)),
             summary: description ?? `Savings withdrawal from account ${accountId}`,
             payload: { accountId, memberId: account.member_id, source },
           });
@@ -187,7 +192,7 @@ export class SavingsWithdrawalsService {
           orgId,
           actorUserId,
           id.id,
-          JSON.stringify({ accountId, amount: round2(amount), source, threshold }),
+          JSON.stringify({ accountId, amount: moneyDecimal(value), source, threshold: threshold === null ? null : moneyDecimal(threshold) }),
         ],
       );
 
@@ -353,7 +358,7 @@ export class SavingsWithdrawalsService {
         orgId,
         approverUserId,
         pending.account_id,
-        Number(pending.amount),
+        pending.amount,
         pending.description ?? 'Approved withdrawal',
         idempotencyKey,
       );
@@ -392,7 +397,7 @@ export class SavingsWithdrawalsService {
           orgId,
           approverUserId,
           requestId,
-          JSON.stringify({ amount: Number(pending.amount), journalEntryId }),
+          JSON.stringify({ amount: pending.amount, journalEntryId }),
         ],
       );
       return { requestId, approvalStatus: 'APPROVED' as const, account, journalEntryId };

@@ -1,3 +1,4 @@
+import { moneyDecimal, moneyKobo } from '../common/money';
 import {
   BadRequestException,
   ConflictException,
@@ -40,7 +41,7 @@ export interface SavingsTxnRow {
   createdAt: Date;
 }
 
-const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+type LockedSavingsAccount = Pick<SavingsAccountRow, 'id' | 'accountNo' | 'memberId' | 'status'> & { currentBalance: bigint };
 
 const isPgError = (e: unknown, code: string): boolean =>
   typeof e === 'object' && e !== null && (e as { code?: string }).code === code;
@@ -226,7 +227,7 @@ export class SavingsService {
           { code: SAVINGS_LIABILITY_CODE, side: 'credit', amount: value },
         ],
       );
-      const balance = round2(account.currentBalance + value);
+      const balance = account.currentBalance + value;
       await this.updateBalanceAndTxn(
         c,
         orgId,
@@ -244,7 +245,7 @@ export class SavingsService {
     organizationId: string | null,
     actorUserId: string,
     accountId: string,
-    amount: number,
+    amount: string | number,
     description?: string,
     idempotencyKey?: string,
   ): Promise<SavingsAccountRow> {
@@ -267,9 +268,9 @@ export class SavingsService {
       if (!allow) {
         throw new ConflictException('Product does not allow withdrawals');
       }
-      if (round2(account.currentBalance - value) < 0) {
+      if (account.currentBalance - value < 0n) {
         throw new BadRequestException(
-          `Insufficient balance: available ${account.currentBalance}, requested ${value}`,
+          `Insufficient balance: available ${moneyDecimal(account.currentBalance)}, requested ${moneyDecimal(value)}`,
         );
       }
       const entryId = randomUUID();
@@ -290,7 +291,7 @@ export class SavingsService {
           { code: CASH_ACCOUNT_CODE, side: 'credit', amount: value },
         ],
       );
-      const balance = round2(account.currentBalance - value);
+      const balance = account.currentBalance - value;
       await this.updateBalanceAndTxn(
         c,
         orgId,
@@ -336,15 +337,10 @@ export class SavingsService {
 
   // ------------------------------------------------------------- helpers
 
-  private validateAmount(amount: number, kind: string): number {
-    if (
-      typeof amount !== 'number' ||
-      !Number.isFinite(amount) ||
-      amount <= 0
-    ) {
-      throw new BadRequestException(`Invalid ${kind} amount`);
-    }
-    return round2(amount);
+  private validateAmount(amount: string | number, kind: string): bigint {
+    const value = moneyKobo(amount);
+    if (value <= 0n) throw new BadRequestException(`Invalid ${kind} amount`);
+    return value;
   }
 
   private mapAccount(row: Record<string, unknown>): SavingsAccountRow {
@@ -364,18 +360,21 @@ export class SavingsService {
     c: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> },
     orgId: string,
     accountId: string,
-  ): Promise<SavingsAccountRow> {
+  ): Promise<LockedSavingsAccount> {
     const { rows } = await c.query(
       `SELECT a.id, a.account_no, a.member_id, a.current_balance, a.status, a.opened_at,
               p.code AS product_code
          FROM member_savings_accounts a
          JOIN savings_products p ON p.id = a.product_id
         WHERE a.organization_id = $1 AND a.id = $2
-        FOR UPDATE`,
+        FOR UPDATE OF a`,
       [orgId, accountId],
     );
     if (!rows[0]) throw new NotFoundException('Savings account not found');
-    return this.mapAccount(rows[0] as Record<string, unknown>);
+    const row = rows[0] as Record<string, unknown>;
+    return { id: row.id as string, accountNo: Number(row.account_no),
+      memberId: row.member_id as string, status: row.status as string,
+      currentBalance: moneyKobo(row.current_balance as string) };
   }
 
   private async allocJournalNo(
@@ -397,11 +396,11 @@ export class SavingsService {
     actorUserId: string,
     entryId: string,
     entryNo: number,
-    account: SavingsAccountRow,
+    account: Pick<SavingsAccountRow, 'id' | 'memberId'>,
     source: string,
     description: string,
     idempotencyKey: string | undefined,
-    lines: { code: string; side: 'debit' | 'credit'; amount: number }[],
+    lines: { code: string; side: 'debit' | 'credit'; amount: bigint }[],
   ): Promise<void> {
     if (idempotencyKey) {
       const dup = await c.query(
@@ -466,8 +465,8 @@ export class SavingsService {
         orgId,
         entryId,
         idByCode.get(line.code),
-        line.side === 'debit' ? String(round2(line.amount)) : '0',
-        line.side === 'credit' ? String(round2(line.amount)) : '0',
+        line.side === 'debit' ? moneyDecimal(line.amount) : '0',
+        line.side === 'credit' ? moneyDecimal(line.amount) : '0',
         account.memberId,
       );
     });
@@ -491,16 +490,16 @@ export class SavingsService {
   private async updateBalanceAndTxn(
     c: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> },
     orgId: string,
-    account: SavingsAccountRow,
+    account: Pick<SavingsAccountRow, 'id' | 'memberId'>,
     entryId: string,
     type: string,
-    signedAmount: number,
-    balance: number,
+    signedAmount: bigint,
+    balance: bigint,
   ): Promise<void> {
     await c.query(
       `UPDATE member_savings_accounts SET current_balance = $1
         WHERE organization_id = $2 AND id = $3`,
-      [String(balance), orgId, account.id],
+      [moneyDecimal(balance), orgId, account.id],
     );
     await c.query(
       `INSERT INTO savings_transactions (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
@@ -510,8 +509,8 @@ export class SavingsService {
         account.id,
         entryId,
         type,
-        String(signedAmount),
-        String(balance),
+        moneyDecimal(signedAmount),
+        moneyDecimal(balance),
       ],
     );
   }
@@ -576,7 +575,7 @@ export class SavingsService {
       }));
       return {
         period,
-        total: Math.round(data.reduce((a, d) => a + d.amount, 0) * 100) / 100,
+        total: Number(moneyDecimal(rows.reduce((sum, r) => sum + moneyKobo(r.amount as string), 0n))),
         rows: data,
       };
     });
@@ -601,7 +600,7 @@ export class SavingsService {
     const period = this.validPeriodCode(periodCode);
     const postId = randomUUID();
     let entryNo = 0;
-    let total = 0;
+    let total = 0n;
     let accounts = 0;
     await withTenant(this.pool, orgId, async (c) => {
       const already = await c.query(
@@ -621,16 +620,18 @@ export class SavingsService {
       if (!p || p.status !== 'OPEN') {
         throw new ConflictException(`Ledger period ${period} is not OPEN`);
       }
-      const { rows } = await c.query(this.accrualQuery(), [orgId]);
+      const { rows } = await c.query(this.accrualQuery() + ' ORDER BY a.id FOR UPDATE OF a', [orgId]);
       const accruals = rows.map((r: Record<string, unknown>) => ({
         accountId: r.account_id as string,
         memberId: r.member_id as string,
-        amount: Number(r.amount),
-      })).filter((a) => a.amount > 0.004);
+        amount: moneyKobo(r.amount as string),
+        balance: moneyKobo(r.current_balance as string),
+      })).filter((a) => a.amount > 0n);
       if (accruals.length === 0) {
         throw new BadRequestException('No savings balances with a positive rate — nothing to post');
       }
-      total = Math.round(accruals.reduce((a, x) => a + x.amount, 0) * 100) / 100;
+      total = accruals.reduce((sum, a) => sum + a.amount, 0n);
+      moneyDecimal(total); // Validate the persisted posting total before writing.
 
       const accRes = await c.query(
         `SELECT id, code FROM chart_of_accounts
@@ -679,7 +680,7 @@ export class SavingsService {
         params.push(orgId, entryId, accountId, debit, credit, memberId);
       };
       for (const a of accruals) {
-        const amount = String(a.amount);
+        const amount = moneyDecimal(a.amount);
         pushLine(idByCode.get('5000')!, amount, '0', a.memberId);
         pushLine(idByCode.get('2000')!, '0', amount, a.memberId);
       }
@@ -691,13 +692,8 @@ export class SavingsService {
 
       // Credit balances + projections
       for (const a of accruals) {
-        const bal = await c.query(
-          `SELECT current_balance FROM member_savings_accounts
-            WHERE organization_id = $1 AND id = $2`,
-          [orgId, a.accountId],
-        );
-        const before = Number((bal.rows[0] as { current_balance: string }).current_balance);
-        const after = Math.round((before + a.amount) * 100) / 100;
+        // The accrual snapshot holds this account row lock until commit.
+        const after = moneyDecimal(a.balance + a.amount);
         await c.query(
           `UPDATE member_savings_accounts SET current_balance = $1
             WHERE organization_id = $2 AND id = $3`,
@@ -706,14 +702,14 @@ export class SavingsService {
         await c.query(
           `INSERT INTO savings_transactions (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
            VALUES ($1, $2, $3, 'INTEREST', $4, $5)`,
-          [orgId, a.accountId, entryId, String(a.amount), String(after)],
+          [orgId, a.accountId, entryId, moneyDecimal(a.amount), String(after)],
         );
       }
 
       await c.query(
         `INSERT INTO savings_interest_postings (id, organization_id, period_code, total_amount, entry_id, posted_by)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [postId, orgId, period, String(total), entryId, actorUserId],
+        [postId, orgId, period, moneyDecimal(total), entryId, actorUserId],
       );
       await c.query(
         `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
@@ -722,11 +718,11 @@ export class SavingsService {
           orgId,
           actorUserId,
           entryId,
-          JSON.stringify({ source: 'SAVINGS_INTEREST', period, entryNo, total }),
+          JSON.stringify({ source: 'SAVINGS_INTEREST', period, entryNo, total: moneyDecimal(total) }),
         ],
       );
       accounts = accruals.length;
     });
-    return { period, total, accounts, entryNo };
+    return { period, total: Number(moneyDecimal(total)), accounts, entryNo };
   }
 }
