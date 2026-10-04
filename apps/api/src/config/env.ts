@@ -1,3 +1,7 @@
+import { validateRuntimeConfiguration } from './production-config';
+
+validateRuntimeConfiguration(process.env);
+
 const isProduction = process.env.NODE_ENV === 'production';
 
 function required(name: string): string {
@@ -19,5 +23,6 @@ export const ENV = {
   corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:3100,http://localhost:3200')
     .split(',')
     .map((s) => s.trim())
-    .filter(Boolean),
+    .filter(Boolean)
+    .map((s) => isProduction ? new URL(s).origin : s),
 } as const;
