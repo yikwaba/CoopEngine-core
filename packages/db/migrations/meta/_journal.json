@@ -281,6 +281,13 @@
       "when": 1790708985077,
       "tag": "0040_approval_policy_band_versioning",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1791068400000,
+      "tag": "0041_staff_password_reset",
+      "breakpoints": true
     }
   ]
 }

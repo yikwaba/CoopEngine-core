@@ -13,9 +13,12 @@ import {
 import type { Response } from 'express';
 import { AuthService, SessionTokens } from './auth.service';
 import { clearSessionCookies, readRefreshCookie, setSessionCookies } from '../common/auth-cookies';
+import { PasswordResetService } from './password-reset.service';
 import { ENV } from '../config/env';
 import {
   LoginDto,
+  RequestPasswordResetDto,
+  ResetPasswordDto,
   MfaDisableDto,
   MfaLoginVerifyDto,
   MfaVerifySetupDto,
@@ -36,7 +39,20 @@ interface LoginResult {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService, private readonly passwordReset: PasswordResetService) {}
+
+  @Post('password-reset/request')
+  @HttpCode(HttpStatus.ACCEPTED)
+  requestPasswordReset(@Body() dto: RequestPasswordResetDto, @Req() request: { ip?: string }) {
+    return this.passwordReset.request(dto.email, request.ip ?? 'unknown');
+  }
+
+  @Post('password-reset/confirm')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async confirmPasswordReset(@Body() dto: ResetPasswordDto, @Res({ passthrough: true }) res: Response) {
+    await this.passwordReset.reset(dto.token, dto.password);
+    clearSessionCookies(res);
+  }
 
   @Post('login')
   @HttpCode(HttpStatus.OK)

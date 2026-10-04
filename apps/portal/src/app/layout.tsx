@@ -3,6 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Co-opEngine',
+  referrer: 'no-referrer',
   description: 'Cooperative operations portal',
 };
 

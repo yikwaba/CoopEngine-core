@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiFetch, LoginOutcome, storeSession, TOKEN_KEY } from '../../lib/api';
 
@@ -144,6 +145,7 @@ export default function LoginPage() {
             <button className="btn" disabled={busy} type="submit">
               {busy ? 'Signing in…' : 'Sign in'}
             </button>
+            <Link href="/forgot-password">Forgot password?</Link>
           </form>
         )}
       </div>
