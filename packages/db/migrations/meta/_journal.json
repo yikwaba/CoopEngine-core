@@ -295,6 +295,13 @@
       "when": 1791108300000,
       "tag": "0042_session_authority",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1791111000000,
+      "tag": "0043_mfa_enrollment_recovery",
+      "breakpoints": true
     }
   ]
 }

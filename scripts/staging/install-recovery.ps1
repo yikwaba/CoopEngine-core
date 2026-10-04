@@ -21,11 +21,11 @@ function Invoke-RecoveryDocker {
 Push-Location $root
 try {
     # Copy this batch's source directories. Private configuration and volumes
-    # are outside these paths; portal/member containers retain installed images.
-    foreach ($relative in @('apps\api', 'packages\db', 'scripts\staging')) {
+    # are outside these paths; the unchanged member container retains its image.
+    foreach ($relative in @('apps\api', 'apps\portal', 'packages\db', 'scripts\staging')) {
         if (!(Test-Path (Join-Path $source $relative))) { throw "Missing source directory: $relative" }
     }
-    foreach ($relative in @('apps\api', 'packages\db', 'scripts\staging')) {
+    foreach ($relative in @('apps\api', 'apps\portal', 'packages\db', 'scripts\staging')) {
         Copy-Item (Join-Path $source "$relative\*") (Join-Path $root $relative) -Recurse -Force
     }
     $settings = [regex]::Replace($settings, '(?m)^STAGING_SOURCE_SHA=.*$', "STAGING_SOURCE_SHA=$SourceSha")
@@ -44,10 +44,10 @@ try {
     if (!(Test-Path $backupFile) -or (Get-Item $backupFile).Length -eq 0) { throw 'Local database backup was not saved.' }
     Write-Host "Database backup saved: $backupFile"
 
-    Invoke-RecoveryDocker -DockerArgs @('stop', 'api')
+    Invoke-RecoveryDocker -DockerArgs @('stop', 'api', 'portal')
     # Apply append-only migrations without reseeding users, passwords or RBAC.
     Invoke-RecoveryDocker -DockerArgs @('run', '--rm', '--no-deps', 'migrate', 'bash', '-c', 'node scripts/staging/guard.mjs && cd packages/db && pnpm db:migrate && cd /app && node scripts/staging/grants.mjs')
-    Invoke-RecoveryDocker -DockerArgs @('up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', 'api')
+    Invoke-RecoveryDocker -DockerArgs @('up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', 'api', 'portal')
     Invoke-RecoveryDocker -DockerArgs @('restart', 'gateway')
     Invoke-RecoveryDocker -DockerArgs @('run', '--rm', '--no-deps', 'fixtures', 'node', 'scripts/staging/recovery-smoke.mjs')
     foreach ($url in @('http://localhost:4310/login', 'http://localhost:4320/login')) {

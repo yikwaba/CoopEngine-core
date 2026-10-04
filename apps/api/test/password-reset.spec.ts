@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/auth.service';
 import { PasswordResetService, RESET_RESPONSE } from '../src/auth/password-reset.service';
+import { MfaFlowService } from '../src/auth/mfa-flow.service';
 import { DB_POOL } from '../src/database/database.module';
 const token = 'a'.repeat(64);
 
@@ -19,6 +20,7 @@ describe('password reset HTTP validation and response contract', () => {
       imports: [JwtModule.register({})], controllers: [AuthController],
       providers: [
         { provide: AuthService, useValue: {} },
+        { provide: MfaFlowService, useValue: {} },
         { provide: PasswordResetService, useValue: { request: ask, reset } },
         { provide: DB_POOL, useValue: {} },
       ],

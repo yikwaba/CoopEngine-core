@@ -15,12 +15,15 @@ import { AuthService, SessionTokens } from './auth.service';
 import { clearSessionCookies, readRefreshCookie, setSessionCookies } from '../common/auth-cookies';
 import { PasswordResetService } from './password-reset.service';
 import { ENV } from '../config/env';
+import { MfaFlowService } from './mfa-flow.service';
 import {
   LoginDto,
   RequestPasswordResetDto,
   ResetPasswordDto,
   MfaDisableDto,
   MfaLoginVerifyDto,
+  MfaRecoveryDto,
+  MfaRecoveryCodesDto,
   MfaVerifySetupDto,
   RefreshDto,
 } from './dto/auth.dto';
@@ -35,12 +38,15 @@ interface LoginResult {
   requiresOrgSelection: boolean;
   requiresMfa: boolean;
   mfaToken?: string;
+  requiresMfaEnrollment?: boolean;
+  enrollment?: { secret: string; otpauthUrl: string };
+  recoveryCodes?: string[];
   tokens?: SessionTokens;
 }
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService, private readonly passwordReset: PasswordResetService) {}
+  constructor(private readonly authService: AuthService, private readonly passwordReset: PasswordResetService, private readonly mfaFlow: MfaFlowService) {}
 
   @Post('password-reset/request')
   @HttpCode(HttpStatus.ACCEPTED)
@@ -64,6 +70,7 @@ export class AuthController {
   ): Promise<LoginResult> {
     const ip = request.ip ?? 'unknown';
     const ua = request.headers['user-agent'];
+    res.setHeader('Cache-Control', 'no-store');
     const auth = await this.authService.authenticate(
       dto.email,
       dto.password,
@@ -79,6 +86,13 @@ export class AuthController {
         requiresMfa: true,
         mfaToken,
       };
+    }
+
+    if (await this.authService.requiresMfa(auth.id)) {
+      const start = await this.mfaFlow.start(auth.id, auth.authVersion, 'ENROLL');
+      clearSessionCookies(res);
+      return { user: { id: auth.id, email: auth.email }, organizations: auth.organizations,
+        requiresOrgSelection: false, requiresMfa: false, requiresMfaEnrollment: true, ...start };
     }
 
     const outcome = await this.authService.issueForUser(
@@ -119,6 +133,7 @@ export class AuthController {
   ): Promise<LoginResult> {
     const ip = request.ip ?? 'unknown';
     const ua = request.headers['user-agent'];
+    res.setHeader('Cache-Control', 'no-store');
     const { userId, proof } = await this.authService.verifyMfaChallenge(
       dto.mfaToken,
       dto.code,
@@ -143,11 +158,44 @@ export class AuthController {
     };
   }
 
+  @Post('mfa/enroll')
+  @HttpCode(HttpStatus.OK)
+  async enrollMfa(@Body() dto: MfaLoginVerifyDto, @Req() request: { ip?: string; headers: { 'user-agent'?: string } }, @Res({ passthrough: true }) res: Response) {
+    res.setHeader('Cache-Control','no-store');
+    const { userId, proof } = await this.mfaFlow.verify(dto.mfaToken, dto.code, 'ENROLL');
+    const outcome = await this.authService.issueForUser(userId, dto.organizationSlug, request.ip, request.headers['user-agent'], proof);
+    if (outcome.tokens) setSessionCookies(res, outcome.tokens, ENV.jwtAccessTtlSeconds);
+    return { ...outcome, requiresMfa: false };
+  }
+
+  @Post('mfa/recover')
+  @HttpCode(HttpStatus.OK)
+  async recoverMfa(@Body() dto: MfaRecoveryDto, @Res({ passthrough: true }) res: Response) {
+    res.setHeader('Cache-Control','no-store');
+    const start = await this.mfaFlow.recover(dto.mfaToken, dto.recoveryCode);
+    clearSessionCookies(res);
+    return { ...start, requiresMfaEnrollment: true };
+  }
+
+  @Post('mfa/recovery-codes')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  async recoveryCodes(@CurrentUser() principal: AuthPrincipal, @Body() dto: MfaRecoveryCodesDto, @Req() req: { ip?: string }, @Res({ passthrough: true }) res: Response) {
+    res.setHeader('Cache-Control','no-store');
+    const user = await this.authService.findUserById(principal.userId);
+    if (!user) throw new UnauthorizedException();
+    const auth = await this.authService.authenticate(user.email, dto.password, req.ip);
+    const challenge = await this.mfaFlow.start(auth.id, auth.authVersion, 'LOGIN');
+    const { proof } = await this.mfaFlow.verify(challenge.mfaToken, dto.code, 'LOGIN');
+    return { recoveryCodes: await this.mfaFlow.change(auth.id, proof, 'codes') };
+  }
+
   // --------------------------------------------------- MFA management (authed)
 
   @Post('mfa/setup')
   @UseGuards(JwtAuthGuard)
-  async setupMfa(@CurrentUser() principal: AuthPrincipal) {
+  async setupMfa(@CurrentUser() principal: AuthPrincipal, @Res({ passthrough: true }) res: Response) {
+    res.setHeader('Cache-Control', 'no-store');
     const user = await this.authService.findUserById(principal.userId);
     return this.authService.setupMfa(principal.userId, user?.email ?? '');
   }
@@ -168,8 +216,10 @@ export class AuthController {
   async disableMfa(
     @CurrentUser() principal: AuthPrincipal,
     @Body() dto: MfaDisableDto,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
     await this.authService.disableMfa(principal.userId, dto.code);
+    clearSessionCookies(res);
   }
 
   @Post('refresh')
@@ -211,9 +261,11 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   async me(@CurrentUser() principal: AuthPrincipal) {
     const user = await this.authService.findUserById(principal.userId);
+    const organizations = await this.authService.listOrganizations(principal.userId);
     return {
       user,
       organizationId: principal.organizationId,
+      organizationSlug: organizations.find(org => org.id === principal.organizationId)?.slug ?? null,
       sessionId: principal.sessionId,
       permissions: principal.permissions,
     };

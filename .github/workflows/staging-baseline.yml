@@ -12,7 +12,7 @@ permissions:
 jobs:
   isolated-staging:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -60,6 +60,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cannot export source.' }
           Expand-Archive $archive $source
           & "$source/scripts/staging/install-recovery.ps1" -SourcePath $source -ProjectPath $PWD.Path -SourceSha $sha
+      - name: Install isolated browser test tooling
+        run: |
+          npm install --prefix "$RUNNER_TEMP/coopengine-browser" --no-package-lock --ignore-scripts playwright@1.63.0 otplib@13.5.0
+          node "$RUNNER_TEMP/coopengine-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Exercise MFA enrollment, sign-in and recovery in Chromium
+        env:
+          COOPENGINE_BROWSER_TEST: isolated-staging
+        run: |
+          BROWSER_TEST_MODULE_ROOT="$RUNNER_TEMP/coopengine-browser/node_modules" node scripts/staging/mfa-browser.mjs
       - name: Inspect failed synthetic startup
         if: failure()
         run: docker compose --project-name coopengine-recovery-staging --env-file .staging/compose.env -f staging/compose.yml logs --no-color migrate api fixtures gateway

@@ -90,7 +90,7 @@ describe('security policies: MFA for staff and step-up for money actions', () =>
     await http.patch('/api/v1/settings').set({ Authorization: `Bearer ${officerToken}` }).send({ security: { mfaRequiredForPrivilegedRoles: true } }).expect(403);
   });
 
-  it('with the MFA policy on, a staff sign-in without an authenticator is refused — and allowed again when switched off', async () => {
+  it('with the MFA policy on, a staff sign-in without an authenticator receives limited enrollment, and can disable only after policy is switched off', async () => {
     const on = await patchSecurity(adminToken, { mfaRequiredForPrivilegedRoles: true });
     expect(on.status, JSON.stringify(on.body)).toBe(200);
     expect(on.body.settings.security.mfaRequiredForPrivilegedRoles).toBe(true);
@@ -106,13 +106,22 @@ describe('security policies: MFA for staff and step-up for money actions', () =>
 
     // the admin, who also has no MFA yet, is held to the same policy
     const adminBlocked = await login(ADMIN.email, ADMIN.password);
-    expect(adminBlocked.status).toBe(403);
-    expect(JSON.stringify(adminBlocked.body)).toMatch(/two-factor/i);
+    expect(adminBlocked.status).toBe(200);
+    expect(adminBlocked.body.requiresMfaEnrollment).toBe(true);
+    expect(adminBlocked.body.tokens).toBeUndefined();
+    await http.get('/api/v1/settings').set({ Authorization: `Bearer ${adminToken}` }).expect(401);
+    const enrolled = await http.post('/api/v1/auth/mfa/enroll').send({
+      mfaToken: adminBlocked.body.mfaToken, code: await generate({ secret: adminBlocked.body.enrollment.secret }), organizationSlug: slug,
+    }).expect(200);
+    adminToken = enrolled.body.tokens.accessToken;
 
     const off = await patchSecurity(adminToken, { mfaRequiredForPrivilegedRoles: false });
     expect(off.status).toBe(200);
+    await http.post('/api/v1/auth/mfa/disable').set({ Authorization: `Bearer ${adminToken}` })
+      .send({ code: await generate({ secret: adminBlocked.body.enrollment.secret }) }).expect(204);
     const allowed = await login(ADMIN.email, ADMIN.password);
     expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
+    adminToken = allowed.body.tokens.accessToken;
   });
 
   it('step-up is demanded for a journal posting, and refuses when MFA is not set up', async () => {
