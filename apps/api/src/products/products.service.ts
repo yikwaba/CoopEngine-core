@@ -235,7 +235,7 @@ export class ProductsService {
       await c.query(
         `UPDATE loan_products
             SET code = $2, name = $3, interest_rate_pa = $4, interest_method = $5,
-                multiplier = $6, min_principal = $7, max_principal = $8, updated_at = now()
+                multiplier = $6, min_principal = $7, max_principal = $8
           WHERE id = $1`,
         [id, input.code, input.name, String(input.interestRatePa), input.interestMethod,
          String(input.multiplier), String(input.minPrincipal),
@@ -279,7 +279,9 @@ export class ProductsService {
           throw new ConflictException('Product is in use; cannot deactivate');
         }
       }
-      await c.query(`UPDATE ${table} SET status = $2, updated_at = now() WHERE id = $1`, [id, status]);
+      // Savings products have updated_at; the loan product schema does not.
+      const timestampUpdate = kind === 'savings' ? ', updated_at = now()' : '';
+      await c.query(`UPDATE ${table} SET status = $2${timestampUpdate} WHERE id = $1`, [id, status]);
       await this.audit(c, orgId, user, `product.status.${status.toLowerCase()}`, `${kind}_product`, id, {
         status,
       });
@@ -312,4 +314,3 @@ export class ProductsService {
     );
   }
 }
-
