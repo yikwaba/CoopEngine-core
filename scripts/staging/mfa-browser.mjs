@@ -45,8 +45,9 @@ await context.route('**/*', route => {
 });
 const page = await context.newPage();
 page.setDefaultTimeout(20000);
-let pageErrors = 0;
-page.on('pageerror', () => { pageErrors++; });
+const pageErrors = [], failedRequests = [];
+page.on('pageerror', error => { pageErrors.push({ name: error.name, message: error.message.replace(/[a-f0-9]{32,}/gi, '[redacted]').slice(0, 200) }); });
+page.on('requestfailed', req => { const url = new URL(req.url()); failedRequests.push({ origin: url.origin, path: url.pathname, error: req.failure()?.errorText }); });
 async function responseTo(path, action) {
   const pending = page.waitForResponse(res => res.url() === api + path && res.request().method() === 'POST');
   await action(); const res = await pending;
@@ -78,9 +79,13 @@ async function finishSetup() {
 async function acknowledge() {
   await page.getByRole('button', { name: 'I have saved my codes', exact: true }).click();
   await page.getByRole('heading', { name: 'Dashboard', exact: true }).waitFor();
+  await page.getByText('No members yet.', { exact: true }).waitFor();
+  assert.equal((await context.request.get(api + '/auth/me')).status(), 200, 'Dashboard session cookie is valid');
 }
 async function signOut() {
+  assert.ok(await page.evaluate(() => localStorage.getItem('coopengine_session') === 'cookie'), 'Session marker must survive recovery-code management');
   await page.goto(portal + '/');
+  await page.getByText('No members yet.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await page.waitForURL(portal + '/login');
 }
@@ -128,6 +133,12 @@ try {
   await call('/auth/mfa/recover', { status: 401, body: { mfaToken: recoveryChallenge.mfaToken, recoveryCode: regenerated.recoveryCodes[0] } });
   await call('/auth/me', { token: first.tokens.accessToken, status: 401 });
   await signOut();
-  assert.equal(pageErrors, 0, 'No browser runtime errors');
+  assert.equal(pageErrors.length, 0, 'No browser runtime errors');
   console.log('PASS: real Chromium required MFA enrollment, cookie dashboard, recovery-code download/regeneration, authenticator sign-in, challenge replay denial, backup recovery/re-enrollment and old-session revocation. No money/provider operations.');
+} catch (error) {
+  console.error('Browser failure diagnostics (no bodies, keys, cookies or backup codes):', JSON.stringify({
+    url: new URL(page.url()).pathname, sessionMarker: await page.evaluate(() => localStorage.getItem('coopengine_session') === 'cookie').catch(() => false),
+    pageErrors, failedRequests: failedRequests.slice(-10),
+  }));
+  throw error;
 } finally { await context.close(); await browser.close(); }
