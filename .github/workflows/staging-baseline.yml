@@ -49,6 +49,17 @@ jobs:
           curl --fail --silent --output /dev/null http://localhost:4320/login
       - name: Check recovery session and member HTTP journeys
         run: docker compose --project-name coopengine-recovery-staging --env-file .staging/compose.env -f staging/compose.yml run --rm --no-deps fixtures node scripts/staging/recovery-smoke.mjs
+      - name: Run PowerShell installer against the isolated Docker stack
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'recovery-source.zip'
+          $source = Join-Path $env:RUNNER_TEMP 'recovery-source'
+          $sha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve source commit.' }
+          git archive --format=zip "--output=$archive" HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot export source.' }
+          Expand-Archive $archive $source
+          & "$source/scripts/staging/install-recovery.ps1" -SourcePath $source -ProjectPath $PWD.Path -SourceSha $sha
       - name: Inspect failed synthetic startup
         if: failure()
         run: docker compose --project-name coopengine-recovery-staging --env-file .staging/compose.env -f staging/compose.yml logs --no-color migrate api fixtures gateway
