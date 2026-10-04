@@ -43,7 +43,8 @@
     "0036_harden_balanced_journal_search_path.sql": "0a8380f1ed19393d00dfe7f810c6c1c391f313ae2d3b408e5cf7189d7e3a0131",
     "0038_ledger_immutability_restored.sql": "09f1c991298b513671a1b64376e2b74f0f774c1d52705a1162b8d25e3b8607a9",
     "0039_approval_engine.sql": "076d0600a8287368210637cc97e6126807b9aac00d91de25ddd02d5ddd254e85",
-    "0040_approval_policy_band_versioning.sql": "e6686e778948a5444fbd4ca46a8e50625d4fb3411b5627e9a7d3d43b27f3048d"
+    "0040_approval_policy_band_versioning.sql": "e6686e778948a5444fbd4ca46a8e50625d4fb3411b5627e9a7d3d43b27f3048d",
+    "0041_staff_password_reset.sql": "aaa38ead7bbbbe075032b12910a73ce73821327d86ca6349aba8585cdc0febf8"
   },
   "journalTags": [
     "0000_marvelous_blue_shield",
@@ -85,6 +86,7 @@
     "0036_harden_balanced_journal_search_path",
     "0038_ledger_immutability_restored",
     "0039_approval_engine",
-    "0040_approval_policy_band_versioning"
+    "0040_approval_policy_band_versioning",
+    "0041_staff_password_reset"
   ]
 }

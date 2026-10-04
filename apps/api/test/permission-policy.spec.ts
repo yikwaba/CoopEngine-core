@@ -37,6 +37,8 @@ const routes = controllers(AppModule).flatMap(controller =>
 // until its authentication boundary is reviewed and recorded here.
 const exceptions: Record<string, 'public' | 'session' | 'member' | 'internal-token' | 'webhook-signature'> = {
   'POST /auth/login': 'public',
+  'POST /auth/password-reset/request': 'public',
+  'POST /auth/password-reset/confirm': 'public',
   'POST /auth/mfa/login-verify': 'public',
   'POST /auth/refresh': 'public',
   'POST /auth/mfa/setup': 'session',

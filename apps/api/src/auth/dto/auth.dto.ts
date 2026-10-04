@@ -1,4 +1,4 @@
-import { IsEmail, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, Matches, MinLength, MaxLength, Length } from 'class-validator';
 
 export class LoginDto {
   @IsEmail()
@@ -51,4 +51,22 @@ export class MfaLoginVerifyDto {
   @IsOptional()
   @IsString()
   organizationSlug?: string;
+}
+
+export class RequestPasswordResetDto {
+  @IsEmail()
+  @MaxLength(254)
+  email!: string;
+}
+
+export class ResetPasswordDto {
+  @IsString()
+  @Length(64, 64)
+  @Matches(/^[a-f0-9]{64}$/)
+  token!: string;
+
+  @IsString()
+  @MinLength(12)
+  @MaxLength(72)
+  password!: string;
 }
