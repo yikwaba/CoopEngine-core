@@ -1,3 +1,5 @@
+import { MfaClock } from '../src/auth/mfa-clock';
+const mfaClock = { value: Math.floor(Date.now()/1000), now() { return this.value; } };
 /**
  * MFA (TOTP) + login rate-limiting integration tests (real PostgreSQL).
  *
@@ -23,7 +25,8 @@ let app: INestApplication;
 let pool: Pool;
 
 function codeFor(secret: string): string {
-  return generateSync({ secret });
+  mfaClock.value += 30;
+  return generateSync({ secret, epoch:mfaClock.now() });
 }
 
 async function login(email: string, password: string, slug?: string) {
@@ -55,7 +58,7 @@ beforeAll(async () => {
 
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule],
-  }).compile();
+  }).overrideProvider(MfaClock).useValue(mfaClock).compile();
 
   app = moduleRef.createNestApplication();
   app.setGlobalPrefix('api/v1');

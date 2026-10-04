@@ -1,3 +1,4 @@
+import { SensitiveAction } from '../auth/sensitive-action';
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { LedgerService } from './ledger.service';
@@ -8,7 +9,6 @@ import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
 import { StepUpDto } from '../common/dto/step-up.dto';
-import { AuthService } from '../auth/auth.service';
 import { IsIn, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 const READ_PERMISSIONS = [
@@ -40,7 +40,6 @@ export class PeriodStatusDto {
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class LedgerController {
   constructor(private readonly ledgerService: LedgerService,
-    private readonly auth: AuthService,
   ) {}
 
   @Get('accounts')
@@ -127,17 +126,12 @@ export class LedgerController {
   @Post('journals/:id/approve-post')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('journals.approve')
+  @SensitiveAction('ledger.approvePost')
   async approvePost(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) journalId: string,
     @Body() dto: StepUpDto,
   ) {
-    await this.auth.assertStepUp(
-      principal.organizationId,
-      principal.userId,
-      dto?.otp,
-      'post a journal entry',
-    );
     return this.ledgerService.approveAndPost(
       principal.organizationId,
       principal.userId,
@@ -148,6 +142,7 @@ export class LedgerController {
   @Post('journals/:id/reverse')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('journals.approve')
+  @SensitiveAction('ledger.reverse')
   reverse(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) journalId: string,
@@ -171,6 +166,7 @@ export class LedgerController {
 
   @Patch('periods/:id/status')
   @RequirePermissions('periods.manage')
+  @SensitiveAction('ledger.setPeriodStatus')
   setPeriodStatus(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) id: string,

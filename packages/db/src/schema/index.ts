@@ -1818,3 +1818,15 @@ export type PaymentIntent = typeof paymentIntents.$inferSelect;
 export type NewPaymentIntent = typeof paymentIntents.$inferInsert;
 export type ProviderTransaction = typeof providerTransactions.$inferSelect;
 export type NewProviderTransaction = typeof providerTransactions.$inferInsert;
+
+/** Global MFA verification state; no tenant/member-facing queries expose it. */
+export const mfaUsedSteps = pgTable('mfa_used_steps', {
+  userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  secretHash: varchar('secret_hash', { length: 64 }).notNull(),
+  lastStep: bigint('last_step', { mode: 'number' }).notNull(),
+}, t => [check('mfa_used_steps_last_step_check', sql`${t.lastStep} >= 0`)]);
+export const mfaStepupFailures = pgTable('mfa_stepup_failures', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  attemptedAt: timestamp('attempted_at', { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+}, t => [index('mfa_stepup_failures_user_time_idx').on(t.userId, t.attemptedAt)]);

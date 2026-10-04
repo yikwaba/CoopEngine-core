@@ -1,3 +1,4 @@
+import { SensitiveAction } from '../auth/sensitive-action';
 import { BadRequestException, Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
@@ -24,6 +25,7 @@ export class SettingsController {
 
   @Patch()
   @RequirePermissions('settings.manage')
+  @SensitiveAction('settings.update')
   update(@CurrentUser() principal: AuthPrincipal, @Body() dto: UpdateSettingsDto) {
     return this.settings.update(this.requireOrg(principal), principal.userId, dto);
   }

@@ -11,7 +11,6 @@ import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
 import * as bcrypt from 'bcryptjs';
-import { verify } from 'otplib/functional';
 import { DB_POOL } from '../database/database.module';
 import { ENV } from '../config/env';
 import { JwtClaims } from '../common/auth.types';
@@ -412,51 +411,13 @@ export class AuthService {
     throw new MfaEnrollmentRequiredException(userId, organizationId);
   }
 
-  /**
-   * Step-up authentication for actions that move money or rewrite the books.
-   *
-   * When the cooperative turns this on, the caller must present a live TOTP code with the
-   * request. MFA must already be enabled — a policy that can be satisfied by "no MFA set up"
-   * would be no policy at all.
-   */
-  async assertStepUp(
-    organizationId: string | null,
-    userId: string,
-    code: string | undefined,
-    action: string,
-  ): Promise<void> {
-    // No cooperative context means the action has no books to protect; the service layer
-    // rejects such calls anyway, so there is nothing to step up to.
-    if (!organizationId) return;
+  /** Production cannot opt out; isolated/local tenants can enable the same policy. */
+  async assertStepUp(organizationId: string | null, userId: string, code: string | undefined, action: string, sessionId: string): Promise<void> {
+    if (!organizationId) throw new ForbiddenException('Select a cooperative before this action.');
     const { requireStepUpForSensitiveMoney } = await this.orgSecuritySettings(organizationId);
-    if (!requireStepUpForSensitiveMoney) return;
-
-    const { rows } = await this.pool.query(
-      `SELECT mfa_enabled, mfa_secret FROM users WHERE id = $1`,
-      [userId],
-    );
-    const user = rows[0] as { mfa_enabled: boolean; mfa_secret: string | null } | undefined;
-    if (!user?.mfa_enabled || !user.mfa_secret) {
-      throw new ForbiddenException(
-        'This cooperative requires step-up verification for this action, and MFA must be enabled on your account first',
-      );
-    }
-    if (!code) {
-      throw new ForbiddenException(`A step-up verification code is required to ${action}`);
-    }
-    if (!(await this.verifyCode(user.mfa_secret, code))) {
-      await this.pool.query(
-        `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
-         VALUES ($1, 'stepup.failed', 'user', $1, $2)`,
-        [userId, JSON.stringify({ action })],
-      );
-      throw new UnauthorizedException('Invalid step-up verification code');
-    }
-    await this.pool.query(
-      `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
-       VALUES ($1, 'stepup.verified', 'user', $1, $2)`,
-      [userId, JSON.stringify({ action })],
-    );
+    if (process.env.NODE_ENV !== 'production' && !requireStepUpForSensitiveMoney) return;
+    if (!code) throw new ForbiddenException({code:'STEP_UP_REQUIRED',message:`Verify with a fresh authenticator code to ${action}.`,action});
+    await this.mfaFlow.stepUp(userId,sessionId,organizationId,code,action);
   }
 
   async createMfaChallenge(userId: string, authVersion: number): Promise<string> {
@@ -464,12 +425,6 @@ export class AuthService {
   }
   async verifyMfaChallenge(mfaToken: string, code: string) {
     return this.mfaFlow.verify(mfaToken, code, 'LOGIN');
-  }
-
-  /** otplib v13 verify returns {valid}; unwrap to a boolean. */
-  private async verifyCode(secret: string, code: string): Promise<boolean> {
-    const result = await verify({ secret, token: code });
-    return result?.valid === true;
   }
 
   // ------------------------------------------------------------- sessions

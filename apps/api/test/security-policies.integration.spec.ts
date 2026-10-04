@@ -1,3 +1,6 @@
+import { MfaClock } from '../src/auth/mfa-clock';
+const mfaClock = {value:Math.floor(Date.now()/1000),now(){return this.value;}};
+const freshCode = (secret: string) => {mfaClock.value += 30; return generate({secret,epoch:mfaClock.now()});};
 /**
  * Security policies a cooperative can turn on for itself.
  *
@@ -42,7 +45,7 @@ describe('security policies: MFA for staff and step-up for money actions', () =>
   beforeAll(async () => {
     pool = createPool(TEST_DATABASE_URL);
     await ensureRbacSeeded(pool);
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(MfaClock).useValue(mfaClock).compile();
     app = moduleRef.createNestApplication();
     app.setGlobalPrefix('api/v1');
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
@@ -111,14 +114,14 @@ describe('security policies: MFA for staff and step-up for money actions', () =>
     expect(adminBlocked.body.tokens).toBeUndefined();
     await http.get('/api/v1/settings').set({ Authorization: `Bearer ${adminToken}` }).expect(401);
     const enrolled = await http.post('/api/v1/auth/mfa/enroll').send({
-      mfaToken: adminBlocked.body.mfaToken, code: await generate({ secret: adminBlocked.body.enrollment.secret }), organizationSlug: slug,
+      mfaToken: adminBlocked.body.mfaToken, code: await freshCode(adminBlocked.body.enrollment.secret), organizationSlug: slug,
     }).expect(200);
     adminToken = enrolled.body.tokens.accessToken;
 
     const off = await patchSecurity(adminToken, { mfaRequiredForPrivilegedRoles: false });
     expect(off.status).toBe(200);
     await http.post('/api/v1/auth/mfa/disable').set({ Authorization: `Bearer ${adminToken}` })
-      .send({ code: await generate({ secret: adminBlocked.body.enrollment.secret }) }).expect(204);
+      .send({ code: await freshCode(adminBlocked.body.enrollment.secret) }).expect(204);
     const allowed = await login(ADMIN.email, ADMIN.password);
     expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
     adminToken = allowed.body.tokens.accessToken;
@@ -134,14 +137,15 @@ describe('security policies: MFA for staff and step-up for money actions', () =>
       .set({ Authorization: `Bearer ${adminToken}` })
       .send({});
     expect(noCode.status, JSON.stringify(noCode.body)).toBe(403);
-    expect(JSON.stringify(noCode.body)).toMatch(/MFA/i);
+    expect(noCode.body.code).toBe('STEP_UP_REQUIRED');
 
-    // a malformed code never reaches the guard
+    // Verification runs before controller validation; no business work runs.
     const badShape = await http
       .post(`/api/v1/ledger/journals/${target}/approve-post`)
       .set({ Authorization: `Bearer ${adminToken}` })
       .send({ otp: 'nope' });
-    expect(badShape.status).toBe(400);
+    expect(badShape.status).toBe(403);
+    expect(badShape.body.code).toBe('STEP_UP_ENROLLMENT_REQUIRED');
   });
 
   it('with MFA enrolled and a live code, step-up passes and the request reaches the service', async () => {
@@ -152,7 +156,7 @@ describe('security policies: MFA for staff and step-up for money actions', () =>
     const verifySetup = await http
       .post('/api/v1/auth/mfa/verify-setup')
       .set({ Authorization: `Bearer ${adminToken}` })
-      .send({ code: await generate({ secret: setup.body.secret as string }) });
+      .send({ code: await freshCode(setup.body.secret as string) });
     expect([200, 201]).toContain(setup.status);
     const secret = setup.body.secret as string;
 
@@ -166,7 +170,7 @@ describe('security policies: MFA for staff and step-up for money actions', () =>
     if (challenge) {
       const verified = await http
         .post('/api/v1/auth/mfa/login-verify')
-        .send({ mfaToken: challenge, code: await generate({ secret }), organizationSlug: slug })
+        .send({ mfaToken: challenge, code: await freshCode(secret), organizationSlug: slug })
         .expect(200);
       adminToken = verified.body.tokens.accessToken as string;
     }
@@ -183,7 +187,7 @@ describe('security policies: MFA for staff and step-up for money actions', () =>
     const cleared = await http
       .post(`/api/v1/ledger/journals/${randomUUID()}/approve-post`)
       .set({ Authorization: `Bearer ${adminToken}` })
-      .send({ otp: await generate({ secret }) });
+      .send({ otp: await freshCode(secret) });
     expect([200, 404]).toContain(cleared.status);
     expect(JSON.stringify(cleared.body)).not.toMatch(/step-up/i);
   });

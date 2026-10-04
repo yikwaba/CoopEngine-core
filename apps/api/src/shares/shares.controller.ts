@@ -1,3 +1,4 @@
+import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
   Controller,
@@ -54,6 +55,7 @@ export class SharesController {
 
   @Post('member/:memberId/purchases')
   @RequirePermissions('shares.post')
+  @SensitiveAction('shares.purchase')
   purchase(
     @CurrentUser() principal: AuthPrincipal,
     @Param('memberId', new ParseUUIDPipe()) memberId: string,
@@ -71,6 +73,7 @@ export class SharesController {
 
   @Post('member/:memberId/redemptions')
   @RequirePermissions('shares.post')
+  @SensitiveAction('shares.redeem')
   redeem(
     @CurrentUser() principal: AuthPrincipal,
     @Param('memberId', new ParseUUIDPipe()) memberId: string,

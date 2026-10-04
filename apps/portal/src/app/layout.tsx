@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import StepUpPrompt from '../components/step-up-prompt';
 
 export const metadata: Metadata = {
   title: 'Co-opEngine',
@@ -12,7 +13,7 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>{children}<StepUpPrompt /></body>
     </html>
   );
 }

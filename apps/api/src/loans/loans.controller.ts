@@ -1,3 +1,4 @@
+import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
   Controller,
@@ -73,7 +74,6 @@ import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
 import { StepUpDto } from '../common/dto/step-up.dto';
-import { AuthService } from '../auth/auth.service';
 
 const LOAN_READ = [
   'loans.review',
@@ -87,7 +87,6 @@ const LOAN_READ = [
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class LoansController {
   constructor(private readonly loansService: LoansService,
-    private readonly auth: AuthService,
   ) {}
 
   @Get('products')
@@ -184,6 +183,7 @@ export class LoansController {
   @Post(':id/repayments')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('loans.review', 'loans.approve', 'savings.post', 'payments.reconcile')
+  @SensitiveAction('loans.repay')
   repay(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) loanId: string,
@@ -202,6 +202,7 @@ export class LoansController {
   @Post(':id/restructure')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('loans.restructure')
+  @SensitiveAction('loans.restructure')
   restructure(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) loanId: string,
@@ -235,6 +236,7 @@ export class LoansController {
   @Post(':id/approve')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('loans.approve')
+  @SensitiveAction('loans.approve')
   approve(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) loanId: string,
@@ -267,18 +269,12 @@ export class LoansController {
   @Post(':id/disburse')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('loans.disburse')
+  @SensitiveAction('loans.disburse')
   async disburse(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) loanId: string,
     @Body() dto: StepUpDto,
   ) {
-    // Disbursement moves money out of the cooperative: step-up when the cooperative asks.
-    await this.auth.assertStepUp(
-      principal.organizationId,
-      principal.userId,
-      dto?.otp,
-      'disburse a loan',
-    );
     return this.loansService.transition(
       principal.organizationId,
       principal.userId,

@@ -302,6 +302,13 @@
       "when": 1791111000000,
       "tag": "0043_mfa_enrollment_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1791122400000,
+      "tag": "0044_totp_replay_step_up",
+      "breakpoints": true
     }
   ]
 }

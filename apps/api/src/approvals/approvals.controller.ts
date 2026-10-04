@@ -1,3 +1,4 @@
+import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
   Controller,
@@ -77,6 +78,7 @@ export class ApprovalsController {
   @Post('requests/:id/decisions')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('savings.approve', 'payroll.approve', 'loans.approve', 'ledger.approve')
+  @SensitiveAction('approvals.decideRequest')
   decideRequest(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -105,6 +107,7 @@ export class ApprovalsController {
   @Post('payroll/:id/approve')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('payroll.approve')
+  @SensitiveAction('approvals.approvePayroll')
   approvePayroll(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -126,6 +129,7 @@ export class ApprovalsController {
   @Post('journals/:id/approve')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('ledger.approve')
+  @SensitiveAction('approvals.approveJournal')
   approveJournal(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) id: string,
