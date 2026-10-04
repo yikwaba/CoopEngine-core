@@ -24,6 +24,7 @@ import {
   MfaVerifySetupDto,
   RefreshDto,
 } from './dto/auth.dto';
+import { SessionLogoutGuard } from '../common/guards/session-logout.guard';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
@@ -70,7 +71,7 @@ export class AuthController {
     );
 
     if (auth.mfaEnabled) {
-      const mfaToken = await this.authService.createMfaChallenge(auth.id);
+      const mfaToken = await this.authService.createMfaChallenge(auth.id, auth.authVersion);
       return {
         user: { id: auth.id, email: auth.email },
         organizations: auth.organizations,
@@ -85,6 +86,7 @@ export class AuthController {
       dto.organizationSlug,
       ip,
       ua,
+      { authVersion: auth.authVersion, mfaVerified: false },
     );
     void this.authService.recordAudit(
       outcome.tokens?.organization?.id ?? null,
@@ -117,7 +119,7 @@ export class AuthController {
   ): Promise<LoginResult> {
     const ip = request.ip ?? 'unknown';
     const ua = request.headers['user-agent'];
-    const userId = await this.authService.verifyMfaChallenge(
+    const { userId, proof } = await this.authService.verifyMfaChallenge(
       dto.mfaToken,
       dto.code,
     );
@@ -127,6 +129,7 @@ export class AuthController {
       dto.organizationSlug,
       ip,
       ua,
+      proof,
     );
     if (outcome.tokens) {
       setSessionCookies(res, outcome.tokens, ENV.jwtAccessTtlSeconds);
@@ -188,7 +191,7 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(SessionLogoutGuard)
   async logout(
     @CurrentUser() principal: AuthPrincipal,
     @Res({ passthrough: true }) res: Response,

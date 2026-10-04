@@ -27,8 +27,12 @@ describe('product permissions over HTTP (real JWT and permission guards)', () =>
   let app: INestApplication;
   let jwt: JwtService;
   const service = Object.fromEntries([...new Set(routes.map(r => r.call))].map(name => [name, vi.fn(async () => ({ id }))]));
-  const pool = { query: vi.fn(async () => ({ rows: [{ id: 'session', user_id: 'user', revoked_at: null }] })) };
-  const token = (permissions: string[]) => jwt.sign({ sub: 'user', sid: 'session', org: 'tenant-a', perms: permissions }, { secret: ENV.jwtAccessSecret });
+  let databasePermissions: string[] = [];
+  const pool = { query: vi.fn(async () => ({ rows: [{ id: 'session', user_id: 'user', organization_id: 'tenant-a', revoked_at: null, memberships: 1, permissions: databasePermissions }] })) };
+  const token = (permissions: string[]) => {
+    databasePermissions = permissions;
+    return jwt.sign({ sub: 'user', sid: 'session', org: 'tenant-a', perms: permissions }, { secret: ENV.jwtAccessSecret });
+  };
   function send(route: typeof routes[number], accessToken?: string, cookie = false) {
     const agent = request(app.getHttpServer());
     let result = route.method === 'get' ? agent.get(route.path) : route.method === 'patch' ? agent.patch(route.path) : agent.post(route.path);

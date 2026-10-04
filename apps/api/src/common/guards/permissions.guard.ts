@@ -8,7 +8,7 @@ import { Reflector } from '@nestjs/core';
 import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { AuthPrincipal } from '../auth.types';
 
-/** Enforces @RequirePermissions against the principal's JWT permission set. */
+/** Enforces @RequirePermissions against the current server-resolved grants. */
 @Injectable()
 export class PermissionsGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}

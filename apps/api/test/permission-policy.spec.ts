@@ -5,6 +5,7 @@ import { Reflector } from '@nestjs/core';
 import { describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { JwtAuthGuard } from '../src/common/guards/jwt-auth.guard';
+import { SessionLogoutGuard } from '../src/common/guards/session-logout.guard';
 import { MemberJwtGuard } from '../src/common/guards/member-jwt.guard';
 import { PermissionsGuard } from '../src/common/guards/permissions.guard';
 import { PERMISSIONS_KEY } from '../src/common/decorators/permissions.decorator';
@@ -35,7 +36,7 @@ const routes = controllers(AppModule).flatMap(controller =>
 
 // Explicitly reviewed exceptions. Adding an unprotected endpoint must fail CI
 // until its authentication boundary is reviewed and recorded here.
-const exceptions: Record<string, 'public' | 'session' | 'member' | 'internal-token' | 'webhook-signature'> = {
+const exceptions: Record<string, 'public' | 'session' | 'logout' | 'member' | 'internal-token' | 'webhook-signature'> = {
   'POST /auth/login': 'public',
   'POST /auth/password-reset/request': 'public',
   'POST /auth/password-reset/confirm': 'public',
@@ -44,7 +45,7 @@ const exceptions: Record<string, 'public' | 'session' | 'member' | 'internal-tok
   'POST /auth/mfa/setup': 'session',
   'POST /auth/mfa/verify-setup': 'session',
   'POST /auth/mfa/disable': 'session',
-  'POST /auth/logout': 'session',
+  'POST /auth/logout': 'logout',
   'GET /auth/me': 'session',
   'POST /auth/member/request-otp': 'public',
   'POST /auth/member/verify-otp': 'public',
@@ -75,6 +76,7 @@ describe('registered API permission boundaries', () => {
         ...(Reflect.getMetadata(GUARDS_METADATA, route.handler) ?? []),
       ];
       const policy = reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [route.handler, route.controller]);
+      if (guards.includes(SessionLogoutGuard)) expect(route.label).toBe('POST /auth/logout');
       if (policy !== undefined) {
         expect(policy.length).toBeGreaterThan(0);
         expect(guards).toContain(JwtAuthGuard);
@@ -94,6 +96,7 @@ describe('registered API permission boundaries', () => {
       const exception = exceptions[route.label];
       expect(exception, 'Unreviewed route without a permission policy').toBeDefined();
       if (exception === 'session') expect(guards).toContain(JwtAuthGuard);
+      if (exception === 'logout') expect(guards).toContain(SessionLogoutGuard);
       expect(guards).not.toContain(PermissionsGuard);
     });
   }

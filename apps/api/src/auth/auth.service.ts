@@ -7,7 +7,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
 import * as bcrypt from 'bcryptjs';
@@ -42,6 +42,12 @@ export interface AuthenticatedUser {
   email: string;
   mfaEnabled: boolean;
   organizations: OrgSummary[];
+  authVersion: number;
+}
+
+export interface LoginProof {
+  authVersion: number;
+  mfaVerified: boolean;
 }
 
 interface MembershipRow {
@@ -57,6 +63,7 @@ interface SessionRow {
   organization_id: string | null;
   expires_at: Date;
   revoked_at: Date | null;
+  family_id: string;
 }
 
 const hashToken = (token: string): string =>
@@ -120,7 +127,7 @@ export class AuthService {
   ): Promise<AuthenticatedUser> {
     await this.assertLoginAllowed(email, ipAddress);
     const { rows } = await this.pool.query(
-      `SELECT id, email, password_hash, status, mfa_enabled
+      `SELECT id, email, password_hash, status, mfa_enabled, auth_version
          FROM users WHERE email = $1`,
       [email.toLowerCase()],
     );
@@ -131,6 +138,7 @@ export class AuthService {
           password_hash: string | null;
           status: string;
           mfa_enabled: boolean;
+          auth_version: number;
         }
       | undefined;
     if (!user || !user.password_hash || user.status !== 'ACTIVE') {
@@ -149,6 +157,7 @@ export class AuthService {
       email: user.email,
       mfaEnabled: user.mfa_enabled,
       organizations,
+      authVersion: user.auth_version,
     };
   }
 
@@ -162,47 +171,43 @@ export class AuthService {
   async issueForUser(
     userId: string,
     organizationSlug: string | undefined,
-    ipAddress?: string,
-    userAgent?: string,
+    ipAddress: string | undefined,
+    userAgent: string | undefined,
+    proof: LoginProof,
   ): Promise<{
     tokens?: SessionTokens;
     requiresOrgSelection: boolean;
     organizations: OrgSummary[];
   }> {
-    const organizations = await this.listOrganizations(userId);
-
-    if (organizations.length === 0 && organizationSlug === undefined) {
-      const tokens = await this.issueTokens(
-        userId,
-        undefined,
-        ipAddress,
-        userAgent,
-      );
-      return { tokens, requiresOrgSelection: false, organizations };
-    }
-    if (organizations.length === 1 && organizationSlug === undefined) {
-      const tokens = await this.issueTokens(
-        userId,
-        organizations[0]?.slug,
-        ipAddress,
-        userAgent,
-      );
-      return { tokens, requiresOrgSelection: false, organizations };
-    }
-    if (organizationSlug) {
-      const tokens = await this.issueTokens(
-        userId,
-        organizationSlug,
-        ipAddress,
-        userAgent,
-      );
-      return { tokens, requiresOrgSelection: false, organizations };
-    }
-    return {
-      tokens: undefined,
-      requiresOrgSelection: true,
-      organizations,
-    };
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Reset locks the same user. A credential check/challenge from before
+      // reset cannot create a session after the new password commits.
+      const account = await client.query("SELECT auth_version,mfa_enabled FROM users WHERE id=$1 AND status='ACTIVE' FOR NO KEY UPDATE", [userId]);
+      const user = account.rows[0];
+      if (!user || user.auth_version !== proof.authVersion || user.mfa_enabled !== proof.mfaVerified) {
+        throw new UnauthorizedException('Sign-in state changed. Please sign in again.');
+      }
+      const organizations = await this.listOrganizations(userId, client);
+      let tokens: SessionTokens | undefined;
+      if (organizationSlug || organizations.length <= 1) {
+        tokens = await this.issueTokens(userId, organizationSlug ?? organizations[0]?.slug, ipAddress, userAgent, client);
+      }
+      if (tokens && proof.mfaVerified) {
+        await client.query(`INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+          VALUES ($1,'auth.mfa.verified','user',$1,'{}'::jsonb)`, [userId]);
+      }
+      await client.query('COMMIT');
+      return { tokens, requiresOrgSelection: !tokens, organizations };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      if (error instanceof MfaEnrollmentRequiredException) {
+        await client.query(`INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+          VALUES ($1,'mfa.login_blocked','user',$1,$2)`, [error.userId, JSON.stringify({ organizationId: error.organizationId })]);
+      }
+      throw error;
+    } finally { client.release(); }
   }
 
   /**
@@ -217,6 +222,7 @@ export class AuthService {
     ipAddress?: string,
     userAgent?: string,
     client?: PoolClient,
+    familyId: string = randomUUID(),
   ): Promise<SessionTokens> {
     const account = await (client ?? this.pool).query("SELECT email FROM users WHERE id=$1 AND status='ACTIVE'", [userId]);
     if (!account.rows[0]) throw new UnauthorizedException('Account is not active');
@@ -276,8 +282,8 @@ export class AuthService {
       Date.now() + ENV.refreshTokenTtlDays * 24 * 60 * 60 * 1000,
     );
     const inserted = await (client ?? this.pool).query(
-      `INSERT INTO sessions (user_id, organization_id, refresh_token_hash, expires_at, ip_address, user_agent)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO sessions (user_id, organization_id, refresh_token_hash, expires_at, ip_address, user_agent, family_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
       [
         userId,
@@ -286,6 +292,7 @@ export class AuthService {
         expiresAt,
         ipAddress ?? null,
         userAgent ?? null,
+        familyId,
       ],
     );
     const sessionId = (inserted.rows[0] as { id: string }).id;
@@ -478,9 +485,9 @@ export class AuthService {
   }
 
   /** Short-lived challenge token issued when MFA is enabled at login. */
-  async createMfaChallenge(userId: string): Promise<string> {
+  async createMfaChallenge(userId: string, authVersion: number): Promise<string> {
     return this.jwtService.signAsync(
-      { sub: userId, typ: 'mfa' },
+      { sub: userId, typ: 'mfa', av: authVersion },
       { secret: ENV.jwtAccessSecret, expiresIn: 5 * 60 },
     );
   }
@@ -489,30 +496,30 @@ export class AuthService {
   async verifyMfaChallenge(
     mfaToken: string,
     code: string,
-  ): Promise<string> {
-    let claims: { sub: string; typ?: string };
+  ): Promise<{ userId: string; proof: LoginProof }> {
+    let claims: { sub: string; typ?: string; av?: number };
     try {
-      claims = await this.jwtService.verifyAsync<{ sub: string; typ?: string }>(
+      claims = await this.jwtService.verifyAsync<{ sub: string; typ?: string; av?: number }>(
         mfaToken,
         { secret: ENV.jwtAccessSecret },
       );
     } catch {
       throw new UnauthorizedException('MFA challenge expired or invalid');
     }
-    if (claims.typ !== 'mfa') {
+    if (claims.typ !== 'mfa' || !Number.isSafeInteger(claims.av)) {
       throw new UnauthorizedException('MFA challenge expired or invalid');
     }
     const userId = claims.sub;
-    const secret = await this.mfaSecretFor(userId);
+    const account = await this.pool.query("SELECT mfa_secret,mfa_enabled,auth_version FROM users WHERE id=$1 AND status='ACTIVE'", [userId]);
+    const current = account.rows[0];
+    if (!current || current.auth_version !== claims.av || !current.mfa_enabled) {
+      throw new UnauthorizedException('MFA challenge expired or invalid');
+    }
+    const secret = current.mfa_secret as string | null;
     if (!secret || !(await this.verifyCode(secret, code))) {
       throw new UnauthorizedException('Invalid TOTP code');
     }
-    await this.pool.query(
-      `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
-       VALUES ($1, 'auth.mfa.verified', 'user', $1, $2)`,
-      [userId, JSON.stringify({})],
-    );
-    return userId;
+    return { userId, proof: { authVersion: claims.av!, mfaVerified: true } };
   }
 
   private async mfaSecretFor(userId: string): Promise<string | null> {
@@ -558,12 +565,12 @@ export class AuthService {
       if (!user.rows[0]) throw new UnauthorizedException('Account is not active');
       const claimed = await client.query(`UPDATE sessions SET revoked_at=clock_timestamp()
         WHERE refresh_token_hash=$1 AND revoked_at IS NULL AND expires_at>clock_timestamp()
-        RETURNING id,user_id,organization_id,expires_at,revoked_at`, [hashToken(refreshToken)]);
+        RETURNING id,user_id,organization_id,expires_at,revoked_at,family_id`, [hashToken(refreshToken)]);
       const session = claimed.rows[0] as SessionRow | undefined;
       if (!session) throw new UnauthorizedException('Refresh token invalid or expired');
       const org = session.organization_id ? await this.fetchOrgSummary(session.organization_id, client) : null;
       if (session.organization_id && !org) throw new UnauthorizedException('Organization is unavailable');
-      const tokens = await this.issueTokens(session.user_id, org?.slug, undefined, undefined, client);
+      const tokens = await this.issueTokens(session.user_id, org?.slug, undefined, undefined, client, session.family_id);
       await client.query('COMMIT');
       return tokens;
     } catch (error) {
@@ -578,10 +585,20 @@ export class AuthService {
   }
 
   async revokeSession(sessionId: string): Promise<void> {
-    await this.pool.query(
-      `UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`,
-      [sessionId],
-    );
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const session = await client.query('SELECT user_id,family_id FROM sessions WHERE id=$1', [sessionId]);
+      if (session.rows[0]) {
+        // Serialize with rotation/reset, then revoke all replacements in this
+        // browser lineage. Independent logins have different family ids.
+        await client.query('SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE', [session.rows[0].user_id]);
+        await client.query(`UPDATE sessions SET revoked_at=clock_timestamp()
+          WHERE user_id=$1 AND family_id=$2 AND revoked_at IS NULL`, [session.rows[0].user_id, session.rows[0].family_id]);
+      }
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
   }
 
   // ---------------------------------------------------------------- misc
@@ -635,14 +652,16 @@ export class AuthService {
          JOIN roles ro ON ro.id = ur.role_id
          LEFT JOIN role_permissions rp ON rp.role_id = ro.id
          LEFT JOIN permissions p ON p.id = rp.permission_id
-        WHERE ur.user_id = $1`,
+        WHERE ur.user_id = $1
+          AND (ro.organization_id IS NULL OR ro.organization_id=ur.organization_id)
+          AND ro.scope=CASE WHEN ur.organization_id IS NULL THEN 'saas' ELSE 'org' END`,
       [userId],
     );
     return rows as MembershipRow[];
   }
 
-  private async listOrganizations(userId: string): Promise<OrgSummary[]> {
-    const rows = await this.membershipRows(userId);
+  private async listOrganizations(userId: string, client?: PoolClient): Promise<OrgSummary[]> {
+    const rows = await this.membershipRows(userId, client);
     const orgIds = [
       ...new Set(
         rows
@@ -652,7 +671,7 @@ export class AuthService {
     ];
     const summaries: OrgSummary[] = [];
     for (const orgId of orgIds) {
-      const org = await this.fetchOrgSummary(orgId);
+      const org = await this.fetchOrgSummary(orgId, client);
       if (org) {
         summaries.push({
           id: org.id,

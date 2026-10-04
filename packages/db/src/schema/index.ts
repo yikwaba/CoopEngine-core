@@ -1362,6 +1362,7 @@ export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   email: varchar('email', { length: 320 }).notNull().unique(),
   passwordHash: text('password_hash'),
+  authVersion: integer('auth_version').notNull().default(0),
   status: text('status').notNull().default('ACTIVE'),
   mfaSecret: text('mfa_secret'),
   mfaEnabled: boolean('mfa_enabled').notNull().default(false),
@@ -1482,6 +1483,7 @@ export const sessions = pgTable(
       { onDelete: 'set null' },
     ),
     refreshTokenHash: text('refresh_token_hash').notNull().unique(),
+    familyId: uuid('family_id').notNull().defaultRandom(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     ipAddress: text('ip_address'),
@@ -1492,6 +1494,7 @@ export const sessions = pgTable(
   },
   (table) => [
     index('sessions_user_idx').on(table.userId),
+    index('sessions_user_family_idx').on(table.userId, table.familyId),
   ],
 );
 
