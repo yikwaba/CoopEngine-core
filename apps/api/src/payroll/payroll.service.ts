@@ -205,12 +205,14 @@ export class PayrollService {
         amount: string | number;
       }[];
 
-      // Re-validate members are still ACTIVE inside the transaction
+      // Re-validate and lock member state through commit. NO KEY UPDATE permits
+      // FK key-share locks from concurrent savings journal inserts, avoiding
+      // a member/account lock cycle while still blocking status updates.
       const amountsByMember = new Map<string, bigint>();
       const memberNos = rows.map((r) => r.memberNo);
       const members = await c.query(
         `SELECT id, member_no FROM members
-          WHERE organization_id = $1 AND member_no = ANY($2::bigint[]) AND status = 'ACTIVE' ORDER BY id FOR UPDATE`,
+          WHERE organization_id = $1 AND member_no = ANY($2::bigint[]) AND status = 'ACTIVE' ORDER BY id FOR NO KEY UPDATE`,
         [orgId, memberNos],
       );
       const activeIds = new Set(
