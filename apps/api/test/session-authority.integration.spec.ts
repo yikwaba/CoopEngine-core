@@ -73,10 +73,10 @@ describe('current grants and session lifecycle (PostgreSQL)', () => {
     expect((await products(a.tokens.accessToken)).status).toBe(200);
   });
   it('role replacement takes effect on bearer and cookie requests immediately', async () => {
-    const a = await staff(); await ownRole(a, ['members.view']);
+    const a = await staff(); await ownRole(a, ['members.lookup']);
     expect((await products(a.tokens.accessToken)).status).toBe(403);
     const result = await request(app.getHttpServer()).get('/api/v1/auth/me').set('Cookie', `ce_at=${a.tokens.accessToken}`).expect(200);
-    expect(result.body.permissions).toEqual(['members.view']);
+    expect(result.body.permissions).toEqual(['members.lookup']);
   });
   it('removed membership denies access even when another tenant has the same grants', async () => {
     const a = await staff(); const b = await staff();

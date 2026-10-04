@@ -58,11 +58,25 @@ describe('product permissions and tenant isolation (real PostgreSQL)', () => {
     const a = await onboard(platform.body.tokens.accessToken);
     const b = await onboard(platform.body.tokens.accessToken);
     const claims = await jwt.verifyAsync<JwtClaims>(a.token, { secret: ENV.jwtAccessSecret });
-    // Valid reduced-permission JWTs retain the real user's active database session.
-    // This tests enforcement of signed claims, not role-assignment administration.
-    const restricted = (perms: string[]) => jwt.sign({ ...claims, perms }, { secret: ENV.jwtAccessSecret });
-    const noPermissions = restricted([]);
-    const viewer = restricted(['products.view']);
+    // Separate persisted users/roles exercise current grants. Changing only a
+    // signed JWT snapshot no longer changes the server's authorization.
+    const restricted = async (perms: string[]) => {
+      const suffix = randomUUID().slice(0, 8);
+      const email = `restricted-product-${suffix}@coopengine.test`;
+      const userId = (await pool.query(`INSERT INTO users(email,password_hash)
+        SELECT $1,password_hash FROM users WHERE id=$2 RETURNING id`, [email, claims.sub])).rows[0].id;
+      const roleId = (await pool.query(`INSERT INTO roles(organization_id,code,name,scope)
+        VALUES ($1,$2,'Product permission fixture','org') RETURNING id`, [a.id, `PRODUCT_${suffix}`])).rows[0].id;
+      await pool.query('INSERT INTO role_permissions(role_id,permission_id) SELECT $1,id FROM permissions WHERE code=ANY($2::text[])', [roleId, perms]);
+      await pool.query('INSERT INTO user_roles(user_id,organization_id,role_id) VALUES ($1,$2,$3)', [userId, a.id, roleId]);
+      const login = await request(app.getHttpServer()).post('/api/v1/auth/login')
+        .send({ email, password: 'CoopPass123!' }).expect(200);
+      // Even an over-granted signed snapshot must not override DB restrictions.
+      const current = await jwt.verifyAsync<JwtClaims>(login.body.tokens.accessToken, { secret: ENV.jwtAccessSecret });
+      return jwt.sign({ ...current, perms: claims.perms }, { secret: ENV.jwtAccessSecret });
+    };
+    const noPermissions = await restricted([]);
+    const viewer = await restricted(['products.view']);
     const id = randomUUID();
     const savings = { code: 'TEST-SAVE', name: 'Permission test savings', interestRatePa: 0, minDeposit: 0, allowWithdrawal: true };
     const loan = { code: 'TEST-LOAN', name: 'Permission test loan', interestRatePa: 15, interestMethod: 'FLAT', multiplier: 3, minPrincipal: 0, maxPrincipal: null };
