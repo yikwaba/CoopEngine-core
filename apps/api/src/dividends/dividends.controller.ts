@@ -1,3 +1,4 @@
+import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
   Controller,
@@ -47,6 +48,7 @@ export class DividendsController {
 
   @Post('post')
   @RequirePermissions('dividends.post')
+  @SensitiveAction('dividends.post')
   async post(@CurrentUser() user: AuthPrincipal, @Body() dto: DividendPostDto) {
     await this.planLimits.assertFeature(user.organizationId, 'dividends');
     return this.dividendsService.post(

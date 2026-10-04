@@ -1,3 +1,4 @@
+import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
   Controller,
@@ -119,6 +120,7 @@ export class SavingsController {
   @Post('interest/post')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('savings.post')
+  @SensitiveAction('savings.postInterest')
   postInterest(
     @CurrentUser() principal: AuthPrincipal,
     @Body() body: { period?: string },
@@ -155,6 +157,7 @@ export class SavingsController {
 
   @Post('accounts/:id/deposits')
   @RequirePermissions('savings.post')
+  @SensitiveAction('savings.deposit')
   deposit(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) accountId: string,
@@ -173,6 +176,7 @@ export class SavingsController {
   @Post('accounts/:id/withdrawals')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('savings.withdraw')
+  @SensitiveAction('savings.withdraw')
   async withdraw(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) accountId: string,
@@ -213,6 +217,7 @@ export class SavingsController {
 
   @Patch('settings/withdrawal-approval')
   @RequirePermissions('savings.approve', 'settings.manage')
+  @SensitiveAction('savings.setWithdrawalPolicy')
   setWithdrawalPolicy(
     @CurrentUser() principal: AuthPrincipal,
     @Body() dto: WithdrawalPolicyDto,
@@ -227,6 +232,7 @@ export class SavingsController {
   @Post('withdrawals/:id/approve')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('savings.approve', 'settings.manage')
+  @SensitiveAction('savings.approveWithdrawal')
   approveWithdrawal(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) id: string,

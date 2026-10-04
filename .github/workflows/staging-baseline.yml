@@ -2,6 +2,9 @@ name: Isolated staging baseline
 on:
   pull_request:
     paths:
+      - apps/api/src/auth/**
+      - apps/portal/src/**
+      - packages/db/migrations/**
       - staging/**
       - scripts/staging/**
       - .dockerignore

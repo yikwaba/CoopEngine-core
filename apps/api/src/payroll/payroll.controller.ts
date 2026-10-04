@@ -1,3 +1,4 @@
+import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
   Controller,
@@ -87,6 +88,7 @@ export class PayrollController {
   @Post('batches/:id/approve')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('payroll.approve')
+  @SensitiveAction('payroll.approve')
   async approve(@CurrentUser() principal: AuthPrincipal, @Param('id', new ParseUUIDPipe()) id: string) {
     await this.planLimits.assertFeature(principal.organizationId, 'payroll');
     return this.payrollService.approve(principal.organizationId, principal.userId, id);
@@ -107,6 +109,7 @@ export class PayrollController {
   @Post('batches/:id/reverse')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('payroll.post')
+  @SensitiveAction('payroll.reverse')
   reverse(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) id: string,

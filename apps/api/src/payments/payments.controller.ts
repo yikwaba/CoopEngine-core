@@ -1,3 +1,4 @@
+import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
   Controller,
@@ -184,6 +185,7 @@ export class PaymentsController {
   @Post('transactions')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('payments.reconcile', 'savings.post')
+  @SensitiveAction('payments.recordTransaction')
   recordTransaction(@CurrentUser() user: AuthPrincipal, @Body() dto: RecordTransactionDto) {
     return this.reconciliation.recordTransaction(user.organizationId, user.userId, dto);
   }
@@ -192,6 +194,7 @@ export class PaymentsController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('payments.reconcile')
+  @SensitiveAction('payments.sweep')
   sweep(@CurrentUser() user: AuthPrincipal) {
     return this.reconciliation.sweep(user.organizationId, user.userId);
   }
@@ -207,6 +210,7 @@ export class PaymentsController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('payments.reconcile', 'savings.post')
+  @SensitiveAction('payments.assignException')
   assignException(
     @CurrentUser() user: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) id: string,

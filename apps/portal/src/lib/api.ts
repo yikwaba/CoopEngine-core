@@ -22,11 +22,24 @@ export interface LoginOutcome {
 
 /** Raw authenticated response for paginated lists and binary downloads. */
 export async function apiResponse(path: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  let res = await fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: 'include',
     cache: 'no-store',
   });
+  // Only this explicit pre-operation refusal may retry a mutation. Never retry
+  // a timeout, network error, ordinary 403, 5xx or a failed verification.
+  if (res.status === 403 && typeof window !== 'undefined' &&
+      !new Headers(init?.headers).has('X-CoopEngine-Step-Up')) {
+    const refusal = await res.clone().json().catch(() => null) as {code?: string; message?: string} | null;
+    if (refusal?.code === 'STEP_UP_REQUIRED') {
+      const code = await requestStepUp(refusal.message ?? 'Verify this action');
+      if (code) {
+        const headers = new Headers(init?.headers); headers.set('X-CoopEngine-Step-Up', code);
+        res = await fetch(`${API_BASE}${path}`, {...init, headers, credentials:'include', cache:'no-store'});
+      }
+    }
+  }
   if (res.status === 401) {
     clearSession();
     if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
@@ -125,4 +138,13 @@ export async function downloadPdf(path: string, filename: string): Promise<void>
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+export const STEP_UP_EVENT = 'coopengine-step-up';
+export interface StepUpRequest { message: string; resolve: (code: string | null) => void; }
+/** OTP stays in this request's memory; never storage, a URL or an auth token. */
+function requestStepUp(message: string): Promise<string | null> {
+  return new Promise(resolve => {
+    window.dispatchEvent(new CustomEvent<StepUpRequest>(STEP_UP_EVENT, {detail:{message, resolve}}));
+  });
 }

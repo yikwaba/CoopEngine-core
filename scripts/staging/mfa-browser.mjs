@@ -10,6 +10,13 @@ assert.ok(process.env.BROWSER_TEST_MODULE_ROOT, 'Ephemeral test modules required
 const require = createRequire(resolve(process.env.BROWSER_TEST_MODULE_ROOT, 'browser-test.cjs'));
 const { chromium } = require('playwright');
 const { generateSync } = require('otplib/functional');
+const usedSteps = new Map();
+async function freshCode(secret) {
+  const previous = usedSteps.get(secret) ?? -1;
+  while (Math.floor(Date.now()/30000) <= previous || Date.now()%30000 > 27000) await new Promise(resolve => setTimeout(resolve, 250));
+  const step = Math.floor(Date.now()/30000); usedSteps.set(secret,step);
+  return generateSync({secret,epoch:step*30});
+}
 const settings = await readFile('.staging/compose.env', 'utf8');
 assert.equal((settings.match(/^STAGING_LOGIN_PASSWORD=/gm) ?? []).length, 1, 'One private synthetic password required');
 const password = settings.match(/^STAGING_LOGIN_PASSWORD=(.+)$/m)?.[1].trim();
@@ -65,7 +72,7 @@ async function signIn() {
 async function finishSetup() {
   await page.getByRole('heading', { name: 'Set up two-step verification' }).waitFor();
   const secret = (await page.getByTestId('mfa-setup-secret').textContent()).trim();
-  await page.getByLabel('Authenticator code', { exact: true }).fill(generateSync({ secret }));
+  await page.getByLabel('Authenticator code', { exact: true }).fill(await freshCode(secret));
   const enrolled = await responseTo('/auth/mfa/enroll', () => page.getByRole('button', { name: 'Finish setup', exact: true }).click());
   assert.ok(enrolled.tokens?.accessToken, 'Enrollment must issue a verified session');
   await page.getByRole('heading', { name: 'Save your recovery codes' }).waitFor();
@@ -106,7 +113,7 @@ try {
   await page.goto(portal + '/security');
   await page.getByRole('heading', { name: 'Security', exact: true }).waitFor();
   await page.getByLabel('Password', { exact: true }).fill(password);
-  await page.getByLabel(/^Authenticator code /).fill(generateSync({ secret: first.secret }));
+  await page.getByLabel(/^Authenticator code /).fill(await freshCode(first.secret));
   const regenerated = await responseTo('/auth/mfa/recovery-codes', () => page.getByRole('button', { name: 'Generate recovery codes', exact: true }).click());
   assert.equal(regenerated.recoveryCodes.length, 10);
   await page.getByRole('heading', { name: 'Save your recovery codes' }).waitFor();
@@ -115,10 +122,26 @@ try {
 
   const challenge = await signIn();
   assert.ok(challenge.requiresMfa && !challenge.tokens, 'Authenticator sign-in must be limited until verified');
-  await page.getByLabel('Authenticator code', { exact: true }).fill(generateSync({ secret: first.secret }));
+  await page.getByLabel('Authenticator code', { exact: true }).fill(await freshCode(first.secret));
   await responseTo('/auth/mfa/login-verify', () => page.getByRole('button', { name: 'Verify code', exact: true }).click());
   await page.getByRole('heading', { name: 'Dashboard', exact: true }).waitFor();
   await call('/auth/mfa/login-verify', { status: 401, body: { mfaToken: challenge.mfaToken, code: generateSync({ secret: first.secret }), organizationSlug: slug } });
+  assert.equal((await context.request.patch(api+'/settings',{data:{security:{requireStepUpForSensitiveMoney:true}}})).status(),200,'Synthetic tenant enables step-up');
+  const policyLoaded=page.waitForResponse(res=>res.url()===api+'/savings/settings/withdrawal-approval'&&res.request().method()==='GET');
+  await page.goto(portal+'/withdrawals');
+  assert.equal((await policyLoaded).status(),200,'Withdrawal page data loaded before interaction');
+  await page.getByText('Currently:',{exact:false}).waitFor();
+  await page.getByRole('button',{name:'Save policy',exact:true}).click();
+  await page.getByRole('dialog',{name:'Verify this action'}).waitFor();
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();
+  assert.equal((await context.request.get(api+'/savings/settings/withdrawal-approval')).status(),200,'Cancellation preserves session');
+  await page.getByRole('textbox').first().fill('0');
+  await page.getByRole('button',{name:'Save policy',exact:true}).click();
+  await page.getByLabel('Verification code',{exact:true}).fill(await freshCode(first.secret));
+  await page.getByRole('button',{name:'Verify and continue',exact:true}).click();
+  await page.getByText('Every withdrawal now needs a second approval.',{exact:true}).waitFor();
+  const policy = await context.request.get(api+'/savings/settings/withdrawal-approval');
+  assert.equal((await policy.json()).threshold,0,'Verified portal retry updates synthetic policy');
   await signOut();
 
   const recoveryChallenge = await signIn();
@@ -134,7 +157,7 @@ try {
   await call('/auth/me', { token: first.tokens.accessToken, status: 401 });
   await signOut();
   assert.equal(pageErrors.length, 0, 'No browser runtime errors');
-  console.log('PASS: real Chromium required MFA enrollment, cookie dashboard, recovery-code download/regeneration, authenticator sign-in, challenge replay denial, backup recovery/re-enrollment and old-session revocation. No money/provider operations.');
+  console.log('PASS: real Chromium required MFA enrollment, cookie dashboard, recovery-code download/regeneration, authenticator sign-in, challenge replay denial, backup recovery/re-enrollment and old-session revocation. Sensitive-action prompt cancellation and verified policy retry. No money/provider operations.');
 } catch (error) {
   console.error('Browser failure diagnostics (no bodies, keys, cookies or backup codes):', JSON.stringify({
     url: new URL(page.url()).pathname, sessionMarker: await page.evaluate(() => localStorage.getItem('coopengine_session') === 'cookie').catch(() => false),

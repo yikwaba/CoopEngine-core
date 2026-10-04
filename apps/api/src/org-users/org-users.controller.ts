@@ -1,3 +1,4 @@
+import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
   Controller,
@@ -60,6 +61,7 @@ export class OrgUsersController {
 
   @Post()
   @RequirePermissions('users.manage')
+  @SensitiveAction('org-users.invite')
   invite(@CurrentUser() principal: AuthPrincipal, @Body() dto: InviteUserDto) {
     return this.orgUsersService.invite(
       principal.organizationId,
@@ -72,6 +74,7 @@ export class OrgUsersController {
   @Patch('roles')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('users.manage')
+  @SensitiveAction('org-users.replaceRoles')
   replaceRoles(
     @CurrentUser() principal: AuthPrincipal,
     @Body() dto: { email: string } & RolesDto,
@@ -87,6 +90,7 @@ export class OrgUsersController {
   @Patch('status')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('users.manage')
+  @SensitiveAction('org-users.setStatus')
   setStatus(
     @CurrentUser() principal: AuthPrincipal,
     @Body() dto: { email: string } & StatusDto,

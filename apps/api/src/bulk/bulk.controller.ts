@@ -1,3 +1,4 @@
+import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
   Controller,
@@ -53,6 +54,7 @@ export class BulkController {
   @Post('share-purchases/commit')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('shares.post', 'payroll.upload', 'settings.manage')
+  @SensitiveAction('bulk.shareCommit')
   shareCommit(@CurrentUser() principal: AuthPrincipal, @Body() dto: CommitDto) {
     return this.bulkService.commit(
       principal.organizationId,
@@ -78,6 +80,7 @@ export class BulkController {
   @Post('loan-repayments/commit')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('loans.review', 'payroll.upload', 'payments.reconcile', 'settings.manage')
+  @SensitiveAction('bulk.loanCommit')
   loanCommit(@CurrentUser() principal: AuthPrincipal, @Body() dto: CommitDto) {
     return this.bulkService.commit(
       principal.organizationId,

@@ -1,3 +1,5 @@
+import { MfaClock } from '../src/auth/mfa-clock';
+const mfaClock = { value: Math.floor(Date.now()/1000), now() { return this.value; } };
 import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
@@ -17,7 +19,7 @@ describe('limited enrollment, challenges and recovery (PostgreSQL)', () => {
   const password = 'RecoveryFactorPass123!';
   beforeAll(async () => {
     process.env.DATABASE_URL = TEST_DATABASE_URL; pool = new Pool({ connectionString: TEST_DATABASE_URL }); await ensureRbacSeeded(pool);
-    const module = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(PasswordResetMailer)
+    const module = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(MfaClock).useValue(mfaClock).overrideProvider(PasswordResetMailer)
       .useValue({ send: async (_email: string, token: string) => { resetToken = token; } }).compile();
     app = module.createNestApplication(); app.setGlobalPrefix('api/v1'); app.useGlobalPipes(new ValidationPipe({ whitelist:true, transform:true, forbidNonWhitelisted:true })); await app.init();
     platform = (await login('admin@coopengine.dev', ADMIN_PASSWORD).expect(200)).body.tokens.accessToken;
@@ -25,8 +27,8 @@ describe('limited enrollment, challenges and recovery (PostgreSQL)', () => {
   afterAll(async () => { await app?.close(); await pool?.end(); });
   const login = (email: string, value = password) => request(app.getHttpServer()).post('/api/v1/auth/login').send({ email, password:value });
   const me = (token: string) => request(app.getHttpServer()).get('/api/v1/auth/me').set('Authorization', `Bearer ${token}`);
-  const confirm = (token: string, secret: string) => request(app.getHttpServer()).post('/api/v1/auth/mfa/enroll').send({ mfaToken:token, code:generateSync({ secret }) });
-  const verify = (token: string, secret: string) => request(app.getHttpServer()).post('/api/v1/auth/mfa/login-verify').send({ mfaToken:token, code:generateSync({ secret }) });
+  const confirm = (token: string, secret: string) => request(app.getHttpServer()).post('/api/v1/auth/mfa/enroll').send({ mfaToken:token, code:generateSync({ secret, epoch:mfaClock.now() }) });
+  const verify = (token: string, secret: string) => request(app.getHttpServer()).post('/api/v1/auth/mfa/login-verify').send({ mfaToken:token, code:generateSync({ secret, epoch:mfaClock.now() }) });
   const recover = (token: string, code: string) => request(app.getHttpServer()).post('/api/v1/auth/mfa/recover').send({ mfaToken:token, recoveryCode:code });
   async function staff() {
     const suffix=randomUUID().slice(0,8), email=`mfa-flow-${suffix}@coopengine.test`;
@@ -75,10 +77,10 @@ describe('limited enrollment, challenges and recovery (PostgreSQL)', () => {
     const pending=(await confirm(first.mfaToken,first.enrollment.secret).expect(200)).body;
     expect(pending.requiresOrgSelection).toBe(true); expect(pending.tokens).toBeUndefined(); expect(pending.recoveryCodes).toBeUndefined();
     await request(app.getHttpServer()).post('/api/v1/auth/mfa/enroll')
-      .send({mfaToken:first.mfaToken,code:generateSync({secret:first.enrollment.secret}),organizationSlug:'not-a-membership'}).expect(401);
+      .send({mfaToken:first.mfaToken,code:generateSync({epoch:mfaClock.now(),secret:first.enrollment.secret}),organizationSlug:'not-a-membership'}).expect(401);
     expect((await pool.query('SELECT mfa_enabled FROM users WHERE id=$1',[a.id])).rows[0].mfa_enabled).toBe(false);
     const enabled=(await request(app.getHttpServer()).post('/api/v1/auth/mfa/enroll')
-      .send({mfaToken:first.mfaToken,code:generateSync({secret:first.enrollment.secret}),organizationSlug:otherSlug}).expect(200)).body;
+      .send({mfaToken:first.mfaToken,code:generateSync({epoch:mfaClock.now(),secret:first.enrollment.secret}),organizationSlug:otherSlug}).expect(200)).body;
     expect(enabled.recoveryCodes).toHaveLength(10);
     const identity=(await me(enabled.tokens.accessToken).expect(200)).body;
     expect(identity.organizationSlug).toBe(otherSlug);
@@ -86,7 +88,7 @@ describe('limited enrollment, challenges and recovery (PostgreSQL)', () => {
   it('enabled authenticator cannot be overwritten by setup; mandatory MFA cannot be disabled',async()=>{
     const a=await enrolled(); await policy(a);
     await request(app.getHttpServer()).post('/api/v1/auth/mfa/setup').set('Authorization',`Bearer ${a.tokens.accessToken}`).expect(409);
-    await request(app.getHttpServer()).post('/api/v1/auth/mfa/disable').set('Authorization',`Bearer ${a.tokens.accessToken}`).send({code:generateSync({secret:a.secret})}).expect(403);
+    await request(app.getHttpServer()).post('/api/v1/auth/mfa/disable').set('Authorization',`Bearer ${a.tokens.accessToken}`).send({code:generateSync({epoch:mfaClock.now(),secret:a.secret})}).expect(403);
     expect((await pool.query('SELECT mfa_secret,mfa_enabled FROM users WHERE id=$1',[a.id])).rows[0]).toMatchObject({mfa_secret:a.secret,mfa_enabled:true});
   });
   it('custom withdrawal-only privilege cannot bypass mandatory MFA after role escalation',async()=>{
@@ -114,7 +116,7 @@ describe('limited enrollment, challenges and recovery (PostgreSQL)', () => {
     expect((await pool.query('SELECT count(*)::int AS n FROM mfa_recovery_codes WHERE user_id=$1',[a.id])).rows[0].n).toBe(10);
   });
   it('twelve concurrent MFA submissions issue one session and reject replay',async()=>{
-    const a=await enrolled(); const start=(await login(a.email).expect(200)).body;
+    const a=await enrolled(); mfaClock.value += 30; const start=(await login(a.email).expect(200)).body;
     const before=(await pool.query('SELECT count(*)::int AS n FROM sessions WHERE user_id=$1',[a.id])).rows[0].n;
     const results=await Promise.all(Array.from({length:12},()=>verify(start.mfaToken,a.secret)));
     expect(results.filter(r=>r.status===200)).toHaveLength(1); expect(results.filter(r=>r.status===401)).toHaveLength(11);
@@ -123,7 +125,7 @@ describe('limited enrollment, challenges and recovery (PostgreSQL)', () => {
   });
   it('five wrong codes exhaust a challenge; creating fresh challenges is capped',async()=>{
     const a=await enrolled(); const start=(await login(a.email).expect(200)).body;
-    const wrong=generateSync({secret:a.secret})==='000000'?'111111':'000000';
+    const wrong=generateSync({epoch:mfaClock.now(),secret:a.secret})==='000000'?'111111':'000000';
     for(let n=0;n<5;n++) await request(app.getHttpServer()).post('/api/v1/auth/mfa/login-verify').send({mfaToken:start.mfaToken,code:wrong}).expect(401);
     await verify(start.mfaToken,a.secret).expect(401);
     for(let n=0;n<3;n++) await login(a.email).expect(200);
@@ -166,8 +168,9 @@ describe('limited enrollment, challenges and recovery (PostgreSQL)', () => {
   });
   it('recovery codes require password plus current factor to regenerate; old codes expire',async()=>{
     const a=await enrolled(); const endpoint=()=>request(app.getHttpServer()).post('/api/v1/auth/mfa/recovery-codes').set('Authorization',`Bearer ${a.tokens.accessToken}`);
-    await endpoint().send({password:'WrongPassword123!',code:generateSync({secret:a.secret})}).expect(401);
-    const result=await endpoint().send({password,code:generateSync({secret:a.secret})}).expect(200);
+    await endpoint().send({password:'WrongPassword123!',code:generateSync({epoch:mfaClock.now(),secret:a.secret})}).expect(401);
+    mfaClock.value += 30;
+    const result=await endpoint().send({password,code:generateSync({epoch:mfaClock.now(),secret:a.secret})}).expect(200);
     expect(result.headers['cache-control']).toBe('no-store'); expect(result.body.recoveryCodes).toHaveLength(10);
     const challenge=(await login(a.email).expect(200)).body; await recover(challenge.mfaToken,a.codes[0]).expect(401);
     await recover(challenge.mfaToken,result.body.recoveryCodes[0]).expect(200);

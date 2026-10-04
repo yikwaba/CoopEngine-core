@@ -5,25 +5,31 @@ declare module 'otplib/functional' {
     secret: string;
     digits?: number;
     period?: number;
+    epoch?: number;
   }): Promise<string>;
   export function generateSync(options: {
     secret: string;
     digits?: number;
     period?: number;
+    epoch?: number;
   }): string;
   export function verify(options: {
     secret: string;
     token: string;
+    afterTimeStep?: number;
     window?: number | [number, number];
     digits?: number;
     period?: number;
-  }): Promise<{ valid: boolean; delta?: number; epoch?: number }>;
+    epoch?: number;
+  }): Promise<{ valid: true; timeStep: number } | { valid: false }>;
   export function verifySync(options: {
     secret: string;
     token: string;
+    afterTimeStep?: number;
     window?: number | [number, number];
     digits?: number;
     period?: number;
+    epoch?: number;
   }): { valid: boolean; delta?: number; epoch?: number };
   export function generateURI(options: {
     secret: string;
@@ -31,5 +37,6 @@ declare module 'otplib/functional' {
     issuer: string;
     digits?: number;
     period?: number;
+    epoch?: number;
   }): string;
 }
