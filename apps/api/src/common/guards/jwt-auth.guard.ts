@@ -44,7 +44,8 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     const { rows } = await this.pool.query(
-      `SELECT id, user_id, revoked_at FROM sessions WHERE id = $1`,
+      `SELECT s.id,s.user_id,s.revoked_at FROM sessions s JOIN users u ON u.id=s.user_id
+        WHERE s.id=$1 AND s.expires_at>clock_timestamp() AND u.status='ACTIVE'`,
       [claims.sid],
     );
     const session = rows[0] as

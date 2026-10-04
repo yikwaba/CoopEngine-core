@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomBytes, createHash } from 'node:crypto';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
 import * as bcrypt from 'bcryptjs';
 import {
@@ -65,6 +65,13 @@ const hashToken = (token: string): string =>
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 5;
 const MFA_ISSUER = 'Co-opEngine';
+
+class MfaEnrollmentRequiredException extends ForbiddenException {
+  constructor(readonly userId: string, readonly organizationId: string) {
+    super('This cooperative requires two-factor authentication for staff. Set up your authenticator app to continue.');
+  }
+}
+
 
 @Injectable()
 export class AuthService {
@@ -209,8 +216,11 @@ export class AuthService {
     organizationSlug: string | undefined,
     ipAddress?: string,
     userAgent?: string,
+    client?: PoolClient,
   ): Promise<SessionTokens> {
-    const rows = await this.membershipRows(userId);
+    const account = await (client ?? this.pool).query("SELECT email FROM users WHERE id=$1 AND status='ACTIVE'", [userId]);
+    if (!account.rows[0]) throw new UnauthorizedException('Account is not active');
+    const rows = await this.membershipRows(userId, client);
 
     let organizationId: string | null = null;
     let contextRows: MembershipRow[];
@@ -223,7 +233,7 @@ export class AuthService {
             .filter((id): id is string => id !== null),
         ),
       ];
-      const org = await this.findOrgBySlug(orgMembershipIds, organizationSlug);
+      const org = await this.findOrgBySlug(orgMembershipIds, organizationSlug, client);
       if (!org) {
         throw new UnauthorizedException('Not a member of that organization');
       }
@@ -242,6 +252,7 @@ export class AuthService {
         organizationId,
         userId,
         [...new Set(contextRows.map((r) => r.role_code))],
+        client,
       );
     } else {
       contextRows = rows.filter(
@@ -264,7 +275,7 @@ export class AuthService {
     const expiresAt = new Date(
       Date.now() + ENV.refreshTokenTtlDays * 24 * 60 * 60 * 1000,
     );
-    const inserted = await this.pool.query(
+    const inserted = await (client ?? this.pool).query(
       `INSERT INTO sessions (user_id, organization_id, refresh_token_hash, expires_at, ip_address, user_agent)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id`,
@@ -289,10 +300,10 @@ export class AuthService {
     return {
       accessToken,
       refreshToken,
-      expiresInSeconds: 15 * 60,
-      user: { id: userId, email: await this.emailFor(userId) },
+      expiresInSeconds: ENV.jwtAccessTtlSeconds,
+      user: { id: userId, email: account.rows[0].email },
       organization: organizationId
-        ? await this.fetchOrgSummary(organizationId)
+        ? await this.fetchOrgSummary(organizationId, client)
         : null,
       permissions,
     };
@@ -369,13 +380,15 @@ export class AuthService {
   /** Security settings a cooperative can turn on for itself. */
   async orgSecuritySettings(
     organizationId: string,
+    transaction?: PoolClient,
   ): Promise<{ mfaRequiredForPrivilegedRoles: boolean; requireStepUpForSensitiveMoney: boolean }> {
-    const { rows } = await withTenant(this.pool, organizationId, (client) =>
+    const { rows } = await this.authTenant(organizationId, (client) =>
       client.query(
         `SELECT coalesce(settings -> 'security', '{}'::jsonb) AS security
            FROM organization_settings WHERE organization_id = $1`,
         [organizationId],
       ),
+      transaction,
     );
     const security = ((rows[0] as { security?: Record<string, unknown> } | undefined)?.security ?? {}) as Record<
       string,
@@ -398,23 +411,23 @@ export class AuthService {
     organizationId: string,
     userId: string,
     roleCodes: string[],
+    client?: PoolClient,
   ): Promise<void> {
-    const { mfaRequiredForPrivilegedRoles } = await this.orgSecuritySettings(organizationId);
+    const { mfaRequiredForPrivilegedRoles } = await this.orgSecuritySettings(organizationId, client);
     if (!mfaRequiredForPrivilegedRoles) return;
     const bound = roleCodes.some((code) => AuthService.PRIVILEGED_ROLE_CODES.includes(code));
     if (!bound) return;
 
-    const { rows } = await this.pool.query(`SELECT mfa_enabled FROM users WHERE id = $1`, [userId]);
+    const { rows } = await (client ?? this.pool).query(`SELECT mfa_enabled FROM users WHERE id = $1`, [userId]);
     if ((rows[0] as { mfa_enabled: boolean } | undefined)?.mfa_enabled) return;
 
-    await this.pool.query(
+    if (!client) await this.pool.query(
       `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
        VALUES ($1, 'mfa.login_blocked', 'user', $1, $2)`,
       [userId, JSON.stringify({ organizationId })],
     );
-    throw new ForbiddenException(
-      'This cooperative requires two-factor authentication for staff. Set up your authenticator app to continue.',
-    );
+    // Rotation records the rejection after its transaction rolls back.
+    throw new MfaEnrollmentRequiredException(userId, organizationId);
   }
 
   /**
@@ -532,28 +545,36 @@ export class AuthService {
 
   // ------------------------------------------------------------- sessions
 
-  /** Rotate a refresh token: revoke old session, issue a new one. */
+  /** Consume once and create the replacement in one transaction. */
   async rotateRefresh(refreshToken: string): Promise<SessionTokens> {
-    const { rows } = await this.pool.query(
-      `SELECT id, user_id, organization_id, expires_at, revoked_at
-         FROM sessions WHERE refresh_token_hash = $1`,
-      [hashToken(refreshToken)],
-    );
-    const session = rows[0] as SessionRow | undefined;
-    if (
-      !session ||
-      session.revoked_at ||
-      new Date(session.expires_at).getTime() < Date.now()
-    ) {
-      throw new UnauthorizedException('Refresh token invalid or expired');
-    }
-
-    // Rotate: revoke this session, then issue a fresh one for the same context.
-    await this.revokeSession(session.id);
-    const orgSlug = session.organization_id
-      ? (await this.fetchOrgSummary(session.organization_id))?.slug
-      : undefined;
-    return this.issueTokens(session.user_id, orgSlug);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const lookup = await client.query('SELECT user_id FROM sessions WHERE refresh_token_hash=$1', [hashToken(refreshToken)]);
+      if (!lookup.rows[0]) throw new UnauthorizedException('Refresh token invalid or expired');
+      // Password reset locks the same user before consuming links/revoking
+      // sessions. User-first order prevents a refresh from escaping reset.
+      const user = await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' FOR NO KEY UPDATE", [lookup.rows[0].user_id]);
+      if (!user.rows[0]) throw new UnauthorizedException('Account is not active');
+      const claimed = await client.query(`UPDATE sessions SET revoked_at=clock_timestamp()
+        WHERE refresh_token_hash=$1 AND revoked_at IS NULL AND expires_at>clock_timestamp()
+        RETURNING id,user_id,organization_id,expires_at,revoked_at`, [hashToken(refreshToken)]);
+      const session = claimed.rows[0] as SessionRow | undefined;
+      if (!session) throw new UnauthorizedException('Refresh token invalid or expired');
+      const org = session.organization_id ? await this.fetchOrgSummary(session.organization_id, client) : null;
+      if (session.organization_id && !org) throw new UnauthorizedException('Organization is unavailable');
+      const tokens = await this.issueTokens(session.user_id, org?.slug, undefined, undefined, client);
+      await client.query('COMMIT');
+      return tokens;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      if (error instanceof MfaEnrollmentRequiredException) {
+        await client.query(`INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+          VALUES ($1,'mfa.login_blocked','user',$1,$2)`,
+          [error.userId, JSON.stringify({ organizationId: error.organizationId })]);
+      }
+      throw error;
+    } finally { client.release(); }
   }
 
   async revokeSession(sessionId: string): Promise<void> {
@@ -604,8 +625,8 @@ export class AuthService {
 
   // ------------------------------------------------------------- helpers
 
-  private async membershipRows(userId: string): Promise<MembershipRow[]> {
-    const { rows } = await this.pool.query(
+  private async membershipRows(userId: string, client?: PoolClient): Promise<MembershipRow[]> {
+    const { rows } = await (client ?? this.pool).query(
       `SELECT ur.organization_id,
               ro.code AS role_code,
               ro.scope AS role_scope,
@@ -647,22 +668,23 @@ export class AuthService {
   }
 
   /** RLS-safe org read: each org is read inside its own tenant transaction. */
-  private async fetchOrgSummary(orgId: string): Promise<OrgSummary | null> {
-    return withTenant(this.pool, orgId, async (c) => {
+  private async fetchOrgSummary(orgId: string, client?: PoolClient): Promise<OrgSummary | null> {
+    return this.authTenant(orgId, async (c) => {
       const res = await c.query(
         `SELECT id, name, slug FROM organizations WHERE id = $1`,
         [orgId],
       );
       return (res.rows[0] as OrgSummary | undefined) ?? null;
-    });
+    }, client);
   }
 
   private async findOrgBySlug(
     orgIds: string[],
     slug: string,
+    client?: PoolClient,
   ): Promise<{ id: string; name: string; slug: string; status: string } | null> {
     for (const orgId of orgIds) {
-      const org = await withTenant(this.pool, orgId, async (c) => {
+      const org = await this.authTenant(orgId, async (c) => {
         const res = await c.query(
           `SELECT id, name, slug, status FROM organizations WHERE id = $1 AND slug = $2`,
           [orgId, slug],
@@ -670,15 +692,21 @@ export class AuthService {
         return res.rows[0] as
           | { id: string; name: string; slug: string; status: string }
           | undefined;
-      });
+      }, client);
       if (org) return org;
     }
     return null;
   }
 
-  private async emailFor(userId: string): Promise<string> {
-    const user = await this.findUserById(userId);
-    return user?.email ?? '';
+  /** Reuse the refresh transaction for tenant reads; do not nest BEGINs or
+   * borrow another connection while user locks are held. Restore its context. */
+  private async authTenant<T>(orgId: string, work: (client: PoolClient) => Promise<T>, client?: PoolClient): Promise<T> {
+    if (!client) return withTenant(this.pool, orgId, work);
+    const previous = await client.query("SELECT current_setting('app.tenant_id',true) AS tenant");
+    await client.query("SELECT set_config('app.tenant_id',$1,true)", [orgId]);
+    const result = await work(client);
+    await client.query("SELECT set_config('app.tenant_id',$1,true)", [previous.rows[0].tenant ?? '']);
+    return result;
   }
 
   private async signAccessToken(claims: JwtClaims): Promise<string> {
