@@ -89,6 +89,23 @@ describe('limited enrollment, challenges and recovery (PostgreSQL)', () => {
     await request(app.getHttpServer()).post('/api/v1/auth/mfa/disable').set('Authorization',`Bearer ${a.tokens.accessToken}`).send({code:generateSync({secret:a.secret})}).expect(403);
     expect((await pool.query('SELECT mfa_secret,mfa_enabled FROM users WHERE id=$1',[a.id])).rows[0]).toMatchObject({mfa_secret:a.secret,mfa_enabled:true});
   });
+  it('custom withdrawal-only privilege cannot bypass mandatory MFA after role escalation',async()=>{
+    const a=await staff();
+    const role=(await pool.query("INSERT INTO roles(organization_id,code,name,scope) VALUES($1,$2,'Synthetic withdrawal role','org') RETURNING id",[a.orgId,`MFA_CUSTOM_${randomUUID().slice(0,8)}`])).rows[0].id;
+    await pool.query("INSERT INTO role_permissions(role_id,permission_id) SELECT $1,id FROM permissions WHERE code='savings.withdraw'",[role]);
+    await pool.query('DELETE FROM user_roles WHERE user_id=$1',[a.id]);
+    await pool.query('INSERT INTO user_roles(user_id,organization_id,role_id) VALUES($1,$2,$3)',[a.id,a.orgId,role]);
+    const env=process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV='production';
+      await me(a.tokens.accessToken).expect(401);
+      await request(app.getHttpServer()).post('/api/v1/auth/refresh').send({refreshToken:a.tokens.refreshToken}).expect(403);
+      const first=(await login(a.email).expect(200)).body;
+      expect(first.requiresMfaEnrollment).toBe(true); expect(first.tokens).toBeUndefined();
+      const enabled=(await confirm(first.mfaToken,first.enrollment.secret).expect(200)).body;
+      expect((await me(enabled.tokens.accessToken).expect(200)).body.permissions).toEqual(['savings.withdraw']);
+    } finally { process.env.NODE_ENV=env; }
+  });
   it('concurrent enrollment has one winner with one active session and code set',async()=>{
     const a=await staff(); await policy(a); const first=(await login(a.email).expect(200)).body;
     const results=await Promise.all([confirm(first.mfaToken,first.enrollment.secret),confirm(first.mfaToken,first.enrollment.secret)]);

@@ -15,11 +15,11 @@ This branch stacks on draft PR #10 (`recovery/session-authority`). It is not a p
 
 ## Verification gates
 
-Local checks: API unit tests (357), portal tests (9), API/portal typechecks and builds, JavaScript syntax and append-only migration history (43 migrations). The PostgreSQL suite adds twelve enrollment/recovery/race regressions, including concurrent challenge and backup-code submissions, expiration, purpose mismatch, reset invalidation and multiple cooperative selection.
+Verification gates: API unit tests, portal tests, API/portal typechecks and builds, JavaScript syntax and append-only migration history (43 migrations). The PostgreSQL suite adds thirteen enrollment/recovery/race regressions, including concurrent challenge and backup-code submissions, expiration, purpose mismatch, reset invalidation, multiple cooperative selection and custom withdrawal-only role escalation. Current evidence is recorded in draft PR #11's checks and description.
 
 The isolated-staging workflow installs ephemeral pinned browser tooling and runs `scripts/staging/mfa-browser.mjs` against the real API/portal after rehearsing the PowerShell installer. It creates only a new synthetic cooperative/account, confines browser requests to the two loopback origins, exercises the cookie dashboard, backup-code download/regeneration, normal MFA sign-in and replacement enrollment, and retains no traces/screenshots containing secrets. It performs no monetary posting or external-provider action.
 
-CI results must be recorded before supplying an installation SHA. A passing local build is not a passing PostgreSQL/browser test or user installation.
+CI results must be recorded before supplying an installation SHA. A passing local build is not a passing PostgreSQL/browser test or user installation. The custom-role rule exempts only explicitly read-only `.view`/`.lookup` grants; other and future permissions are privileged by default.
 
 ## Installation and boundaries
 

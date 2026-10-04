@@ -12,7 +12,7 @@ Use evidence per slice. Draft PR, passing CI, user-reported local acceptance and
 | Atomic refresh and reset race | PR #8; CI #117 passed 138 API integration tests; user reported installation/logout working | Historical refresh families, member sessions and MFA lifecycle limits |
 | Production configuration guard | PR #9; combined PR #9/#10 installation reported passed by user on 4 October at 11:46 Africa/Lagos; no production deployment | Actual OTP/payment delivery and existing simulated data review |
 | Current permission resolution and remaining staff session races | PR #10; CI #121 (338 unit/148 API integration tests) and isolated-staging #5 passed; user reported recovery update passed on 4 October | Broader REC-03/04 limits recorded in recovery-session-authority.md |
-| Privileged MFA bootstrap, recovery codes and challenge replay | This branch; 357 API unit tests and local API/portal builds pass; twelve new PostgreSQL regressions and isolated Chromium/installer checks are pending CI | Full REC-05 limits recorded in recovery-privileged-mfa.md; user installation and production acceptance remain separate |
+| Privileged MFA bootstrap, recovery codes and challenge replay | PR #11; thirteen new PostgreSQL regressions plus isolated Chromium/installer checks; check results and exact test counts are recorded in the PR | Full REC-05 limits recorded in recovery-privileged-mfa.md; user installation and production acceptance remain separate |
 
 ## Next P0 recovery priorities
 
