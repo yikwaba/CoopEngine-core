@@ -191,6 +191,7 @@ export class SavingsController {
       accountId,
       dto.amount,
       dto.description,
+      dto.idempotencyKey,
     );
     // Backwards compatible: a posted withdrawal returns the account row itself
     // (plus kind), while a parked one returns the pending request.

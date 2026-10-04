@@ -737,6 +737,7 @@ export class MemberSpaceService {
     accountId: string | undefined,
     amount: number,
     description?: string,
+    idempotencyKey?: string,
   ): Promise<{ kind: string; requestId?: string; status?: string }> {
     // Members do not need to name an account: default to their primary active
     // savings account.
@@ -766,6 +767,7 @@ export class MemberSpaceService {
       target,
       amount,
       description,
+      idempotencyKey,
     );
   }
 

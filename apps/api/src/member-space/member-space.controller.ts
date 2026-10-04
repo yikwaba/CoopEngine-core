@@ -106,6 +106,12 @@ export class MemberWithdrawalDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(16)
+  @MaxLength(100)
+  idempotencyKey?: string;
 }
 
 @Controller('member')
@@ -352,6 +358,7 @@ export class MemberSpaceController {
       dto.accountId,
       dto.amount,
       dto.description,
+      dto.idempotencyKey,
     );
   }
 

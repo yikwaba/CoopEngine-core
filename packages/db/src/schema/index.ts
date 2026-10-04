@@ -1830,3 +1830,19 @@ export const mfaStepupFailures = pgTable('mfa_stepup_failures', {
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   attemptedAt: timestamp('attempted_at', { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
 }, t => [index('mfa_stepup_failures_user_time_idx').on(t.userId, t.attemptedAt)]);
+
+/** Immutable completed financial responses scoped to tenant and action. */
+export const financialWriteReceipts = pgTable('financial_write_receipts', {
+ id: uuid('id').primaryKey().defaultRandom(),
+ organizationId: uuid('organization_id').notNull().references(()=>organizations.id,{onDelete:'cascade'}),
+ action: varchar('action',{length:80}).notNull(),
+ intentKey: varchar('intent_key',{length:100}).notNull(),
+ fingerprint: varchar('fingerprint',{length:64}).notNull(),
+ response: jsonb('response'),
+ createdAt: timestamp('created_at',{withTimezone:true}).notNull().defaultNow(),
+ completedAt: timestamp('completed_at',{withTimezone:true}),
+},table=>[
+ uniqueIndex('financial_receipt_scope').on(table.organizationId,table.action,table.intentKey),
+ check('financial_receipt_completion',sql`(${table.response} IS NULL) = (${table.completedAt} IS NULL)`),
+ pgPolicy('tenant_isolation',{as:'permissive',for:'all',using:tenantScope(table.organizationId),withCheck:tenantScope(table.organizationId)}),
+]);

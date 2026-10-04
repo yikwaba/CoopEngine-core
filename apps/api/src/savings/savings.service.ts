@@ -8,7 +8,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
+import { financialIntent } from '../common/financial-intent';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
 
@@ -42,9 +43,6 @@ export interface SavingsTxnRow {
 }
 
 type LockedSavingsAccount = Pick<SavingsAccountRow, 'id' | 'accountNo' | 'memberId' | 'status'> & { currentBalance: bigint };
-
-const isPgError = (e: unknown, code: string): boolean =>
-  typeof e === 'object' && e !== null && (e as { code?: string }).code === code;
 
 // Default account mapping (Decision Log): cash movement hits Cash at Bank
 // until per-coop payment-channel settings exist.
@@ -148,7 +146,10 @@ export class SavingsService {
     accountId: string,
   ): Promise<SavingsAccountRow> {
     const orgId = this.requireOrg(organizationId);
-    return withTenant(this.pool, orgId, async (c) => {
+    return withTenant(this.pool, orgId, c => this.getAccountTx(c,orgId,accountId));
+  }
+
+  private async getAccountTx(c: PoolClient,orgId:string,accountId:string):Promise<SavingsAccountRow> {
       const { rows } = await c.query(
         `SELECT a.id, a.account_no, a.member_id, a.current_balance, a.status, a.opened_at,
                 p.code AS product_code
@@ -159,7 +160,6 @@ export class SavingsService {
       );
       if (!rows[0]) throw new NotFoundException('Savings account not found');
       return this.mapAccount(rows[0] as Record<string, unknown>);
-    });
   }
 
   async listMemberAccounts(
@@ -181,22 +181,6 @@ export class SavingsService {
     });
   }
 
-  private async runMoneyOp(
-    orgId: string,
-    fn: (c: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> }) => Promise<void>,
-  ): Promise<void> {
-    try {
-      await withTenant(this.pool, orgId, async (c) => {
-        await fn(c);
-      });
-    } catch (error) {
-      if (isPgError(error, '23505')) {
-        throw new ConflictException('idempotencyKey has already been used');
-      }
-      throw error;
-    }
-  }
-
   async deposit(
     organizationId: string | null,
     actorUserId: string,
@@ -207,7 +191,8 @@ export class SavingsService {
   ): Promise<SavingsAccountRow> {
     const orgId = this.requireOrg(organizationId);
     const value = this.validateAmount(amount, 'deposit');
-    await this.runMoneyOp(orgId, async (c) => {
+    return financialIntent(this.pool,orgId,'savings.deposit',idempotencyKey,
+      {actorUserId,accountId,amount:moneyDecimal(value),description:description??null},async (c,journalKey) => {
       const account = await this.lockAccount(c, orgId, accountId);
       const entryId = randomUUID();
       const entryNo = await this.allocJournalNo(c, orgId);
@@ -220,7 +205,7 @@ export class SavingsService {
         account,
         'SAVINGS_DEPOSIT',
         description ?? `Savings deposit to account #${account.accountNo}`,
-        idempotencyKey,
+        journalKey,
         [
           // Dr Cash at Bank 1000 / Cr Member Savings Deposits 2000
           { code: CASH_ACCOUNT_CODE, side: 'debit', amount: value },
@@ -237,8 +222,8 @@ export class SavingsService {
         value,
         balance,
       );
+      return this.getAccountTx(c,orgId,accountId);
     });
-    return this.getAccount(orgId, accountId);
   }
 
   async withdraw(
@@ -248,10 +233,13 @@ export class SavingsService {
     amount: string | number,
     description?: string,
     idempotencyKey?: string,
+    existingClient?: PoolClient,
+    existingJournalKey?: string,
   ): Promise<SavingsAccountRow> {
     const orgId = this.requireOrg(organizationId);
     const value = this.validateAmount(amount, 'withdrawal');
-    await this.runMoneyOp(orgId, async (c) => {
+    return financialIntent(this.pool,orgId,'savings.withdraw',idempotencyKey,
+      {actorUserId,accountId,amount:moneyDecimal(value),description:description??null},async (c,journalKey) => {
       const account = await this.lockAccount(c, orgId, accountId);
       if (account.status !== 'ACTIVE') {
         throw new ConflictException('Account is not active');
@@ -284,7 +272,7 @@ export class SavingsService {
         account,
         'SAVINGS_WITHDRAWAL',
         description ?? `Savings withdrawal from account #${account.accountNo}`,
-        idempotencyKey,
+        journalKey ?? existingJournalKey,
         [
           // Dr Member Savings Deposits 2000 / Cr Cash at Bank 1000
           { code: SAVINGS_LIABILITY_CODE, side: 'debit', amount: value },
@@ -301,8 +289,8 @@ export class SavingsService {
         -value,
         balance,
       );
-    });
-    return this.getAccount(orgId, accountId);
+      return this.getAccountTx(c,orgId,accountId);
+    },existingClient);
   }
 
   async statement(

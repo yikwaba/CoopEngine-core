@@ -69,9 +69,9 @@ describe('exact share purchases, redemptions and balances (PostgreSQL)',()=>{
   const f=await fixture();await f.purchase(100000000000).expect(201);await f.redeem(99999999999.99).expect(201);expect((await f.proof()).current_balance).toBe('0.01');await f.redeem(0.01).expect(201);
   const p=await f.proof();expect(p.current_balance).toBe('0.00');expect(p.equity).toBe('0.00');expect(p.debit).toBe('200000000000.00');expect(p.credit).toBe(p.debit);
  });
- it('rejects excess precision, repeated keys and balance overflow without extra writes',async()=>{
-  const f=await fixture(),key=randomUUID();await f.purchase(0.23,key).expect(201);await f.redeem(0.01,'redeem-'+key).expect(201);const before=await f.proof();
-  await f.purchase(0.23,key).expect(409);await f.redeem(0.01,'redeem-'+key).expect(409);await f.purchase(0.001).expect(400);await f.redeem(0.001).expect(400);await f.purchase(100000000000.01).expect(400);expect(await f.proof()).toEqual(before);
+ it('rejects invalid amounts and replays repeated keys without extra writes',async()=>{
+  const f=await fixture(),key=randomUUID();const bought=await f.purchase(0.23,key).expect(201);const sold=await f.redeem(0.01,'redeem-'+key).expect(201);const before=await f.proof();
+  expect((await f.purchase(0.23,key).expect(201)).body).toEqual(bought.body);expect((await f.redeem(0.01,'redeem-'+key).expect(201)).body).toEqual(sold.body);await f.purchase(0.001).expect(400);await f.redeem(0.001).expect(400);await f.purchase(100000000000.01).expect(400);expect(await f.proof()).toEqual(before);
   await f.tenant(c=>c.query('UPDATE member_share_accounts SET current_balance=$1 WHERE member_id=$2',['99999999999999999.99',f.member]));const max=await f.proof();await f.purchase(0.01).expect(400);expect(await f.proof()).toEqual(max);
  });
  it('rolls back account creation and journal counter if the accounting period is closed',async()=>{

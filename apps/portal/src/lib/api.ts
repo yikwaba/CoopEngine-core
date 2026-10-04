@@ -54,6 +54,8 @@ export async function apiFetch<T>(
   _token?: string,
   init?: RequestInit,
 ): Promise<T> {
+  const intent=prepareFinancialWrite(path,init);
+  if (intent) init={...init,body:intent.body};
   const res = await apiResponse(path, {
     ...init,
     headers: {
@@ -61,6 +63,7 @@ export async function apiFetch<T>(
       ...(init?.headers ?? {}),
     },
   });
+  if ([400,403,404,422].includes(res.status)) acknowledgeFinancialWrite(intent);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -75,7 +78,9 @@ export async function apiFetch<T>(
   // A 200 can carry an empty body (e.g. "nothing to return yet"); parsing that as JSON
   // throws "Unexpected end of JSON input" and takes the whole page down with it.
   const text = await res.text();
-  return (text ? (JSON.parse(text) as T) : (null as T));
+  const result=(text ? JSON.parse(text) : null) as T;
+  acknowledgeFinancialWrite(intent);
+  return result;
 }
 
 /**
@@ -147,4 +152,30 @@ function requestStepUp(message: string): Promise<string | null> {
   return new Promise(resolve => {
     window.dispatchEvent(new CustomEvent<StepUpRequest>(STEP_UP_EVENT, {detail:{message, resolve}}));
   });
+}
+
+interface FinancialBrowserIntent { storageKey:string; key:string; body:string }
+/** Keep one intent through uncertain responses and refresh; successful acknowledgement ends it. */
+export function prepareFinancialWrite(path:string,init?:RequestInit):FinancialBrowserIntent|null {
+ if (typeof window==='undefined' || init?.method?.toUpperCase()!=='POST' ||
+     !(/^\/savings\/accounts\/[^/]+\/(deposits|withdrawals)$/.test(path) ||
+       /^\/loans\/[^/]+\/repayments$/.test(path) ||
+       /^\/shares\/member\/[^/]+\/(purchases|redemptions)$/.test(path) || path==='/member/withdrawals/request')) return null;
+ if (typeof init.body!=='string') throw new Error('Payment details must be JSON.');
+ const details=JSON.parse(init.body) as Record<string,unknown>;
+ if (details.idempotencyKey) return null;
+ const identity=localStorage.getItem(USER_KEY)??'session';
+ const storageKey='coopengine-payment:'+identity+':'+path;
+ const payload=JSON.stringify(details);
+ const old=sessionStorage.getItem(storageKey);
+ const pending=old?JSON.parse(old) as {key:string;payload:string}:null;
+ if (pending && pending.payload!==payload) throw new Error('A previous payment has an uncertain result. Retry its original details or review the account before starting another payment.');
+ const key=pending?.key??crypto.randomUUID();
+ sessionStorage.setItem(storageKey,JSON.stringify({key,payload}));
+ return {storageKey,key,body:JSON.stringify({...details,idempotencyKey:key})};
+}
+export function acknowledgeFinancialWrite(intent:FinancialBrowserIntent|null):void {
+ if (!intent) return;
+ const current=sessionStorage.getItem(intent.storageKey);
+ if (current && (JSON.parse(current) as {key:string}).key===intent.key) sessionStorage.removeItem(intent.storageKey);
 }

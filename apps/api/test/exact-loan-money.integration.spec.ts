@@ -86,9 +86,9 @@ describe('exact loan origination, schedule and journal amounts (PostgreSQL)',()=
   try{await repay(id,0.23).expect(409);expect(await repaymentProof(id)).toEqual(before);}
   finally{await tenant(c=>c.query("UPDATE ledger_periods SET status='OPEN' WHERE now()::date BETWEEN start_date AND end_date"));}
  });
- it('rejects duplicate repayment keys without another allocation',async()=>{
-  const id=await repaymentLoan(1.15,0,5),key=randomUUID();await repay(id,0.23,key).expect(200);
-  const before=await repaymentProof(id);await repay(id,0.23,key).expect(409);expect(await repaymentProof(id)).toEqual(before);
+ it('replays duplicate repayment keys without another allocation',async()=>{
+  const id=await repaymentLoan(1.15,0,5),key=randomUUID();const original=await repay(id,0.23,key).expect(200);
+  const before=await repaymentProof(id);expect((await repay(id,0.23,key).expect(200)).body).toEqual(original.body);expect(await repaymentProof(id)).toEqual(before);
  });
  it('accepts the exact 3x boundary and rejects one additional kobo without persisting a loan',async()=>{
   await qualifyingBalance('1.15');await apply(3.45,5).expect(201);

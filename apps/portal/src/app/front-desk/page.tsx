@@ -155,7 +155,7 @@ export default function FrontDeskPage() {
     try {
       await apiFetch(`/loans/${loanId}/repayments`, t, {
         method: 'POST',
-        body: JSON.stringify({ amount: value, note: note || 'Counter repayment' }),
+        body: JSON.stringify({ amount: value, description: note || 'Counter repayment' }),
       });
       await afterAction(`Repayment of ${naira(value)} recorded.`);
     } catch (e) {
@@ -179,7 +179,7 @@ export default function FrontDeskPage() {
     try {
       await apiFetch(`/savings/accounts/${primaryAccount.accountId}/withdrawals`, t, {
         method: 'POST',
-        body: JSON.stringify({ amount: value, note: note || 'Counter withdrawal request' }),
+        body: JSON.stringify({ amount: value, description: note || 'Counter withdrawal request' }),
       });
       await afterAction(`Withdrawal of ${naira(value)} requested.`);
     } catch (e) {

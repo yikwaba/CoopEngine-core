@@ -309,6 +309,13 @@
       "when": 1791122400000,
       "tag": "0044_totp_replay_step_up",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1791146040000,
+      "tag": "0045_financial_write_receipts",
+      "breakpoints": true
     }
   ]
 }
