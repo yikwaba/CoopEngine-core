@@ -18,7 +18,11 @@ export class PermissionsGuard implements CanActivate {
       PERMISSIONS_KEY,
       [context.getHandler(), context.getClass()],
     );
-    if (!required || required.length === 0) return true;
+    // A guarded endpoint without a policy is a configuration error, never an
+    // implicit grant. Public and session-only endpoints do not use this guard.
+    if (!required || required.length === 0) {
+      throw new ForbiddenException('Permission policy is not configured');
+    }
 
     const request = context.switchToHttp().getRequest();
     const principal = request.user as AuthPrincipal | undefined;
