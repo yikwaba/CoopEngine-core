@@ -7,6 +7,7 @@ on:
       - apps/api/src/loans/**
       - apps/api/src/savings/**
       - apps/api/src/shares/**
+      - apps/api/src/payroll/**
       - apps/portal/src/**
       - packages/db/migrations/**
       - staging/**
