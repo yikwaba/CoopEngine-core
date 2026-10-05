@@ -343,7 +343,8 @@ export class LoansService {
     if (target === 'REJECTED' && !reason?.trim()) {
       throw new BadRequestException('A rejection reason is required');
     }
-    await withTenant(this.pool, orgId, async (c) => {
+    return financialIntent(this.pool,orgId,`loans.${target.toLowerCase()}`,`entity:${loanId}`,
+      {actorUserId,loanId,target,reason:reason?.trim()??null},async (c) => {
       const { rows } = await c.query(
         `SELECT l.id, l.status, l.member_id FROM loans l
           WHERE l.organization_id = $1 AND l.id = $2 FOR UPDATE`,
@@ -385,7 +386,7 @@ export class LoansService {
         await c.query(
           `UPDATE loans SET status = 'REJECTED', rejection_reason = $1, approved_by = $2
             WHERE id = $3`,
-          [reason, actorUserId, loanId],
+          [reason?.trim(), actorUserId, loanId],
         );
       } else if (target === 'DISBURSED') {
         // Disburse: update loan + post the balanced journal atomically.
@@ -458,9 +459,10 @@ export class LoansService {
           },
         });
       }
-      void current;
+      const result=await c.query(`${selectLoan} WHERE l.organization_id=$1 AND l.id=$2`,[orgId,loanId]);
+      return this.mapLoan(result.rows[0]);
     });
-    return this.getLoan(orgId, loanId);
+
   }
 
 
@@ -926,7 +928,7 @@ export class LoansService {
       `SELECT id FROM ledger_periods
         WHERE organization_id = $1 AND status = 'OPEN'
           AND now()::date BETWEEN start_date AND end_date
-        ORDER BY start_date DESC LIMIT 1`,
+        ORDER BY start_date DESC LIMIT 1 FOR SHARE`,
       [orgId],
     );
     const periodId = (period.rows[0] as { id: string } | undefined)?.id;
@@ -1085,7 +1087,7 @@ export class LoansService {
       `SELECT id FROM ledger_periods
         WHERE organization_id = $1 AND status = 'OPEN'
           AND now()::date BETWEEN start_date AND end_date
-        ORDER BY start_date DESC LIMIT 1`,
+        ORDER BY start_date DESC LIMIT 1 FOR SHARE`,
       [orgId],
     );
     const periodId = (period.rows[0] as { id: string } | undefined)?.id;

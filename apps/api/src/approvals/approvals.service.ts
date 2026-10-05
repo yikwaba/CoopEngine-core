@@ -1,3 +1,4 @@
+import { approvalStepKey, financialIntent } from '../common/financial-intent';
 import { Inject, Injectable, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
@@ -230,10 +231,18 @@ export class ApprovalsService {
     organizationId: string | null,
     actorUserId: string,
     requestId: string,
-    input: { decision: 'APPROVE' | 'REJECT'; comment?: string },
+    input: { decision: 'APPROVE' | 'REJECT'; comment?: string; expectedStepNo?: number },
   ) {
     const orgId = this.requireOrg(organizationId);
-    return withTenant(this.pool, orgId, async (client) => {
+    return withTenant(this.pool,orgId,c=>this.decideRequestInTransaction(c,orgId,actorUserId,requestId,input));
+  }
+
+  async decideRequestInTransaction(
+    c: PoolClient, orgId: string, actorUserId: string, requestId: string,
+    input: {decision:'APPROVE'|'REJECT';comment?:string;expectedStepNo?:number},
+  ) {
+    return financialIntent(this.pool,orgId,'approvals.decision',approvalStepKey(requestId,actorUserId,input.expectedStepNo),
+      {actorUserId,requestId,decision:input.decision,comment:input.comment??null,expectedStepNo:input.expectedStepNo??null},async client=>{
       const found = await client.query<{
         id: string;
         status: string;
@@ -250,6 +259,7 @@ export class ApprovalsService {
       );
       if (found.rowCount !== 1) throw new NotFoundException('Approval request not found');
       const approval = found.rows[0]!;
+      if (input.expectedStepNo !== undefined && approval.current_step !== input.expectedStepNo) throw new ConflictException('Approval step has changed; refresh before deciding');
       if (approval.status !== 'PENDING') {
         throw new ConflictException(`Approval request is already ${approval.status}`);
       }
@@ -411,7 +421,7 @@ export class ApprovalsService {
         decidedStep: step.step_no,
         nextApproverRoleCode: next.rows[0]!.approver_role_code,
       };
-    });
+    },c);
   }
 
   /** Everything pending, newest first, annotated with what this caller may do about it. */

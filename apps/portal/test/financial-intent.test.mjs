@@ -28,3 +28,19 @@ for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposi
   const key='explicit-key-123456789';globalThis.fetch=async(_url,options)=>{assert.equal(JSON.parse(options.body).idempotencyKey,key);return Response.json({recorded:5});};await api.apiFetch(path,undefined,{...init,body:JSON.stringify({amount:5,idempotencyKey:key})});
  });
 }
+
+test('approval timeout and refreshed next step retry the original step; acknowledgement permits the next',async()=>{
+ const bodies=[];globalThis.fetch=async(_url,options)=>{bodies.push(JSON.parse(options.body));if(bodies.length===1)throw new TypeError('lost response');return Response.json({approvalStatus:'PENDING',currentStep:2});};
+ const path='/savings/withdrawals/synthetic/approve',send=step=>staff.apiFetch(path,undefined,{method:'POST',body:JSON.stringify({expectedStepNo:step})});
+ await assert.rejects(send(1),/lost response/);await send(2);assert.deepEqual(bodies,[{expectedStepNo:1},{expectedStepNo:1}]);await send(2);assert.deepEqual(bodies[2],{expectedStepNo:2});
+});
+test('generic approval decision freezes its original step but refuses changed unresolved decision',async()=>{
+ const bodies=[];globalThis.fetch=async(_url,options)=>{bodies.push(JSON.parse(options.body));throw new TypeError('timeout');};const path='/approvals/requests/synthetic/decisions';const send=body=>staff.apiFetch(path,undefined,{method:'POST',body:JSON.stringify(body)});
+ await assert.rejects(send({decision:'APPROVE',expectedStepNo:1}));await assert.rejects(send({decision:'REJECT',expectedStepNo:2}),/uncertain result/);await assert.rejects(send({decision:'APPROVE',expectedStepNo:2}));assert.deepEqual(bodies,[{decision:'APPROVE',expectedStepNo:1},{decision:'APPROVE',expectedStepNo:1}]);
+});
+for(const path of ['/loans/synthetic/disburse','/payroll/batches/synthetic/reverse','/ledger/journals/synthetic/reverse','/approvals/payroll/synthetic/reject','/approvals/journals/synthetic/approve']){
+ test(`natural entity operation ${path} keeps the original body through response loss`,async()=>{
+  let calls=0;const body={reason:'Synthetic correction'};globalThis.fetch=async(_url,options)=>{calls++;assert.deepEqual(JSON.parse(options.body),body);if(calls===1)throw new TypeError('lost response');return Response.json({done:true});};
+  const send=details=>staff.apiFetch(path,undefined,{method:'POST',body:JSON.stringify(details)});await assert.rejects(send(body));await assert.rejects(send({reason:'Changed'}),/uncertain result/);await send(body);assert.equal(calls,2);
+ });
+}

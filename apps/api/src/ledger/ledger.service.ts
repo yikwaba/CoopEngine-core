@@ -1,3 +1,4 @@
+import { financialIntent } from '../common/financial-intent';
 import {
   BadRequestException,
   ConflictException,
@@ -166,12 +167,12 @@ export class LedgerService {
     });
   }
 
-  async getJournal(
-    organizationId: string | null,
-    journalId: string,
-  ): Promise<{ entry: JournalEntryRow; lines: JournalLineRow[] }> {
-    const orgId = this.requireOrg(organizationId);
-    return withTenant(this.pool, orgId, async (c) => {
+  async getJournal(organizationId: string | null, journalId: string): Promise<{entry:JournalEntryRow;lines:JournalLineRow[]}> {
+    const orgId=this.requireOrg(organizationId);
+    return withTenant(this.pool,orgId,c=>this.getJournalTx(c,orgId,journalId));
+  }
+
+  private async getJournalTx(c: PoolClient, orgId: string, journalId: string): Promise<{entry:JournalEntryRow;lines:JournalLineRow[]}> {
       const { rows } = await c.query(
         `SELECT id, entry_no, entry_date, description, source, status, created_by, created_at
            FROM journal_entries WHERE organization_id = $1 AND id = $2`,
@@ -209,7 +210,6 @@ export class LedgerService {
           memberId: (l.member_id as string | null) ?? null,
         })),
       };
-    });
   }
 
   async trialBalance(
@@ -360,21 +360,12 @@ export class LedgerService {
     const orgId = this.requireOrg(organizationId);
     let entryNo = 0;
     let maker: string | null = null;
-    await withTenant(this.pool, orgId, async (c) => {
+    return financialIntent(this.pool,orgId,'ledger.approve',`entity:${journalId}`,
+      {actorUserId,journalId},async (c) => {
       const current = await this.requireState(c, orgId, journalId, 'SUBMITTED');
       maker = current.created_by;
-      const period = await c.query(
-        `SELECT lp.status FROM journal_entries je
-           JOIN ledger_periods lp ON lp.id = je.period_id
-          WHERE je.id = $1 AND je.organization_id = $2`,
-        [journalId, orgId],
-      );
-      const p = period.rows[0] as { status: string } | undefined;
-      if (!p || p.status !== 'OPEN') {
-        throw new ConflictException(
-          'The covering accounting period is not OPEN — cannot post',
-        );
-      }
+      const period=await c.query(`SELECT status FROM ledger_periods WHERE organization_id=$1 AND id=$2 FOR SHARE`,[orgId,current.period_id]);
+      if (period.rows[0]?.status!=='OPEN') throw new ConflictException('The covering accounting period is not OPEN — cannot post');
       const seq = await c.query(
         `UPDATE org_counters SET journal_seq = journal_seq + 1, updated_at = now()
           WHERE organization_id = $1 RETURNING journal_seq`,
@@ -399,9 +390,8 @@ export class LedgerService {
           JSON.stringify({ entryNo, maker }),
         ],
       );
+      return (await this.getJournalTx(c,orgId,journalId)).entry;
     });
-    void entryNo;
-    return (await this.getJournal(orgId, journalId)).entry;
   }
 
   /**
@@ -418,10 +408,11 @@ export class LedgerService {
     if (typeof reason !== 'string' || !reason.trim()) {
       throw new BadRequestException('A reversal reason is required');
     }
-    const reversalId = await withTenant(this.pool, orgId, (c) =>
-      this.reverseInTransaction(c, orgId, actorUserId, journalId, reason.trim()),
-    );
-    return { reversal: (await this.getJournal(orgId, reversalId)).entry };
+    return financialIntent(this.pool,orgId,'ledger.reverse',`entity:${journalId}`,
+      {actorUserId,journalId,reason:reason.trim()},async c=>{
+        const reversalId=await this.reverseInTransaction(c,orgId,actorUserId,journalId,reason.trim());
+        return {reversal:(await this.getJournalTx(c,orgId,reversalId)).entry};
+      });
   }
 
   /** Caller owns this tenant transaction; no nested connection or early commit. */
@@ -563,7 +554,7 @@ export class LedgerService {
   ): Promise<{ id: string; status: string; period_id: string; created_by: string | null }> {
     const { rows } = await c.query(
       `SELECT id, status, period_id, created_by FROM journal_entries
-        WHERE organization_id = $1 AND id = $2`,
+        WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
       [orgId, journalId],
     );
     const entry = rows[0] as

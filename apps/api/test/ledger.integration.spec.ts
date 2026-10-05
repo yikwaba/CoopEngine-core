@@ -162,11 +162,12 @@ describe('ledger core (double entry)', () => {
     const debitLine = lines.find((l) => l.accountCode === '1020');
     expect(debitLine?.debit).toBe(25000.5);
 
-    // Double-post rejected
+    // An acknowledged posting retry returns the original receipt
     const repost = await request(app.getHttpServer())
       .post(`/api/v1/ledger/journals/${draftId}/approve-post`)
       .set(auth);
-    expect(repost.status).toBe(409);
+    expect(repost.status).toBe(200);
+    expect(repost.body).toEqual(posted.body);
   });
 
   it('rejects unbalanced and single-sided journals (API + DB trigger backstop)', async () => {

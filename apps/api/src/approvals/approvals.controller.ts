@@ -15,7 +15,7 @@ import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
-import { IsIn, IsNumber, IsObject, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
+import { IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApprovalsService } from './approvals.service';
 
@@ -50,6 +50,11 @@ class CreateApprovalRequestDto {
 class DecideApprovalRequestDto {
   @IsIn(['APPROVE', 'REJECT'])
   decision!: 'APPROVE' | 'REJECT';
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  expectedStepNo?: number;
 
   @IsOptional()
   @IsString()

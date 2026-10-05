@@ -1,0 +1,13 @@
+# Approval and reversal retry recovery
+
+Scope: loan approval/rejection/disbursement; payroll approval/rejection/reversal (including approval aliases); journal posting approval/reversal (including approval alias); generic ordered approval decisions; approved or rejected savings withdrawal requests.
+
+Terminal operations use a tenant-scoped financial receipt identified by action and entity UUID. The authenticated actor and normalized reason form its fingerprint. Receipt, financial effect, status and audit commit together. Matching retries return the original response before checking later state or balances. Different actors or reasons conflict. Opposite decisions lock the same resource; only one can commit. Endpoint permission and sensitive-action guards still execute on replay.
+
+Ordered decisions accept optional `expectedStepNo`. A receipt binds to that request and step. Clients must send the intended step for each new decision. Legacy clients without a step remain bound to that actor's first decision on the request, preventing a duplicate from advancing a subsequent step. A later legitimate decision by the same actor needs an explicit step. A mismatched current step is refused. The portal retains the original step and details across uncertain responses and refresh, and releases that local intent only after an acknowledged response or definitive pre-operation refusal.
+
+Withdrawal decisions now share one tenant transaction with engine decision receipts, the final payout journal and savings movement, request outcome, and audit. Failure in payout, status, audit or receipt finalization rolls back the approval step too. A partial step returns PENDING; the portal displays the next required step rather than claiming payout.
+
+No new migration: reuses migration 0045 financial_write_receipts. Historical terminal operations without a receipt are refused for reconciliation rather than reconstructing an original response. Existing journals/projections are not repaired. Generic journal reversal still does not repair savings/share/loan domain projections; broader reversal acceptance remains open. Draft changes do not authorize production deployment.
+
+Verification: real PostgreSQL concurrency, conflicting payloads/actors, opposite decisions, response snapshots after later activity, same-actor multi-step approvals, and injected final-receipt failure rollback. Existing exact payroll/reversal tests continue to check monetary conservation. Portal transport tests exercise lost responses and step preservation. Exact workflow evidence is recorded in the draft PR and recovery backlog; local installer acceptance remains pending until reported by the user.

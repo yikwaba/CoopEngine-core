@@ -73,7 +73,7 @@ describe('exact payroll preview, allocation and posting (PostgreSQL)',()=>{
   const f=await fixture(),id=await f.staged(['100000000.00','0.01']);await f.approve(id).expect(200);const p=await f.proof(id);expect(p.batch.total_amount).toBe('100000000.01');expect(p.journal.debit).toBe('100000000.01');expect(p.journal.credit).toBe(p.journal.debit);
  });
  it('serializes two approvals of the same batch into exactly one posting',async()=>{
-  const f=await fixture(1),id=await f.staged(['0.23']);const results=await Promise.all([f.approve(id),f.approve(id)]);expect(results.map(r=>r.status).sort()).toEqual([200,409]);const p=await f.proof(id);expect(p.journal.entries).toBe(1);expect(p.members[0].current_balance).toBe('0.23');
+  const f=await fixture(1),id=await f.staged(['0.23']);const results=await Promise.all([f.approve(id),f.approve(id)]);expect(results.map(r=>r.status).sort()).toEqual([200,200]);expect(results[0].body).toEqual(results[1].body);const p=await f.proof(id);expect(p.journal.entries).toBe(1);expect(p.members[0].current_balance).toBe('0.23');
  });
  it('serializes duplicate submissions before approval',async()=>{
   const f=await fixture(1),preview=await f.preview(`memberNo,amount\n${f.members[0]!.memberNo},0.01`).expect(201),id=preview.body.batchId;
