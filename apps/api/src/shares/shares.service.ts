@@ -9,7 +9,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
 
@@ -209,9 +209,10 @@ export class SharesService {
     organizationId: string | null,
     actorUserId: string,
     memberId: string,
-    amount: number,
+    amount: string | number,
     description?: string,
     idempotencyKey?: string,
+    existingClient?: PoolClient,
   ): Promise<ShareAccountRow> {
     const orgId = this.requireOrg(organizationId);
     const value = moneyKobo(amount);
@@ -332,7 +333,7 @@ export class SharesService {
         ],
       );
       return this.getAccountTx(c,orgId,memberId);
-    });
+    },existingClient);
   }
 
   async statement(

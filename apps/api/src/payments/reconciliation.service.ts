@@ -6,22 +6,23 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
+import { createHash, randomUUID } from 'node:crypto';
+import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
 import { LoansService } from '../loans/loans.service';
 import { SavingsService } from '../savings/savings.service';
 import { SharesService } from '../shares/shares.service';
 
-const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+import { financialIntent } from '../common/financial-intent';
+import { moneyDecimal, moneyKobo } from '../common/money';
 
 export type PaymentPurpose = 'SAVINGS_DEPOSIT' | 'LOAN_REPAYMENT' | 'SHARE_PURCHASE';
 
 export interface RecordTransactionInput {
   provider?: string;
   providerReference: string;
-  amount: number;
+  amount: string | number;
   payerName?: string;
   payerAccount?: string;
   narration?: string;
@@ -57,8 +58,9 @@ export class ReconciliationService {
     return organizationId;
   }
 
-  private idempotencyKey(provider: string, reference: string): string {
-    return `pay:${provider.toLowerCase()}:${reference}`.slice(0, 120);
+  private idempotencyKey(orgId: string, provider: string, reference: string, allocationId?: string): string {
+    // Full reference and tenant are hashed: no prefix truncation or cross-tenant journal collision.
+    return 'pay:' + createHash('sha256').update(JSON.stringify([orgId,provider.toUpperCase(),reference,allocationId??null])).digest('hex');
   }
 
   // ------------------------------------------------------------------ intents
@@ -76,8 +78,8 @@ export class ReconciliationService {
     },
   ) {
     const orgId = this.requireOrg(organizationId);
-    const amount = round2(Number(dto.expectedAmount));
-    if (!(amount > 0)) throw new BadRequestException('expectedAmount must be greater than zero');
+    const amount = moneyDecimal(moneyKobo(dto.expectedAmount));
+    if (moneyKobo(amount) <= 0n) throw new BadRequestException('expectedAmount must be greater than zero');
     const purpose = dto.purpose ?? 'SAVINGS_DEPOSIT';
 
     return withTenant(this.pool, orgId, async (c) => {
@@ -160,346 +162,235 @@ export class ReconciliationService {
 
   // ------------------------------------------------------------------ ingest + match
 
-  /** Record money that arrived, then try to place it. Safe to call twice with the same reference. */
+  /** Receipt, posting, intent total and matching state commit together. */
   async recordTransaction(
     organizationId: string | null,
     actorUserId: string | null,
     input: RecordTransactionInput,
+    existingClient?: PoolClient,
   ) {
     const orgId = this.requireOrg(organizationId);
-    const amount = round2(Number(input.amount));
-    if (!(amount > 0)) throw new BadRequestException('amount must be greater than zero');
-    if (!input.providerReference?.trim()) {
-      throw new BadRequestException('providerReference is required — it is what stops double posting');
-    }
+    const amount = moneyDecimal(moneyKobo(input.amount));
+    if (moneyKobo(amount) <= 0n) throw new BadRequestException('amount must be greater than zero');
+    const reference = input.providerReference?.trim();
+    if (!reference || reference.length > 128) throw new BadRequestException('providerReference must contain 1 to 128 characters');
     const provider = (input.provider ?? 'MANUAL').toUpperCase();
-
-    const inserted = await withTenant(this.pool, orgId, async (c) => {
+    const run = async (c: PoolClient) => {
+      // Serialize ingestion before its unique-index check; duplicate callbacks wait for commit.
+      await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+        [JSON.stringify([orgId,'provider-record',provider,reference])]);
       const existing = await c.query(
-        `SELECT id, status, amount FROM provider_transactions
-          WHERE organization_id = $1 AND provider = $2 AND provider_reference = $3`,
-        [orgId, provider, input.providerReference],
+        `SELECT id,status,amount,narration,payer_name,payer_account,virtual_account_no,journal_entry_id,member_id,payment_intent_id
+           FROM provider_transactions WHERE organization_id=$1 AND provider=$2 AND provider_reference=$3 FOR UPDATE`,
+        [orgId,provider,reference],
       );
-      if (existing.rows[0]) return { duplicate: true, transaction: existing.rows[0] };
-
-      const { rows } = await c.query(
+      const row = existing.rows[0];
+      if (row) {
+        if (moneyKobo(row.amount) !== moneyKobo(amount)
+          || (row.narration ?? null) !== (input.narration ?? null)
+          || (row.payer_name ?? null) !== (input.payerName ?? null)
+          || (row.payer_account ?? null) !== (input.payerAccount ?? null)
+          || (row.virtual_account_no ?? null) !== (input.virtualAccountNo ?? null)) {
+          throw new ConflictException('This provider reference was already recorded with different payment details');
+        }
+        const outcome = row.status === 'UNMATCHED'
+          ? await this.matchTx(c,orgId,actorUserId,row.id)
+          : {matched:row.status === 'MATCHED',exception:row.status === 'EXCEPTION',transactionId:row.id,
+              memberId:row.member_id,intentId:row.payment_intent_id,journalEntryId:row.journal_entry_id};
+        return {duplicate:true,transaction:{id:row.id,status:row.status,amount:row.amount},
+          ...outcome,note:'This provider reference was already recorded.'};
+      }
+      const {rows} = await c.query(
         `INSERT INTO provider_transactions
-           (organization_id, provider, provider_reference, amount, payer_name, payer_account,
-            narration, virtual_account_no, received_at, raw, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::timestamptz, now()), $10::jsonb, $11)
-         RETURNING id`,
-        [
-          orgId,
-          provider,
-          input.providerReference,
-          String(amount),
-          input.payerName ?? null,
-          input.payerAccount ?? null,
-          input.narration ?? null,
-          input.virtualAccountNo ?? null,
-          input.receivedAt ?? null,
-          JSON.stringify(input.raw ?? {}),
-          actorUserId,
-        ],
+          (organization_id,provider,provider_reference,amount,payer_name,payer_account,narration,
+           virtual_account_no,received_at,raw,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,coalesce($9::timestamptz,now()),$10::jsonb,$11) RETURNING id`,
+        [orgId,provider,reference,amount,input.payerName??null,input.payerAccount??null,input.narration??null,
+          input.virtualAccountNo??null,input.receivedAt??null,JSON.stringify(input.raw??{}),actorUserId],
       );
-      return { duplicate: false, transaction: rows[0] as { id: string } };
-    });
-
-    if (inserted.duplicate) {
-      return { ...inserted, matched: false, note: 'This provider reference was already recorded.' };
-    }
-    const outcome = await this.match(orgId, actorUserId, (inserted.transaction as { id: string }).id);
-    return { duplicate: false, ...outcome };
+      return {duplicate:false,...await this.matchTx(c,orgId,actorUserId,rows[0].id)};
+    };
+    return existingClient ? run(existingClient) : withTenant(this.pool,orgId,run);
   }
 
-  /** Place one transaction: resolve the member, find the intent, post the money. */
   async match(organizationId: string | null, actorUserId: string | null, transactionId: string) {
     const orgId = this.requireOrg(organizationId);
+    return withTenant(this.pool,orgId,c=>this.matchTx(c,orgId,actorUserId,transactionId));
+  }
 
-    const tx = await withTenant(this.pool, orgId, async (c) => {
-      const { rows } = await c.query(
-        `SELECT id, provider, provider_reference, amount, payer_name, narration, virtual_account_no, status
-           FROM provider_transactions WHERE id = $1`,
-        [transactionId],
-      );
-      return rows[0] as
-        | {
-            id: string;
-            provider: string;
-            provider_reference: string;
-            amount: string;
-            payer_name: string | null;
-            narration: string | null;
-            virtual_account_no: string | null;
-            status: string;
-          }
-        | undefined;
-    });
+  private async matchTx(c: PoolClient, orgId: string, actorUserId: string | null, transactionId: string) {
+    // Every match/assignment locks this row before claiming a receipt: one consistent lock order.
+    const {rows} = await c.query(`SELECT * FROM provider_transactions WHERE organization_id=$1 AND id=$2 FOR UPDATE`,[orgId,transactionId]);
+    const tx = rows[0];
     if (!tx) throw new NotFoundException('Transaction not found');
-    if (tx.status === 'MATCHED') {
-      return { matched: true, note: 'Already matched.', transactionId };
-    }
-
-    const amount = Number(tx.amount);
-    const haystack = `${tx.narration ?? ''} ${tx.payer_name ?? ''}`.toLowerCase();
-
-    // 1. who paid? the cooperative's own virtual account first, then a quoted reference.
-    let memberId: string | null = null;
-    let intentId: string | null = null;
-
-    if (tx.virtual_account_no) {
-      const va = await withTenant(this.pool, orgId, (c) =>
-        c.query(
-          `SELECT member_id FROM virtual_account_lookups
-            WHERE organization_id = $1 AND account_number = $2 LIMIT 1`,
-          [orgId, tx.virtual_account_no],
-        ),
-      );
-      memberId = (va.rows[0] as { member_id: string } | undefined)?.member_id ?? null;
-    }
-
-    const intents = await withTenant(this.pool, orgId, (c) =>
-      c.query(
-        `SELECT i.id, i.member_id, i.reference, i.purpose, i.expected_amount, i.received_amount, i.status
-           FROM payment_intents i
-          WHERE i.status IN ('OPEN','PARTIAL')
-          ORDER BY i.created_at`,
-      ),
-    );
-    const all = intents.rows as {
-      id: string;
-      member_id: string;
-      reference: string;
-      purpose: PaymentPurpose;
-      expected_amount: string;
-      received_amount: string;
-      status: string;
-    }[];
-
-    const byReference = all.find((i) => haystack.includes(i.reference.toLowerCase()));
-    if (byReference) {
-      intentId = byReference.id;
-      memberId = memberId ?? byReference.member_id;
-    }
-
-    // 2. no reference quoted: for a known member, their oldest intent (a repayment if the
-    //    narration says so, otherwise savings).
-    if (!intentId && memberId) {
-      const wantsLoan = /loan|repay|instal|installment/.test(haystack);
-      const mine = all.filter((i) => i.member_id === memberId);
-      const preferred =
-        (wantsLoan ? mine.find((i) => i.purpose === 'LOAN_REPAYMENT') : undefined) ?? mine[0];
-      intentId = preferred?.id ?? null;
-    }
-
-    // 3. still nobody: an exception, and the cash waits in Unallocated Receipts.
-    if (!memberId && !intentId) {
-      const entryId = await this.postUnallocated(orgId, actorUserId, tx.id, amount, tx);
-      await this.mark(orgId, tx.id, {
-        status: 'EXCEPTION',
-        reason: `No member matched — payer "${tx.payer_name ?? 'unknown'}" and no intent reference in the narration`,
-        journalEntryId: entryId,
-      });
-      return { matched: false, exception: true, reason: 'no-member', journalEntryId: entryId };
-    }
-
-    const purpose: PaymentPurpose =
-      (all.find((i) => i.id === intentId)?.purpose as PaymentPurpose | undefined) ?? 'SAVINGS_DEPOSIT';
-
-    try {
-      const posting = await this.post(orgId, actorUserId, {
-        memberId: memberId as string,
-        purpose,
-        amount,
-        provider: tx.provider,
-        reference: tx.provider_reference,
-      });
-
-      // update the intent, if there was one
-      if (intentId) {
-        await withTenant(this.pool, orgId, async (c) => {
-          await c.query(
-            `UPDATE payment_intents
-                SET received_amount = received_amount + $2,
-                    status = CASE WHEN received_amount + $2 >= expected_amount THEN 'MATCHED' ELSE 'PARTIAL' END,
-                    updated_at = now()
-              WHERE id = $1`,
-            [intentId, String(amount)],
-          );
-        });
-      }
-
-      await this.mark(orgId, tx.id, { status: 'MATCHED', memberId, intentId, journalEntryId: posting.journalEntryId });
-      return { matched: true, memberId, intentId, ...posting };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      // A duplicate idempotency key means this money was already posted — the replay case.
-      const duplicate = /idempotency/i.test(message);
-      await this.mark(orgId, tx.id, {
-        status: duplicate ? 'MATCHED' : 'EXCEPTION',
-        reason: duplicate ? 'Already posted for this provider reference' : message,
-        memberId,
-        intentId,
-      });
-      return { matched: duplicate, exception: !duplicate, reason: message };
-    }
+    return financialIntent(this.pool,orgId,'provider.match',`provider-match:${transactionId}`,
+      {transactionId},async()=>{
+        if (tx.status === 'MATCHED') {
+          if (!tx.journal_entry_id) throw new ConflictException('Historical matched receipt has no journal link; reconciliation is required');
+          return {matched:true,note:'Already matched.',transactionId,journalEntryId:tx.journal_entry_id};
+        }
+        if (tx.status === 'EXCEPTION') {
+          // A parked receipt must be assigned from suspense, never posted from cash again.
+          return {matched:false,exception:true,transactionId,reason:tx.exception_reason,journalEntryId:tx.journal_entry_id};
+        }
+        if (tx.status !== 'UNMATCHED') throw new ConflictException('Receipt is not available for matching');
+        // Historical partially committed postings cannot be inferred from an error string.
+        const legacyKey = `pay:${tx.provider.toLowerCase()}:${tx.provider_reference}`.slice(0,120);
+        const legacy = await c.query(`SELECT id FROM journal_entries WHERE organization_id=$1 AND idempotency_key=ANY($2::varchar[])`,
+          [orgId,[legacyKey,legacyKey+':unallocated',this.idempotencyKey(orgId,tx.provider,tx.provider_reference)]]);
+        if (legacy.rowCount) throw new ConflictException('Historical provider posting exists without matching state; reconciliation is required');
+        const haystack = `${tx.narration??''} ${tx.payer_name??''}`.toLowerCase();
+        let memberId: string | null = null;
+        if (tx.virtual_account_no) {
+          const va = await c.query(`SELECT member_id FROM virtual_account_lookups WHERE organization_id=$1 AND account_number=$2 LIMIT 1`,[orgId,tx.virtual_account_no]);
+          memberId=va.rows[0]?.member_id??null;
+        }
+        const intents = await c.query(`SELECT id,member_id,reference,purpose FROM payment_intents WHERE status IN ('OPEN','PARTIAL') ORDER BY created_at,id`);
+        const quoted = intents.rows.find(i=>haystack.includes(i.reference.toLowerCase()));
+        if (quoted && memberId && quoted.member_id !== memberId) throw new ConflictException('Virtual account and payment intent identify different members');
+        memberId=memberId??quoted?.member_id??null;
+        const mine=intents.rows.filter(i=>i.member_id===memberId);
+        const selected=quoted??(/loan|repay|instal|installment/.test(haystack)?mine.find(i=>i.purpose==='LOAN_REPAYMENT'):undefined)??mine[0];
+        const intentId: string | null=selected?.id??null;
+        if (intentId) {
+          const locked=await c.query(`SELECT status FROM payment_intents WHERE id=$1 FOR UPDATE`,[intentId]);
+          if (!locked.rows[0] || locked.rows[0].status==='CANCELLED') throw new ConflictException('Payment intent is no longer available');
+        }
+        const amount=moneyDecimal(moneyKobo(tx.amount));
+        if (!memberId) {
+          const entryId=await this.postUnallocated(c,orgId,actorUserId,tx.id,amount,tx);
+          const reason=`No member matched — payer "${tx.payer_name??'unknown'}" and no intent reference in the narration`;
+          await this.mark(c,orgId,tx.id,{status:'EXCEPTION',reason,journalEntryId:entryId});
+          return {matched:false,exception:true,transactionId,reason:'no-member',journalEntryId:entryId};
+        }
+        const posting=await this.post(c,orgId,actorUserId,{memberId,purpose:selected?.purpose??'SAVINGS_DEPOSIT',amount,
+          provider:tx.provider,reference:tx.provider_reference});
+        if (intentId) await c.query(`UPDATE payment_intents SET received_amount=received_amount+$2,
+          status=CASE WHEN received_amount+$2>=expected_amount THEN 'MATCHED' ELSE 'PARTIAL' END,updated_at=now() WHERE id=$1`,[intentId,amount]);
+        await this.mark(c,orgId,tx.id,{status:'MATCHED',memberId,intentId,journalEntryId:posting.journalEntryId});
+        return {matched:true,transactionId,memberId,intentId,...posting};
+      },c);
   }
 
-  /** Post the money through the same service the counter uses, keyed to the provider reference. */
+  /** Reuse each domain posting inside the caller's transaction, including member projections. */
   private async post(
-    orgId: string,
-    actorUserId: string | null,
-    input: {
-      memberId: string;
-      purpose: PaymentPurpose;
-      amount: number;
-      provider: string;
-      reference: string;
-    },
-  ): Promise<{ journalEntryId?: string; target: string }> {
-    const key = this.idempotencyKey(input.provider, input.reference);
-    const description = `Bank transfer ${input.provider} ${input.reference}`;
-
-    if (input.purpose === 'LOAN_REPAYMENT') {
-      const loan = await withTenant(this.pool, orgId, (c) =>
-        c.query(
-          `SELECT id FROM loans
-            WHERE member_id = $1 AND status IN ('DISBURSED','DEFAULTED')
-            ORDER BY created_at LIMIT 1`,
-          [input.memberId],
-        ),
-      );
-      const loanId = (loan.rows[0] as { id: string } | undefined)?.id;
-      if (!loanId) throw new ConflictException('That member has no active loan to repay');
-      // Provider-initiated: journal_entries.created_by is nullable and there is no human actor.
-      await this.loans.captureRepayment(orgId, actorUserId as string, loanId, input.amount, description, key);
-      return { target: 'LOAN_REPAYMENT', journalEntryId: await this.entryIdForKey(orgId, key) };
+    c: PoolClient, orgId: string, actorUserId: string | null,
+    input: {memberId:string;purpose:PaymentPurpose;amount:string;provider:string;reference:string},
+    allocationId?: string,
+  ): Promise<{journalEntryId:string;target:string}> {
+    const member=await c.query(`SELECT status FROM members WHERE organization_id=$1 AND id=$2 FOR NO KEY UPDATE`,[orgId,input.memberId]);
+    if (!member.rows[0]) throw new NotFoundException('Member not found');
+    if (member.rows[0].status!=='ACTIVE') throw new ConflictException('Only ACTIVE members can receive allocated payments');
+    const key=this.idempotencyKey(orgId,input.provider,input.reference,allocationId);
+    const description=`Bank transfer ${input.provider} ${input.reference}`;
+    await this.lockOpenPeriod(c,orgId);
+    if (input.purpose==='LOAN_REPAYMENT') {
+      const loan=await c.query(`SELECT id FROM loans WHERE member_id=$1 AND status='DISBURSED' ORDER BY created_at,id LIMIT 1`,[input.memberId]);
+      if (!loan.rows[0]) throw new ConflictException('That member has no active loan to repay');
+      await this.loans.captureRepayment(orgId,actorUserId as string,loan.rows[0].id,input.amount,description,key,c);
+    } else if (input.purpose==='SHARE_PURCHASE') {
+      await this.shares.purchase(orgId,actorUserId as string,input.memberId,input.amount,description,key,c);
+    } else {
+      const accountId=await this.openRegularSavingsAccount(c,orgId,input.memberId);
+      await this.savings.deposit(orgId,actorUserId as string,accountId,input.amount,description,key,c);
     }
-
-    if (input.purpose === 'SHARE_PURCHASE') {
-      await this.shares.purchase(orgId, actorUserId as string, input.memberId, input.amount, description, key);
-      return { target: 'SHARE_PURCHASE', journalEntryId: await this.entryIdForKey(orgId, key) };
-    }
-
-    const account = await withTenant(this.pool, orgId, (c) =>
-      c.query(
-        `SELECT id FROM member_savings_accounts
-          WHERE member_id = $1 AND status = 'ACTIVE'
-          ORDER BY opened_at LIMIT 1`,
-        [input.memberId],
-      ),
-    );
-    let accountId = (account.rows[0] as { id: string } | undefined)?.id;
-    if (!accountId) {
-      // A member paying by transfer should not be turned away because nobody opened a savings
-      // account for them: open the standard one, exactly as the counter would.
-      accountId = await this.openRegularSavingsAccount(orgId, input.memberId);
-    }
-    await this.savings.deposit(orgId, actorUserId as string, accountId, input.amount, description, key);
-    return { target: 'SAVINGS_DEPOSIT', journalEntryId: await this.entryIdForKey(orgId, key) };
+    const entry=await c.query(`SELECT id FROM journal_entries WHERE organization_id=$1 AND idempotency_key=$2`,[orgId,key]);
+    if (!entry.rows[0]) throw new ConflictException('Provider posting did not produce a journal link');
+    return {target:input.purpose,journalEntryId:entry.rows[0].id};
   }
 
-  private async entryIdForKey(orgId: string, key: string): Promise<string | undefined> {
-    const { rows } = await withTenant(this.pool, orgId, (c) =>
-      c.query(`SELECT id FROM journal_entries WHERE organization_id = $1 AND idempotency_key = $2`, [
-        orgId,
-        key,
-      ]),
-    );
-    return (rows[0] as { id: string } | undefined)?.id;
+  private async lockOpenPeriod(c: PoolClient, orgId: string) {
+    const period=await c.query(`SELECT id FROM ledger_periods WHERE organization_id=$1 AND status='OPEN'
+      AND now()::date BETWEEN start_date AND end_date ORDER BY start_date DESC LIMIT 1 FOR SHARE`,[orgId]);
+    if (!period.rows[0]) throw new ConflictException('No OPEN accounting period — cannot post');
+    return period.rows[0].id as string;
   }
 
   /** Money we cannot place yet: Dr Cash at Bank / Cr Unallocated Receipts. */
   private async postUnallocated(
+    c: PoolClient,
     orgId: string,
     actorUserId: string | null,
     transactionId: string,
-    amount: number,
+    amount: string,
     tx: { provider: string; provider_reference: string; payer_name: string | null },
-  ): Promise<string | undefined> {
-    const key = `${this.idempotencyKey(tx.provider, tx.provider_reference)}:unallocated`;
-    return withTenant(this.pool, orgId, async (c) => {
-      const existing = await c.query(
-        `SELECT id FROM journal_entries WHERE organization_id = $1 AND idempotency_key = $2`,
-        [orgId, key],
-      );
-      if (existing.rows[0]) return (existing.rows[0] as { id: string }).id;
+  ): Promise<string> {
+    const key = `${this.idempotencyKey(orgId, tx.provider, tx.provider_reference)}:unallocated`;
 
-      const period = await c.query(
-        `SELECT id FROM ledger_periods
-          WHERE organization_id = $1 AND status = 'OPEN'
-            AND now()::date BETWEEN start_date AND end_date
-          ORDER BY start_date DESC LIMIT 1`,
-        [orgId],
-      );
-      const periodId = (period.rows[0] as { id: string } | undefined)?.id;
-      if (!periodId) throw new ConflictException('No OPEN accounting period — cannot park the receipt');
+    const existing = await c.query(
+      `SELECT id FROM journal_entries WHERE organization_id = $1 AND idempotency_key = $2`,
+      [orgId, key],
+    );
+    if (existing.rows[0]) return (existing.rows[0] as { id: string }).id;
 
-      const seq = await c.query(
-        `UPDATE org_counters SET journal_seq = journal_seq + 1, updated_at = now()
-          WHERE organization_id = $1 RETURNING journal_seq`,
-        [orgId],
-      );
-      const entryNo = Number((seq.rows[0] as { journal_seq: string }).journal_seq);
-      const entryId = randomUUID();
+    const periodId = await this.lockOpenPeriod(c,orgId);
 
-      await c.query(
-        `INSERT INTO journal_entries
-           (id, organization_id, period_id, entry_date, description, source, source_type, source_id,
-            status, entry_no, idempotency_key, created_by, posted_by, posted_at)
-         VALUES ($1, $2, $3, now()::date, $4, 'PAYMENT_UNALLOCATED', 'provider_transaction', $5,
-                 'POSTED', $6, $7, $8, $8, now())`,
-        [
-          entryId,
-          orgId,
-          periodId,
-          `Unmatched receipt: ${tx.payer_name ?? 'unknown payer'} (${tx.provider} ${tx.provider_reference})`,
-          transactionId,
-          entryNo,
-          key,
-          actorUserId,
-        ],
-      );
+    const seq = await c.query(
+      `UPDATE org_counters SET journal_seq = journal_seq + 1, updated_at = now()
+        WHERE organization_id = $1 RETURNING journal_seq`,
+      [orgId],
+    );
+    const entryNo = Number((seq.rows[0] as { journal_seq: string }).journal_seq);
+    const entryId = randomUUID();
 
-      const accounts = await c.query(
-        `SELECT id, code FROM chart_of_accounts
-          WHERE organization_id = $1 AND code = ANY($2::varchar[])`,
-        [orgId, ['1000', '2990']],
-      );
-      const idByCode = new Map(
-        (accounts.rows as { id: string; code: string }[]).map((r) => [r.code, r.id]),
-      );
-      const cash = idByCode.get('1000');
-      const suspense = idByCode.get('2990');
-      if (!cash || !suspense) {
-        throw new ConflictException('This cooperative is missing account 1000 or 2990');
-      }
-      const values: string[] = [];
-      const params: unknown[] = [];
-      const push = (accountId: string, debit: string, credit: string) => {
-        const base = params.length;
-        values.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`);
-        params.push(orgId, entryId, accountId, debit, credit, null);
-      };
-      push(cash, String(round2(amount)), '0');
-      push(suspense, '0', String(round2(amount)));
-      await c.query(
-        `INSERT INTO journal_lines
-           (organization_id, journal_entry_id, account_id, debit, credit, memo)
-         VALUES ${values.join(', ')}`,
-        params,
-      );
+    await c.query(
+      `INSERT INTO journal_entries
+         (id, organization_id, period_id, entry_date, description, source, source_type, source_id,
+          status, entry_no, idempotency_key, created_by, posted_by, posted_at)
+       VALUES ($1, $2, $3, now()::date, $4, 'PAYMENT_UNALLOCATED', 'provider_transaction', $5,
+               'POSTED', $6, $7, $8, $8, now())`,
+      [
+        entryId,
+        orgId,
+        periodId,
+        `Unmatched receipt: ${tx.payer_name ?? 'unknown payer'} (${tx.provider} ${tx.provider_reference})`,
+        transactionId,
+        entryNo,
+        key,
+        actorUserId,
+      ],
+    );
 
-      await c.query(
-        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
-         VALUES ($1, $2, 'payment.unallocated', 'provider_transaction', $3, $4::jsonb)`,
-        [orgId, actorUserId, transactionId, JSON.stringify({ amount: round2(amount) })],
-      );
-      return entryId;
-    });
+    const accounts = await c.query(
+      `SELECT id, code FROM chart_of_accounts
+        WHERE organization_id = $1 AND code = ANY($2::varchar[])`,
+      [orgId, ['1000', '2990']],
+    );
+    const idByCode = new Map(
+      (accounts.rows as { id: string; code: string }[]).map((r) => [r.code, r.id]),
+    );
+    const cash = idByCode.get('1000');
+    const suspense = idByCode.get('2990');
+    if (!cash || !suspense) {
+      throw new ConflictException('This cooperative is missing account 1000 or 2990');
+    }
+    const values: string[] = [];
+    const params: unknown[] = [];
+    const push = (accountId: string, debit: string, credit: string) => {
+      const base = params.length;
+      values.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`);
+      params.push(orgId, entryId, accountId, debit, credit, null);
+    };
+    push(cash, amount, '0');
+    push(suspense, '0', amount);
+    await c.query(
+      `INSERT INTO journal_lines
+         (organization_id, journal_entry_id, account_id, debit, credit, memo)
+       VALUES ${values.join(', ')}`,
+      params,
+    );
+
+    await c.query(
+      `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, $2, 'payment.unallocated', 'provider_transaction', $3, $4::jsonb)`,
+      [orgId, actorUserId, transactionId, JSON.stringify({ amount })],
+    );
+    return entryId;
+
   }
 
   private async mark(
+    c: PoolClient,
     orgId: string,
     transactionId: string,
     outcome: {
@@ -510,8 +401,7 @@ export class ReconciliationService {
       journalEntryId?: string;
     },
   ) {
-    await withTenant(this.pool, orgId, (c) =>
-      c.query(
+    await c.query(
         `UPDATE provider_transactions
             SET status = $2, exception_reason = $3,
                 member_id = coalesce($4, member_id),
@@ -527,41 +417,40 @@ export class ReconciliationService {
           outcome.intentId ?? null,
           outcome.journalEntryId ?? null,
         ],
-      ),
     );
   }
 
   /** Open the cooperative's standard savings account for a member who has none. */
-  private async openRegularSavingsAccount(orgId: string, memberId: string): Promise<string> {
-    return withTenant(this.pool, orgId, async (c) => {
-      const existing = await c.query(
-        `SELECT id FROM member_savings_accounts WHERE member_id = $1 AND status = 'ACTIVE' LIMIT 1`,
-        [memberId],
-      );
-      const found = (existing.rows[0] as { id: string } | undefined)?.id;
-      if (found) return found;
+  private async openRegularSavingsAccount(c: PoolClient, orgId: string, memberId: string): Promise<string> {
 
-      const product = await c.query(
-        `SELECT id FROM savings_products WHERE organization_id = $1 AND code = 'REGULAR-SAVINGS'`,
-        [orgId],
-      );
-      const productId = (product.rows[0] as { id: string } | undefined)?.id;
-      if (!productId) throw new ConflictException('This cooperative has no REGULAR-SAVINGS product');
+    const existing = await c.query(
+      `SELECT id FROM member_savings_accounts WHERE member_id = $1 AND status = 'ACTIVE' LIMIT 1`,
+      [memberId],
+    );
+    const found = (existing.rows[0] as { id: string } | undefined)?.id;
+    if (found) return found;
 
-      const seq = await c.query(
-        `UPDATE org_counters SET savings_seq = savings_seq + 1, updated_at = now()
-          WHERE organization_id = $1 RETURNING savings_seq`,
-        [orgId],
-      );
-      const accountNo = Number((seq.rows[0] as { savings_seq: string }).savings_seq);
-      const accountId = randomUUID();
-      await c.query(
-        `INSERT INTO member_savings_accounts (id, organization_id, member_id, product_id, account_no, status)
-         VALUES ($1, $2, $3, $4, $5, 'ACTIVE')`,
-        [accountId, orgId, memberId, productId, accountNo],
-      );
-      return accountId;
-    });
+    const product = await c.query(
+      `SELECT id FROM savings_products WHERE organization_id = $1 AND code = 'REGULAR-SAVINGS'`,
+      [orgId],
+    );
+    const productId = (product.rows[0] as { id: string } | undefined)?.id;
+    if (!productId) throw new ConflictException('This cooperative has no REGULAR-SAVINGS product');
+
+    const seq = await c.query(
+      `UPDATE org_counters SET savings_seq = savings_seq + 1, updated_at = now()
+        WHERE organization_id = $1 RETURNING savings_seq`,
+      [orgId],
+    );
+    const accountNo = Number((seq.rows[0] as { savings_seq: string }).savings_seq);
+    const accountId = randomUUID();
+    await c.query(
+      `INSERT INTO member_savings_accounts (id, organization_id, member_id, product_id, account_no, status)
+       VALUES ($1, $2, $3, $4, $5, 'ACTIVE')`,
+      [accountId, orgId, memberId, productId, accountNo],
+    );
+    return accountId;
+
   }
 
   /** Retry everything still waiting — after an officer adds a missing member, say. */
@@ -594,130 +483,57 @@ export class ReconciliationService {
     });
   }
 
-  /** Allocate an exception to a member by hand — the officer knows who it was. */
+  /** Assign the parked receipt once; suspense release and domain posting share one commit. */
   async assignException(
-    organizationId: string | null,
-    actorUserId: string,
-    transactionId: string,
-    dto: { memberId: string; purpose?: PaymentPurpose },
+    organizationId: string | null, actorUserId: string, transactionId: string,
+    dto: {memberId:string;purpose?:PaymentPurpose},
   ) {
-    const orgId = this.requireOrg(organizationId);
-    const tx = await withTenant(this.pool, orgId, (c) =>
-      c.query(
-        `SELECT id, provider, provider_reference, amount, status, journal_entry_id
-           FROM provider_transactions WHERE id = $1`,
-        [transactionId],
-      ),
-    );
-    const row = tx.rows[0] as
-      | { id: string; provider: string; provider_reference: string; amount: string; status: string }
-      | undefined;
-    if (!row) throw new NotFoundException('Transaction not found');
-
-    const amount = Number(row.amount);
-
-    // The money already sits in Unallocated Receipts; move it out of there and onto the member
-    // in one entry, so the suspense account is drawn down rather than left holding ghosts.
-    const moved = await withTenant(this.pool, orgId, async (c) => {
-      const existingSuspense = await c.query(
-        `SELECT id FROM journal_entries
-          WHERE organization_id = $1 AND source = 'PAYMENT_ALLOCATED' AND source_id = $2`,
-        [orgId, transactionId],
-      );
-      if (existingSuspense.rows[0]) {
-        throw new ConflictException('This receipt has already been allocated');
-      }
-
-      const period = await c.query(
-        `SELECT id FROM ledger_periods
-          WHERE organization_id = $1 AND status = 'OPEN' AND now()::date BETWEEN start_date AND end_date
-          ORDER BY start_date DESC LIMIT 1`,
-        [orgId],
-      );
-      const periodId = (period.rows[0] as { id: string } | undefined)?.id;
-      if (!periodId) throw new ConflictException('No OPEN accounting period — cannot allocate');
-
-      const target =
-        dto.purpose === 'LOAN_REPAYMENT'
-          ? '1020'
-          : dto.purpose === 'SHARE_PURCHASE'
-            ? '3000'
-            : '2000';
-
-      const seq = await c.query(
-        `UPDATE org_counters SET journal_seq = journal_seq + 1, updated_at = now()
-          WHERE organization_id = $1 RETURNING journal_seq`,
-        [orgId],
-      );
-      const entryNo = Number((seq.rows[0] as { journal_seq: string }).journal_seq);
-      const entryId = randomUUID();
-
-      await c.query(
-        `INSERT INTO journal_entries
-           (id, organization_id, period_id, entry_date, description, source, source_type, source_id,
-            status, entry_no, created_by, posted_by, posted_at)
-         VALUES ($1, $2, $3, now()::date, $4, 'PAYMENT_ALLOCATED', 'provider_transaction', $5,
-                 'POSTED', $6, $7, $7, now())`,
-        [
-          entryId,
-          orgId,
-          periodId,
-          `Allocated receipt ${row.provider} ${row.provider_reference}`,
-          transactionId,
-          entryNo,
-          actorUserId,
-        ],
-      );
-
-      const accounts = await c.query(
-        `SELECT id, code FROM chart_of_accounts WHERE organization_id = $1 AND code = ANY($2::varchar[])`,
-        [orgId, ['2990', target]],
-      );
-      const idByCode = new Map(
-        (accounts.rows as { id: string; code: string }[]).map((r) => [r.code, r.id]),
-      );
-      const suspense = idByCode.get('2990');
-      const destination = idByCode.get(target);
-      if (!suspense || !destination) {
-        throw new ConflictException(`This cooperative is missing account 2990 or ${target}`);
-      }
-
-      const values: string[] = [];
-      const params: unknown[] = [];
-      const push = (accountId: string, debit: string, credit: string) => {
-        const base = params.length;
-        values.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`);
-        params.push(orgId, entryId, accountId, debit, credit, null);
-      };
-      push(suspense, String(round2(amount)), '0');
-      push(destination, '0', String(round2(amount)));
-      await c.query(
-        `INSERT INTO journal_lines (organization_id, journal_entry_id, account_id, debit, credit, memo)
-         VALUES ${values.join(', ')}`,
-        params,
-      );
-
-      await c.query(
-        `UPDATE provider_transactions
-            SET status = 'MATCHED', member_id = $2, exception_reason = NULL,
-                journal_entry_id = $3, updated_at = now()
-          WHERE id = $1`,
-        [transactionId, dto.memberId, entryId],
-      );
-      await c.query(
-        `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
-         VALUES ($1, $2, 'payment.allocated', 'provider_transaction', $3, $4::jsonb)`,
-        [
-          orgId,
-          actorUserId,
-          transactionId,
-          JSON.stringify({ memberId: dto.memberId, purpose: dto.purpose ?? 'SAVINGS_DEPOSIT' }),
-        ],
-      );
-      return { entryId, target };
+    const orgId=this.requireOrg(organizationId),purpose=dto.purpose??'SAVINGS_DEPOSIT';
+    return withTenant(this.pool,orgId,async c=>{
+      const {rows}=await c.query(`SELECT * FROM provider_transactions WHERE organization_id=$1 AND id=$2 FOR UPDATE`,[orgId,transactionId]);
+      const tx=rows[0];
+      if (!tx) throw new NotFoundException('Transaction not found');
+      return financialIntent(this.pool,orgId,'provider.assign',`provider-assign:${transactionId}`,
+        {transactionId,memberId:dto.memberId,purpose},async()=>{
+          if (tx.status!=='EXCEPTION' || !tx.journal_entry_id) throw new ConflictException('Only a parked exception can be allocated; historical incomplete receipts require reconciliation');
+          const original=await c.query(`SELECT je.id FROM journal_entries je WHERE je.organization_id=$1 AND je.id=$2
+            AND je.source='PAYMENT_UNALLOCATED' AND je.source_id=$3 AND je.status='POSTED' FOR UPDATE`,[orgId,tx.journal_entry_id,transactionId]);
+          if (!original.rowCount) throw new ConflictException('Receipt has no valid posted suspense journal');
+          const lines=await c.query(`SELECT a.code,jl.debit,jl.credit FROM journal_lines jl JOIN chart_of_accounts a ON a.id=jl.account_id WHERE jl.journal_entry_id=$1 ORDER BY a.code`,[tx.journal_entry_id]);
+          const amount=moneyDecimal(moneyKobo(tx.amount));
+          if (lines.rows.length!==2 || lines.rows[0].code!=='1000' || lines.rows[1].code!=='2990'
+            || moneyKobo(lines.rows[0].debit)!==moneyKobo(amount) || moneyKobo(lines.rows[0].credit)!==0n
+            || moneyKobo(lines.rows[1].credit)!==moneyKobo(amount) || moneyKobo(lines.rows[1].debit)!==0n) {
+            throw new ConflictException('Suspense journal does not reconcile to this receipt');
+          }
+          const allocated=await c.query(`SELECT id FROM journal_entries WHERE organization_id=$1 AND source='PAYMENT_ALLOCATED' AND source_id=$2`,[orgId,transactionId]);
+          if (allocated.rowCount) throw new ConflictException('Historical allocation exists without a retry receipt; reconciliation is required');
+          // Post first to preserve member/account-before-counter lock ordering. The balanced
+          // clearing entry below offsets its cash debit: net Dr Suspense / Cr member destination.
+          const posting=await this.post(c,orgId,actorUserId,{memberId:dto.memberId,purpose,amount,
+            provider:tx.provider,reference:tx.provider_reference},transactionId);
+          const period=await c.query(`SELECT id FROM ledger_periods WHERE organization_id=$1 AND status='OPEN'
+            AND now()::date BETWEEN start_date AND end_date ORDER BY start_date DESC LIMIT 1`,[orgId]);
+          if (!period.rows[0]) throw new ConflictException('No OPEN accounting period — cannot allocate');
+          const seq=await c.query(`UPDATE org_counters SET journal_seq=journal_seq+1,updated_at=now() WHERE organization_id=$1 RETURNING journal_seq`,[orgId]);
+          const entryId=randomUUID();
+          await c.query(`INSERT INTO journal_entries
+            (id,organization_id,period_id,entry_date,description,source,source_type,source_id,status,entry_no,created_by,posted_by,posted_at)
+            VALUES ($1,$2,$3,now()::date,$4,'PAYMENT_ALLOCATED','provider_transaction',$5,'POSTED',$6,$7,$7,now())`,
+            [entryId,orgId,period.rows[0].id,`Release suspense ${tx.provider} ${tx.provider_reference}`,transactionId,seq.rows[0].journal_seq,actorUserId]);
+          const accounts=await c.query(`SELECT id,code FROM chart_of_accounts WHERE organization_id=$1 AND code=ANY($2::varchar[])`,[orgId,['1000','2990']]);
+          const byCode=new Map(accounts.rows.map(a=>[a.code,a.id]));
+          if (!byCode.has('1000') || !byCode.has('2990')) throw new ConflictException('Missing cash or suspense account');
+          await c.query(`INSERT INTO journal_lines (organization_id,journal_entry_id,account_id,debit,credit,member_id)
+            VALUES ($1,$2,$3,$4,0,$5),($1,$2,$6,0,$4,$5)`,[orgId,entryId,byCode.get('2990'),amount,dto.memberId,byCode.get('1000')]);
+          await this.mark(c,orgId,transactionId,{status:'MATCHED',memberId:dto.memberId,journalEntryId:posting.journalEntryId});
+          await c.query(`INSERT INTO audit_logs (organization_id,actor_user_id,action,entity_type,entity_id,metadata)
+            VALUES ($1,$2,'payment.allocated','provider_transaction',$3,$4::jsonb)`,
+            [orgId,actorUserId,transactionId,JSON.stringify({memberId:dto.memberId,purpose,entryId,journalEntryId:posting.journalEntryId,amount})]);
+          return {allocated:true,transactionId,entryId,journalEntryId:posting.journalEntryId,
+            target:purpose==='LOAN_REPAYMENT'?'1020':purpose==='SHARE_PURCHASE'?'3000':'2000'};
+        },c);
     });
-
-    return { allocated: true, transactionId, ...moved };
   }
 
   // ------------------------------------------------------------------ summary

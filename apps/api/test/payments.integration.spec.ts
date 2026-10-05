@@ -182,7 +182,8 @@ describe('virtual-account payments', () => {
     expect(m360.body.savingsTotal).toBe(25000);
 
     // Duplicate delivery of the same paymentReference -> acknowledged, no re-post
-    const dupRaw = JSON.stringify(webhookPayload(accountNumber, 'PAY-1', 25000));
+    // Replay the actual delivery; rebuilding the fixture changes its random accountReference.
+    const dupRaw = rawBody;
     const dup = await request(app.getHttpServer())
       .post('/api/v1/payments/monnify/webhook')
       .set('monnify-signature', sign(dupRaw))

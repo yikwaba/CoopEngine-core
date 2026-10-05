@@ -13,7 +13,7 @@ import { DB_POOL } from '../database/database.module';
 import { ReconciliationService } from './reconciliation.service';
 
 const DEV_SECRET = 'monnify-dev-secret';
-const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+import { moneyDecimal, moneyKobo } from '../common/money';
 
 export interface VirtualAccountRow {
   id: string;
@@ -241,22 +241,34 @@ export class PaymentsService {
     // member, honours any payment intent the member quoted, posts through the same services the
     // counter uses, and parks anything unresolved in Unallocated Receipts. Keeping one posting
     // path is what stops two of them disagreeing about what a member is owed.
+    const value=payload.amountPaid??payload.amount;
+    if (typeof value!=='number' && typeof value!=='string') throw new BadRequestException('Malformed payment amount');
+    const amountDecimal=moneyDecimal(moneyKobo(value));
+    return withTenant(this.pool,orgId,async c=>{
+    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+      [JSON.stringify([orgId,'provider-notification',paymentReference])]);
+    const delivered=await c.query(`SELECT transaction_reference,account_number,amount FROM payment_notifications
+      WHERE organization_id=$1 AND payment_reference=$2 FOR UPDATE`,[orgId,paymentReference]);
+    const original=delivered.rows[0];
+    if (original && (original.transaction_reference!==(transactionReference||paymentReference)
+      || original.account_number!==accountNumber || moneyKobo(original.amount)!==moneyKobo(amountDecimal))) {
+      throw new ConflictException('This payment notification reference was already used with different details');
+    }
     const outcome: { matched: boolean; exception?: boolean; reason?: string } =
       await this.reconciliation.recordTransaction(orgId, null, {
       provider: 'MONNIFY',
       providerReference: transactionReference || paymentReference,
-      amount: round2(amount),
+      amount: amountDecimal,
       payerName: String(payload.payerName ?? payload.customerName ?? '') || undefined,
       payerAccount: String(payload.payerAccountNumber ?? '') || undefined,
       narration: `${accountRef} ${String(payload.paymentDescription ?? '')}`.trim(),
       virtualAccountNo: accountNumber,
       receivedAt: paidAt.toISOString(),
       raw: payload,
-    });
+    },c);
 
     // Keep the provider's own record of what it told us, exactly as it told us: a reconciliation
     // engine is only as good as the evidence behind it, and this is the evidence.
-    await withTenant(this.pool, orgId, async (c) => {
       await c.query(
         `INSERT INTO payment_notifications
            (organization_id, member_id, account_reference, account_number, payment_reference,
@@ -270,16 +282,16 @@ export class PaymentsService {
           accountNumber,
           paymentReference,
           transactionReference || paymentReference,
-          String(round2(amount)),
+          amountDecimal,
           paidAt,
           outcome.matched ? 'POSTED' : 'FAILED',
           (outcome as { journalEntryId?: string }).journalEntryId ?? null,
           JSON.stringify(payload),
         ],
       );
-    });
 
     return { acknowledged: true, paymentReference, ...outcome };
+    });
   }
 
   async listNotifications(

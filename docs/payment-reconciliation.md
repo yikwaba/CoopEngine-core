@@ -24,13 +24,14 @@ Two records meet here:
    Receipts`, and raise an exception with the reason. The ledger stays balanced and the money is
    visible instead of lost.
 
-An officer can then allocate the exception to a member, which moves it out of suspense with
-`Dr 2990 / Cr 2000` (or `1020` for a loan, `3000` for shares).
+An officer can then allocate the exception to a member. The suspense release and domain posting
+commit together, with a net `Dr 2990 / Cr member destination` and no additional cash; loan payments
+use the normal principal/interest split. See the recovery details below.
 
 ## The property that matters most
 
 Every posting carries an idempotency key derived from the provider's own reference
-(`pay:monnify:<reference>`), and the provider reference is unique per cooperative. **A replayed
+(a tenant-scoped hash of the full reference), and the provider reference is unique per cooperative. **A replayed
 webhook cannot pay a member twice** — the second delivery is recognised and reported as a
 duplicate rather than posted. This is tested, not asserted.
 
@@ -57,3 +58,34 @@ duplicate rather than posted. This is tested, not asserted.
 - **Unallocated Receipts is a liability**: the cooperative owes it to whoever sent it. A balance
   that stays there is money someone is waiting to hear about, so the reconciliation summary
   reports it prominently.
+
+## Recovery: atomic allocation and retry receipts
+
+Provider ingestion, domain posting, payment-intent totals and provider matching state now share
+one tenant transaction. The signed webhook also writes its provider notification in that same
+commit. A failure returns an error and rolls everything back so the callback can retry. Matching
+an already recorded `UNMATCHED` transaction is serialized by its row lock and protected by a
+completed `provider.match` financial receipt. Parked exceptions stay in suspense until assigned.
+
+Duplicate provider references return the current settled outcome with `duplicate: true`; they
+never increment an intent or post again. Reusing a reference with changed amount, payer or routing
+fields conflicts. Webhook payment-reference reuse with a different transaction/account/amount
+also conflicts. New journal keys hash the full provider reference, tenant and operation rather
+than truncating references or sharing keys across cooperatives.
+
+Exception assignment locks the provider transaction and uses a durable `provider.assign` receipt
+bound to the member and purpose. Identical retries return the original response, while changed
+member/purpose conflicts. It verifies the original posted suspense journal against the receipt,
+then runs the existing savings, share or loan service inside the same transaction. Thus the member
+balance, movement, loan principal/interest schedule, notification and audit are updated together.
+
+Assignment creates two balanced entries in one commit: the regular domain posting (`Dr 1000 /
+Cr member destination`) and a linked suspense release (`Dr 2990 / Cr 1000`). Combined, these are
+`Dr 2990 / Cr member destination` with **zero additional cash**. Loan repayments split principal
+and interest using the normal repayment allocation rules. The response includes `entryId` for
+the release and `journalEntryId` for the domain posting; the provider row links to the latter.
+
+No schema migration is needed beyond the existing financial receipts migration 0045. Existing
+historical partial postings or allocations without consistent state/receipt links fail closed
+and require independent reconciliation; this change does not repair historical data. All changes
+remain on the draft recovery branch until separately accepted for production.
