@@ -9,7 +9,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { enqueueNotification, outboundChannels } from '../notifications/enqueue';
 import { DB_POOL } from '../database/database.module';
@@ -764,9 +764,10 @@ export class LoansService {
     organizationId: string | null,
     actorUserId: string,
     loanId: string,
-    amount: number,
+    amount: string | number,
     description?: string,
     idempotencyKey?: string,
+    existingClient?: PoolClient,
   ): Promise<{ loan: LoanRow }> {
     const orgId = this.requireOrg(organizationId);
     const value = moneyKobo(amount);
@@ -906,7 +907,7 @@ export class LoansService {
       );
       const result=await c.query(`${selectLoan} WHERE l.organization_id=$1 AND l.id=$2`,[orgId,loanId]);
       return {loan:this.mapLoan(result.rows[0])};
-    });
+    },existingClient);
   }
 
   private async postRepaymentJournal(

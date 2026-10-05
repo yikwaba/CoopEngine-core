@@ -185,9 +185,10 @@ export class SavingsService {
     organizationId: string | null,
     actorUserId: string,
     accountId: string,
-    amount: number,
+    amount: string | number,
     description?: string,
     idempotencyKey?: string,
+    existingClient?: PoolClient,
   ): Promise<SavingsAccountRow> {
     const orgId = this.requireOrg(organizationId);
     const value = this.validateAmount(amount, 'deposit');
@@ -223,7 +224,7 @@ export class SavingsService {
         balance,
       );
       return this.getAccountTx(c,orgId,accountId);
-    });
+    },existingClient);
   }
 
   async withdraw(

@@ -8,6 +8,8 @@ on:
       - apps/api/src/savings/**
       - apps/api/src/shares/**
       - apps/api/src/payroll/**
+      - apps/api/src/payments/**
+      - apps/api/src/common/financial-intent.ts
       - apps/api/src/ledger/**
       - apps/portal/src/**
       - packages/db/migrations/**
