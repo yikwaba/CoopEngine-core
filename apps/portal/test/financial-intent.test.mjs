@@ -135,6 +135,22 @@ for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposi
  test(`${name}: legacy acknowledgements are scoped to the original identity and route`,async()=>{
   const identityKey=name==='staff'?staff.USER_KEY:member.MEMBER_INFO_KEY,identity=localStorage.getItem(identityKey),key='coopengine-payment:'+identity+':'+path,raw=JSON.stringify({key:'same-legacy-key-123456789',payload:'{"amount":5}',scope});
   sessionStorage.setItem(key,raw);await api.syncFinancialWrites();setFetch(async()=>Response.json({recorded:5}));await api.recoverFinancialWrite(key);
-  const second='{"id":"other-identity"}';localStorage.setItem(identityKey,second);const otherKey='coopengine-payment:'+second+':'+path;sessionStorage.setItem(otherKey,raw);await api.syncFinancialWrites();assert.equal(api.pendingFinancialWrites().length,1);assert.equal(api.pendingFinancialWrites()[0].key,'same-legacy-key-123456789');
+  const second=name==='staff'?'{"email":"other@example.invalid"}':'{"id":"other-identity"}';localStorage.setItem(identityKey,second);const otherKey='coopengine-payment:'+second+':'+path;sessionStorage.setItem(otherKey,raw);await api.syncFinancialWrites();assert.equal(api.pendingFinancialWrites().length,1);assert.equal(api.pendingFinancialWrites()[0].key,'same-legacy-key-123456789');
+ });
+}
+
+for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposits'],['member',member,'/member/withdrawals/request']]) {
+ const init={method:'POST',body:'{"amount":5}'};
+ const info=name==='staff'?staff.USER_KEY:member.MEMBER_INFO_KEY;
+ const changed=name==='staff'?JSON.stringify({email:' STAFF@EXAMPLE.INVALID ',display:'Changed'}):JSON.stringify({id:'member-a',firstName:'Changed',lastName:'Name',email:'new@example.invalid'});
+ test(`${name}: display/profile edits and email casing cannot hide a pending request`,async()=>{
+  setFetch(async()=>{throw new TypeError('lost response');});await assert.rejects(api.apiFetch(path,undefined,init));const old=api.pendingFinancialWrites()[0];localStorage.setItem(info,changed);assert.equal(api.pendingFinancialWrites()[0].key,old.key);
+  setFetch(async(_url,options)=>{assert.equal(JSON.parse(options.body).idempotencyKey,old.key);return Response.json({recorded:5});});await api.recoverFinancialWrite(old.storageKey);assert.equal(api.pendingFinancialWrites().length,0);
+ });
+ for(const source of ['session','local']) test(`${name}: old ${source} display-field namespace migrates to the stable identity`,async()=>{
+  const oldIdentity=name==='staff'?JSON.stringify({email:'STAFF@EXAMPLE.INVALID',display:'Old'}):JSON.stringify({id:'member-a',firstName:'Old',lastName:'Name',email:'old@example.invalid'}),oldKey='coopengine-payment:'+oldIdentity+':'+path;
+  const storage=source==='session'?sessionStorage:localStorage;storage.setItem(oldKey,JSON.stringify({key:'stable-migrated-key-123456789',payload:init.body,scope}));localStorage.setItem(info,changed);
+  await api.syncFinancialWrites();assert.equal(storage.getItem(oldKey),null);const pending=api.pendingFinancialWrites();assert.equal(pending.length,1);assert.notEqual(pending[0].storageKey,oldKey);
+  setFetch(async(_url,options)=>{assert.equal(JSON.parse(options.body).idempotencyKey,'stable-migrated-key-123456789');return Response.json({recorded:5});});await api.recoverFinancialWrite(pending[0].storageKey);assert.equal(api.pendingFinancialWrites().length,0);
  });
 }

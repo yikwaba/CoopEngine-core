@@ -153,23 +153,42 @@ function isFinancialPath(path:string):boolean {
   /^\/loans\/[^/]+\/(approve|reject|disburse)$/.test(path) || /^\/payroll\/batches\/[^/]+\/(approve|reject|reverse)$/.test(path) ||
   /^\/approvals\/payroll\/[^/]+\/(approve|reject)$/.test(path) || /^\/ledger\/journals\/[^/]+\/(approve-post|reverse)$/.test(path) || /^\/approvals\/journals\/[^/]+\/approve$/.test(path);
 }
-/** Conflicting legacy tab records are retained for review, never overwritten. */
+/** Display fields never define the durable account namespace. Server scope still authorizes replay. */
+function financialBrowserIdentity(raw:string|null):string|null {
+ try {
+  const identity=JSON.parse(raw??'null') as Record<string,unknown>|null;
+  const value=identity?.id;
+  return typeof value==='string' && value.trim()?JSON.stringify({id:value.trim()}):null;
+ }catch{return null;}
+}
+/** Import tab records and old display-field namespaces without overwriting conflicting intents. */
 function migrateLegacyFinancialRecords():void {
- const identity=localStorage.getItem(MEMBER_INFO_KEY);if(!identity) return;
- const prefix='coopengine-payment:'+identity+':',keys:string[]=[];
- for(let i=0;i<sessionStorage.length;i++) {const key=sessionStorage.key(i);if(key?.startsWith(prefix)) keys.push(key);}
- for(const storageKey of keys) {
-  const raw=sessionStorage.getItem(storageKey);if (!raw) continue;
+ const identity=financialBrowserIdentity(localStorage.getItem(MEMBER_INFO_KEY));if(!identity) return;
+ const prefix='coopengine-payment:',sources:{storage:Storage;key:string}[]=[];
+ for(const storage of [localStorage,sessionStorage]) {
+  for(let i=0;i<storage.length;i++) {const key=storage.key(i);if(key?.startsWith(prefix)) sources.push({storage,key});}
+ }
+ for(const {storage,key:sourceKey} of sources) {
+  // The final JSON object terminator separates old identity metadata from the API route.
+  const separator=sourceKey.lastIndexOf('}:/');
+  if(separator<0 || financialBrowserIdentity(sourceKey.slice(prefix.length,separator+1))!==identity) continue;
+  const storageKey=prefix+identity+sourceKey.slice(separator+1);
+  if(storage===localStorage && sourceKey===storageKey) continue;
+  const raw=storage.getItem(sourceKey);if(!raw) continue;
   const old=JSON.parse(raw) as {key:string;payload:string;scope?:string};
-  if (!old || typeof old.key!=='string' || typeof old.payload!=='string') throw new Error('An older financial request needs account review. Its original record is retained.');
-  if(localStorage.getItem('coopengine-payment-ack:'+storageKey+':'+old.key)==='acknowledged') {sessionStorage.removeItem(storageKey);continue;}
+  if(!old || typeof old.key!=='string' || typeof old.payload!=='string') throw new Error('An older financial request needs account review. Its original record is retained.');
+  const ack='coopengine-payment-ack:'+storageKey+':'+old.key;
+  // Respect both the canonical marker and the marker written by the previous display-field namespace.
+  if(localStorage.getItem(ack)==='acknowledged' || localStorage.getItem('coopengine-payment-ack:'+sourceKey+':'+old.key)==='acknowledged') {
+   localStorage.setItem(ack,'acknowledged');storage.removeItem(sourceKey);continue;
+  }
   const current=localStorage.getItem(storageKey);
   if(current) {
    const record=JSON.parse(current) as {key:string;payload:string;scope?:string};
    if(record.key!==old.key || record.payload!==old.payload || record.scope!==old.scope) throw new Error('Conflicting financial records from older tabs need account review. Both original records are retained.');
   }
   localStorage.setItem(storageKey,JSON.stringify({...old,legacy:true}));
-  sessionStorage.removeItem(storageKey);
+  storage.removeItem(sourceKey);
  }
 }
 /** Import legacy records before rendering recovery under the same cross-tab lock. */
@@ -188,7 +207,7 @@ export async function prepareFinancialWrite(path:string,init?:RequestInit):Promi
  if (typeof init.body!=='string') throw new Error('Payment details must be JSON.');
  const details=JSON.parse(init.body) as Record<string,unknown>;
 
- const identity=localStorage.getItem(MEMBER_INFO_KEY);
+ const identity=financialBrowserIdentity(localStorage.getItem(MEMBER_INFO_KEY));
  if (!identity) throw new Error('Sign in before sending a financial request.');
  const storageKey='coopengine-payment:'+identity+':'+path;
  const payload=JSON.stringify(details);
@@ -235,7 +254,7 @@ function notifyFinancialWrites(): void {
 /** Only records for the currently signed-in browser identity are exposed. Never offer discard. */
 export function pendingFinancialWrites(): {storageKey:string;path:string;key:string;scope?:string;payload:string}[] {
  if (typeof window==='undefined' || !localStorage.getItem(MEMBER_SESSION_MARKER)) return [];
- const identity=localStorage.getItem(MEMBER_INFO_KEY);
+ const identity=financialBrowserIdentity(localStorage.getItem(MEMBER_INFO_KEY));
  if (!identity) return [];
  const prefix='coopengine-payment:'+identity+':';
  const result=[];
