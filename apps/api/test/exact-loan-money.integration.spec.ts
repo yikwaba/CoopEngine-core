@@ -45,7 +45,7 @@ describe('exact loan origination, schedule and journal amounts (PostgreSQL)',()=
   await tenant(c=>c.query('UPDATE loan_products SET interest_rate_pa=$1 WHERE id=$2',[String(rate),cash]));
   const id=(await apply(principal,months).expect(201)).body.id;await disburse(id);return id;
  }
- const repay=(id:string,amount:number,key?:string)=>request(app.getHttpServer()).post(`/api/v1/loans/${id}/repayments`).set(auth()).send({amount,...(key?{idempotencyKey:key}:{})});
+ const repay=(id:string,amount:number,key?:string)=>request(app.getHttpServer()).post(`/api/v1/loans/${id}/repayments`).set(auth()).send({amount,idempotencyKey:key??randomUUID()});
  async function repaymentProof(id:string){
   return tenant(async c=>(await c.query(`SELECT l.status,l.outstanding_principal,
    (SELECT sum(paid_principal)::text FROM loan_repayments WHERE loan_id=l.id) AS paid_principal,

@@ -1,3 +1,4 @@
+import { FinancialWriteDto } from '../common/dto/financial-write.dto';
 import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
@@ -51,7 +52,7 @@ class GuarantorDto {
   memberId!: string;
 }
 
-class RepaymentDto {
+class RepaymentDto extends FinancialWriteDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   @Max(100_000_000_000)
@@ -62,11 +63,6 @@ class RepaymentDto {
   @MaxLength(255)
   description?: string;
 
-  @IsOptional()
-  @IsString()
-  @MinLength(16)
-  @MaxLength(100)
-  idempotencyKey?: string;
 }
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';

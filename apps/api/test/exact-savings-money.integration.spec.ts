@@ -26,8 +26,8 @@ describe('exact savings postings, balances and interest (PostgreSQL)',()=>{
   await request(app.getHttpServer()).post(`/api/v1/members/${member}/approve`).set(auth).expect(200);
   const account=(await request(app.getHttpServer()).post(`/api/v1/savings/member/${member}/account`).set(auth).send({}).expect(201)).body.id;
   const tenant=<T>(fn:Parameters<typeof withTenant<T>>[2])=>withTenant(pool,org,fn);
-  const deposit=(amount:number,key?:string)=>request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(auth).send({amount,...(key?{idempotencyKey:key}:{})});
-  const withdraw=(amount:number)=>request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/withdrawals`).set(auth).send({amount});
+  const deposit=(amount:number,key?:string)=>request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(auth).send({amount,idempotencyKey:key??randomUUID()});
+  const withdraw=(amount:number)=>request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/withdrawals`).set(auth).send({ idempotencyKey: randomUUID(),amount});
   const interest=()=>request(app.getHttpServer()).post('/api/v1/savings/interest/post').set(auth).send({});
   async function proof(){return tenant(async c=>(await c.query(`SELECT a.current_balance,
    (SELECT sum(signed_amount)::text FROM savings_transactions WHERE account_id=a.id) AS movements,

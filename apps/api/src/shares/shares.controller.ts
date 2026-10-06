@@ -1,3 +1,4 @@
+import { FinancialWriteDto } from '../common/dto/financial-write.dto';
 import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
@@ -11,7 +12,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { SharesService } from './shares.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -19,7 +20,7 @@ import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
 
-class PurchaseDto {
+class PurchaseDto extends FinancialWriteDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   @Max(100_000_000_000)
@@ -30,11 +31,6 @@ class PurchaseDto {
   @MaxLength(255)
   description?: string;
 
-  @IsOptional()
-  @IsString()
-  @MinLength(16)
-  @MaxLength(100)
-  idempotencyKey?: string;
 }
 
 const SHARES_READ = ['shares.post', 'reports.view', 'settings.manage'];

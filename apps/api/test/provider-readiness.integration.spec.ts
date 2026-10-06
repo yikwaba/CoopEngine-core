@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 /**
  * Late-integration readiness (real PostgreSQL).
  *
@@ -145,7 +146,7 @@ describe('late-integration readiness', () => {
     const dep = await http
       .post(`/api/v1/savings/accounts/${accountId}/deposits`)
       .set({ Authorization: `Bearer ${adminToken}` })
-      .send({ amount: 25000, description: 'Manual counter deposit (no gateway)' });
+      .send({ idempotencyKey: randomUUID(), amount: 25000, description: 'Manual counter deposit (no gateway)' });
     expect([200, 201]).toContain(dep.status);
     expect(Number(dep.body.currentBalance)).toBe(25000);
 

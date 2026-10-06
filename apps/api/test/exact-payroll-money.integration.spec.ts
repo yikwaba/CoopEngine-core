@@ -81,7 +81,7 @@ describe('exact payroll preview, allocation and posting (PostgreSQL)',()=>{
  });
  it('conserves a concurrent payroll credit and ordinary savings deposit',async()=>{
   const f=await fixture(1),member=f.members[0]!,account=(await request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(f.auth).send({}).expect(201)).body.id;
-  const id=await f.staged(['0.23']);await Promise.all([f.approve(id).expect(200),request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(f.auth).send({amount:0.01}).expect(201)]);
+  const id=await f.staged(['0.23']);await Promise.all([f.approve(id).expect(200),request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(f.auth).send({ idempotencyKey: randomUUID(),amount:0.01}).expect(201)]);
   const p=await f.proof(id);expect(p.members[0].current_balance).toBe('0.24');expect(p.members[0].movements).toBe('0.24');expect(p.members[0].liability).toBe('0.24');
  });
  it('rolls back all posting, counter and member changes if one balance overflows',async()=>{

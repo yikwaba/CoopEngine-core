@@ -107,8 +107,8 @@ describe('atomic payroll reversal (PostgreSQL)',()=>{
  });
  it('conserves a concurrent ordinary withdrawal and payroll reversal',async()=>{
   const {f,id}=await posted(['0.23']);const account=await f.tenant(async c=>(await c.query('SELECT id FROM member_savings_accounts')).rows[0].id);
-  await request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(f.auth).send({amount:0.01}).expect(201);
-  await Promise.all([reverse(f,id).expect(200),request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/withdrawals`).set(f.auth).send({amount:0.01}).expect(200)]);const p=await net(f);expect(p.accounts[0].current_balance).toBe('0.00');expect(p.movements).toBe('0.00');expect(p.members[0].net).toBe('0.00');
+  await request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(f.auth).send({ idempotencyKey: randomUUID(),amount:0.01}).expect(201);
+  await Promise.all([reverse(f,id).expect(200),request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/withdrawals`).set(f.auth).send({ idempotencyKey: randomUUID(),amount:0.01}).expect(200)]);const p=await net(f);expect(p.accounts[0].current_balance).toBe('0.00');expect(p.movements).toBe('0.00');expect(p.members[0].net).toBe('0.00');
  });
  it('blocks the generic ledger bypass and cross-tenant batch guesses',async()=>{
   const {f,id}=await posted();const entry=await f.tenant(async c=>(await c.query("SELECT id FROM journal_entries WHERE source_type='payroll_batch'")).rows[0].id);const before=await snapshot(f);

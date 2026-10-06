@@ -1,3 +1,4 @@
+import { FinancialWriteDto } from '../common/dto/financial-write.dto';
 import {
   Body,
   Controller,
@@ -94,7 +95,7 @@ class LoanApplyDto {
   termMonths!: number;
 }
 
-export class MemberWithdrawalDto {
+export class MemberWithdrawalDto extends FinancialWriteDto {
   @IsOptional()
   @IsUUID()
   accountId?: string;
@@ -107,11 +108,6 @@ export class MemberWithdrawalDto {
   @IsString()
   description?: string;
 
-  @IsOptional()
-  @IsString()
-  @MinLength(16)
-  @MaxLength(100)
-  idempotencyKey?: string;
 }
 
 @Controller('member')

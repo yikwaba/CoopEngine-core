@@ -107,11 +107,11 @@ describe('phase-5 report endpoints', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${a1id}/deposits`)
       .set(auth)
-      .send({ amount: 15000 });
+      .send({ idempotencyKey: randomUUID(), amount: 15000 });
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${a1id}/deposits`)
       .set(auth)
-      .send({ amount: 10000 });
+      .send({ idempotencyKey: randomUUID(), amount: 10000 });
     const a2 = await request(app.getHttpServer())
       .post(`/api/v1/savings/member/${m2.id}/account`)
       .set(auth)
@@ -119,7 +119,7 @@ describe('phase-5 report endpoints', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${a2.body.id as string}/deposits`)
       .set(auth)
-      .send({ amount: 10000 });
+      .send({ idempotencyKey: randomUUID(), amount: 10000 });
 
     // Contribution schedule for the current month
     const schedule = await request(app.getHttpServer())

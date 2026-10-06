@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 /**
  * Money operations immediately after an opening-balance import.
  *
@@ -112,7 +113,7 @@ describe('money operations after an opening-balance import', () => {
     const res = await http
       .post(`/api/v1/savings/accounts/${accountA}/deposits`)
       .set({ Authorization: `Bearer ${token}` })
-      .send({ amount: 7500, description: 'first collection after migration' });
+      .send({ idempotencyKey: randomUUID(), amount: 7500, description: 'first collection after migration' });
     expect(res.status, JSON.stringify(res.body)).toBeLessThan(300);
     expect(Number(res.body.currentBalance)).toBe(157500);
   });
@@ -121,7 +122,7 @@ describe('money operations after an opening-balance import', () => {
     const res = await http
       .post(`/api/v1/loans/${migratedLoanId}/repayments`)
       .set({ Authorization: `Bearer ${token}` })
-      .send({ amount: 10000, description: 'first repayment after migration' });
+      .send({ idempotencyKey: randomUUID(), amount: 10000, description: 'first repayment after migration' });
     expect(res.status, JSON.stringify(res.body)).toBeLessThan(300);
   });
 

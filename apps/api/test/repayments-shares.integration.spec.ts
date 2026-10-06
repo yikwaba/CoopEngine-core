@@ -75,7 +75,7 @@ async function fundSavings(coop: CoopCtx, memberId: string, amount: number): Pro
   await request(app.getHttpServer())
     .post(`/api/v1/savings/accounts/${accountId}/deposits`)
     .set(auth)
-    .send({ amount });
+    .send({ idempotencyKey: randomUUID(), amount });
   return accountId;
 }
 
@@ -170,7 +170,7 @@ describe('loan repayment engine', () => {
     const partial = await request(app.getHttpServer())
       .post(`/api/v1/loans/${loanId}/repayments`)
       .set(auth)
-      .send({ amount: 2000, description: 'First contribution' });
+      .send({ idempotencyKey: randomUUID(), amount: 2000, description: 'First contribution' });
     expect(partial.status).toBe(200);
     expect(partial.body.loan.outstandingPrincipal).toBe(13187.5); // 15000 - 1812.5
 
@@ -184,7 +184,7 @@ describe('loan repayment engine', () => {
     const settle = await request(app.getHttpServer())
       .post(`/api/v1/loans/${loanId}/repayments`)
       .set(auth)
-      .send({ amount: 13562.5 });
+      .send({ idempotencyKey: randomUUID(), amount: 13562.5 });
     expect(settle.status).toBe(200);
     expect(settle.body.loan.status).toBe('COMPLETED');
     expect(settle.body.loan.outstandingPrincipal).toBe(0);
@@ -193,7 +193,7 @@ describe('loan repayment engine', () => {
     const extra = await request(app.getHttpServer())
       .post(`/api/v1/loans/${loanId}/repayments`)
       .set(auth)
-      .send({ amount: 100 });
+      .send({ idempotencyKey: randomUUID(), amount: 100 });
     expect(extra.status).toBe(409);
 
     // Ledger integrity across the loop:
@@ -236,14 +236,14 @@ describe('share capital on the ledger', () => {
     const purchase = await request(app.getHttpServer())
       .post(`/api/v1/shares/member/${memberId}/purchases`)
       .set(auth)
-      .send({ amount: 10000, description: 'Share allotment' });
+      .send({ idempotencyKey: randomUUID(), amount: 10000, description: 'Share allotment' });
     expect(purchase.status).toBe(201);
     expect(purchase.body.currentBalance).toBe(10000);
 
     const second = await request(app.getHttpServer())
       .post(`/api/v1/shares/member/${memberId}/purchases`)
       .set(auth)
-      .send({ amount: 5000 });
+      .send({ idempotencyKey: randomUUID(), amount: 5000 });
     expect(second.status).toBe(201);
     expect(second.body.currentBalance).toBe(15000);
 

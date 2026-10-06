@@ -73,4 +73,14 @@ describe('OpenAPI contract', () => {
     const missing = required.filter((r) => !paths.includes(r));
     expect(missing, `Spec missing routes:\n${missing.join('\n')}`).toEqual([]);
   });
+  it('advertises required retry keys on every ordinary financial posting body',()=>{
+    const doc=SwaggerModule.createDocument(app,new DocumentBuilder().setTitle('Co-opEngine API').build());
+    for(const name of ['MoneyOpDto','PurchaseDto','RepaymentDto','MemberWithdrawalDto']) {
+      const schema=doc.components?.schemas?.[name] as {required?:string[];properties?:Record<string,{minLength?:number;maxLength?:number}>};
+      expect(schema?.required).toContain('idempotencyKey');
+      expect(schema.properties?.idempotencyKey?.minLength).toBe(16);
+      expect(schema.properties?.idempotencyKey?.maxLength).toBe(100);
+    }
+  });
+
 });

@@ -143,7 +143,7 @@ describe('staff user administration', () => {
     const depositAsAccountant = await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${opened.body.id as string}/deposits`)
       .set({ Authorization: `Bearer ${accountantTok}` })
-      .send({ amount: 1000 });
+      .send({ idempotencyKey: randomUUID(), amount: 1000 });
     expect(depositAsAccountant.status).toBe(403);
 
     // Self-role change blocked

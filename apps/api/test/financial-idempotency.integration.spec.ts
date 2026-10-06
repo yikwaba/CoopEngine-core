@@ -9,6 +9,7 @@ import { withTenant } from '@coopengine/db';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
+import { SavingsService } from '../src/savings/savings.service';
 import { ADMIN_PASSWORD, TEST_DATABASE_URL, ensureRbacSeeded } from './helpers';
 
 describe('durable financial retry receipts (PostgreSQL)',()=>{
@@ -102,11 +103,13 @@ describe('durable financial retry receipts (PostgreSQL)',()=>{
  it('a rejected withdrawal leaves no receipt and may succeed with the same key later',async()=>{
   const f=await savings(),key=randomUUID(),before=await state(f);await withdrawal(f,key).expect(400);expect(await state(f)).toEqual(before);await deposit(f,randomUUID()).expect(201);await withdrawal(f,key).expect(200);expect((await state(f)).savings[0].current_balance).toBe('0.22');
  });
- it('does not reconstruct or repost a historical journal-only key',async()=>{
-  const f=await savings(),key='pay:synthetic:'+randomUUID();await deposit(f,key).expect(201);const before=await state(f);await deposit(f,key).expect(409);expect(await state(f)).toEqual(before);
+ it('trusted historical source keys cannot bypass the HTTP receipt contract',async()=>{
+  const f=await savings(),key='pay:synthetic:'+randomUUID(),actor=(await request(app.getHttpServer()).get('/api/v1/auth/me').set(f.auth).expect(200)).body.user.id;
+  const internal=()=>app.get(SavingsService).deposit(f.org,actor,f.account,0.23,undefined,key);await internal();const before=await state(f);await deposit(f,key).expect(400);await expect(internal()).rejects.toThrow(/already been used/);expect(await state(f)).toEqual(before);
  });
  it('serializes concurrent provider-reference postings without changing their journal key',async()=>{
-  const f=await savings(),key='pay:synthetic:'+randomUUID();const results=await Promise.all([deposit(f,key),deposit(f,key)]);expect(results.map(r=>r.status).sort()).toEqual([201,409]);const s=await state(f);expect(s.journals).toHaveLength(1);expect(s.journals[0].idempotency_key).toBe(key);
+  const f=await savings(),key='pay:synthetic:'+randomUUID(),actor=(await request(app.getHttpServer()).get('/api/v1/auth/me').set(f.auth).expect(200)).body.user.id;
+  const internal=()=>app.get(SavingsService).deposit(f.org,actor,f.account,0.23,undefined,key);const results=await Promise.allSettled([internal(),internal()]);expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(1);const refused=results.find(r=>r.status==='rejected') as PromiseRejectedResult;expect(refused.reason.getStatus()).toBe(409);const s=await state(f);expect(s.journals).toHaveLength(1);expect(s.journals[0].idempotency_key).toBe(key);
  });
  it('repayment replay after loan completion returns its first response without another allocation',async()=>{
   const f=await savings(4);await deposit(f,randomUUID(),1000).expect(201);const product=(await request(app.getHttpServer()).get('/api/v1/loans/products').set(f.auth).expect(200)).body.find((p:{code:string})=>p.code==='CASH-LOAN').id;await f.tenant(c=>c.query('UPDATE loan_products SET interest_rate_pa=0 WHERE id=$1',[product]));
@@ -144,6 +147,24 @@ describe('durable financial retry receipts (PostgreSQL)',()=>{
   const key=randomUUID(),send=(scope:string)=>request(app.getHttpServer()).post('/api/v1/member/withdrawals/request').set(auth).set('X-CoopEngine-Financial-Scope',scope).send({accountId:f.account,amount:5,idempotencyKey:key});
   const before=await state(f);await send(`${f.org}:${randomUUID()}`).expect(409);await send(`${randomUUID()}:${m.id}`).expect(409);expect(await state(f)).toEqual(before);
   const first=await send(me.financialScope).expect(201),after=await state(f);expect((await send(me.financialScope).expect(201)).body).toEqual(first.body);expect(await state(f)).toEqual(after);expect(after.requests).toHaveLength(1);
+ });
+
+ for(const operation of ['deposit','withdrawal','purchase','redemption','repayment','member-withdrawal'] as const) {
+  it(`${operation}: missing, malformed and reserved external keys refuse with no financial effects`,async()=>{
+   const f=await savings(),m=f.members[0]!;
+   const routes={deposit:`/savings/accounts/${f.account}/deposits`,withdrawal:`/savings/accounts/${f.account}/withdrawals`,purchase:`/shares/member/${m.id}/purchases`,redemption:`/shares/member/${m.id}/redemptions`,repayment:`/loans/${randomUUID()}/repayments`,'member-withdrawal':'/member/withdrawals/request'};
+   const token=operation==='member-withdrawal'?await app.get(JwtService).signAsync({typ:'member',sub:m.id,org:f.org,mid:String(m.memberNo)},{secret:ENV.jwtAccessSecret,expiresIn:'5m'}):null;
+   const auth=token?{Authorization:`Bearer ${token}`}:f.auth,before=await state(f);
+   for(const key of [undefined,null,'','short',' '.repeat(16),'x'.repeat(101),123,[],{},'pay:external:'+randomUUID(),'withdrawal-request:'+randomUUID()]) {
+    const result=await request(app.getHttpServer()).post('/api/v1'+routes[operation]).set(auth).send({amount:5,...(key===undefined?{}:{idempotencyKey:key})}).expect(400);
+    expect(JSON.stringify(result.body.message)).toContain('idempotencyKey');
+   }
+   expect(await state(f)).toEqual(before);
+  });
+ }
+ it('external same-key concurrent replay commits once; changed details conflict; a new key is a new payment',async()=>{
+  const f=await savings(),key=randomUUID(),responses=await Promise.all([deposit(f,key).expect(201),deposit(f,key).expect(201)]);expect(responses[0].body).toEqual(responses[1].body);
+  const before=await state(f);await deposit(f,key,0.24).expect(409);expect(await state(f)).toEqual(before);await deposit(f,randomUUID()).expect(201);const after=await state(f);expect(after.journals).toHaveLength(2);expect(after.receipts).toHaveLength(2);expect(after.savings[0].current_balance).toBe('0.46');
  });
 
 });

@@ -36,6 +36,7 @@ await context.route(`**/api/v1/savings/accounts/${account.id}/deposits`,async ro
 });
 try {
  await page.goto(portal+'/login');await page.getByLabel('Email',{exact:true}).fill(email);await page.getByLabel('Password',{exact:true}).fill(password);await page.getByLabel(/^Cooperative /).fill(slug);await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.getByRole('heading',{name:'Dashboard',exact:true}).waitFor();
+ const refused=await context.request.post(api+`/savings/accounts/${account.id}/deposits`,{data:{amount:0.23}});assert.equal(refused.status(),400,'Unkeyed external financial write refused');assert.match(JSON.stringify(await refused.json()),/idempotencyKey/);assert.equal(Number((await call(`/savings/accounts/${account.id}`,{token:staff.tokens.accessToken})).currentBalance),0,'Missing key cannot post');
  await page.goto(portal+'/front-desk');await page.getByPlaceholder('Name, phone, email or member number').fill('Recovery');await page.getByRole('button',{name:'Find member',exact:true}).click();await page.getByPlaceholder('5000').fill('0.23');await page.getByRole('button',{name:'Take a deposit',exact:true}).click();
  await page.getByRole('button',{name:'Take a deposit',exact:true}).waitFor({state:'visible'});
  await page.getByText(/Failed to fetch|fetch failed|NetworkError/).waitFor();
@@ -44,5 +45,5 @@ try {
  assert.equal(keys.length,2);assert.equal(keys[0],keys[1],'Recovery retained original key across reload');
  assert.equal(Number((await call(`/savings/accounts/${account.id}`,{token:staff.tokens.accessToken})).currentBalance),0.23,'Recovery did not double the balance');
  const journals=await call('/ledger/journals',{token:staff.tokens.accessToken});assert.equal(journals.filter(entry=>entry.source==='SAVINGS_DEPOSIT').length,1,'One deposit journal');assert.equal(errors.length,0,'No browser runtime errors');
- console.log('PASS: isolated Chromium deposit committed, response deliberately lost, reload preserved pending request, recovery acknowledged the original key, one 23-kobo balance and one journal. No external provider or production access.');
+ console.log('PASS: unkeyed external deposit returned 400 with no balance effect; isolated Chromium keyed deposit committed, response deliberately lost, reload preserved pending request, recovery acknowledged the original key, one 23-kobo balance and one journal. No external provider or production access.');
 } finally {await context.close();await browser.close();await call('/auth/logout',{token:staff.tokens.accessToken,method:'POST',status:204});}

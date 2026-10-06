@@ -135,7 +135,7 @@ describe('bulk money operations', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${acc.body.id as string}/deposits`)
       .set(auth)
-      .send({ amount: 20000 });
+      .send({ idempotencyKey: randomUUID(), amount: 20000 });
     const products = await request(app.getHttpServer()).get('/api/v1/loans/products').set(auth);
     const cashLoan = (products.body as { code: string; id: string }[]).find(
       (p) => p.code === 'CASH-LOAN',

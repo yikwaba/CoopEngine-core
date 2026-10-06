@@ -101,7 +101,7 @@ describe('savings interest engine', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${a1id}/deposits`)
       .set(auth)
-      .send({ amount: 20000 });
+      .send({ idempotencyKey: randomUUID(), amount: 20000 });
     const a2 = await request(app.getHttpServer())
       .post(`/api/v1/savings/member/${m2}/account`)
       .set(auth)
@@ -109,7 +109,7 @@ describe('savings interest engine', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${a2.body.id as string}/deposits`)
       .set(auth)
-      .send({ amount: 10000 });
+      .send({ idempotencyKey: randomUUID(), amount: 10000 });
 
     // Configure 6% p.a. on the default product
     const orgId = (await request(app.getHttpServer()).get('/api/v1/auth/me').set(auth)).body

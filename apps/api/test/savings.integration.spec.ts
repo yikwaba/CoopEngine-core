@@ -141,7 +141,7 @@ describe('savings on the ledger', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/deposits`)
       .set(auth)
-      .send({ amount: 50000 });
+      .send({ idempotencyKey: randomUUID(), amount: 50000 });
     const afterTwo = await request(app.getHttpServer())
       .get(`/api/v1/savings/accounts/${accountId}`)
       .set(auth);
@@ -151,7 +151,7 @@ describe('savings on the ledger', () => {
     const withdraw = await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/withdrawals`)
       .set(auth)
-      .send({ amount: 20000, description: 'Emergency withdrawal' });
+      .send({ idempotencyKey: randomUUID(), amount: 20000, description: 'Emergency withdrawal' });
     expect(withdraw.status).toBe(200);
     expect(withdraw.body.currentBalance).toBe(80000);
 
@@ -201,7 +201,7 @@ describe('savings on the ledger', () => {
     const empty = await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/withdrawals`)
       .set(auth)
-      .send({ amount: 1000 });
+      .send({ idempotencyKey: randomUUID(), amount: 1000 });
     expect(empty.status).toBe(400);
 
     const key = `svgs-key-${randomUUID().slice(0, 12)}`;
@@ -226,7 +226,7 @@ describe('savings on the ledger', () => {
     const bad = await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/deposits`)
       .set(auth)
-      .send({ amount: -5 });
+      .send({ idempotencyKey: randomUUID(), amount: -5 });
     expect(bad.status).toBe(400);
   });
 
@@ -250,7 +250,7 @@ describe('savings on the ledger', () => {
     const crossDep = await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountAId}/deposits`)
       .set(bAuth)
-      .send({ amount: 100 });
+      .send({ idempotencyKey: randomUUID(), amount: 100 });
     expect(crossDep.status).toBe(404);
 
     const crossStmt = await request(app.getHttpServer())
