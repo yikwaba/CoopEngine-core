@@ -48,7 +48,7 @@ describe('atomic payroll reversal (PostgreSQL)',()=>{
  const reverse=(f:Awaited<ReturnType<typeof fixture>>,id:string)=>request(app.getHttpServer()).post(`/api/v1/payroll/batches/${id}/reverse`).set(f.auth).send({reason:'Synthetic payroll correction'});
  async function snapshot(f:Awaited<ReturnType<typeof fixture>>){return f.tenant(async c=>{
   const result:Record<string,unknown>={};
-  for(const table of ['payroll_batches','journal_entries','journal_lines','member_savings_accounts','savings_transactions','audit_logs','org_counters']){
+  for(const table of ['payroll_batches','journal_entries','journal_lines','member_savings_accounts','savings_transactions','audit_logs','org_counters','financial_write_receipts']){
    result[table]=(await c.query(`SELECT * FROM ${table} WHERE organization_id=$1 ORDER BY ${table==='org_counters'?'organization_id':'id'}`,[f.org])).rows;
   }
   return result;
@@ -103,7 +103,7 @@ describe('atomic payroll reversal (PostgreSQL)',()=>{
   const {f,id}=await posted();await f.tenant(c=>c.query('UPDATE payroll_batches SET journal_entry_ids=$1::jsonb WHERE id=$2',[JSON.stringify([randomUUID()]),id]));const before=await snapshot(f);await reverse(f,id).expect(409);expect(await snapshot(f)).toEqual(before);
  });
  it('serializes concurrent duplicate reversals into one correction',async()=>{
-  const {f,id}=await posted();const responses=await Promise.all([reverse(f,id),reverse(f,id)]);expect(responses.map(r=>r.status).sort()).toEqual([200,409]);const p=await net(f);expect(p.reversals).toHaveLength(1);expect(p.movements).toBe('0.00');
+  const {f,id}=await posted();const responses=await Promise.all([reverse(f,id),reverse(f,id)]);expect(responses.map(r=>r.status).sort()).toEqual([200,200]);expect(responses[0].body).toEqual(responses[1].body);const p=await net(f);expect(p.reversals).toHaveLength(1);expect(p.movements).toBe('0.00');
  });
  it('conserves a concurrent ordinary withdrawal and payroll reversal',async()=>{
   const {f,id}=await posted(['0.23']);const account=await f.tenant(async c=>(await c.query('SELECT id FROM member_savings_accounts')).rows[0].id);

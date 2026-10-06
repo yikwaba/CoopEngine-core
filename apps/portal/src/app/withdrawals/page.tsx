@@ -17,6 +17,7 @@ interface WithdrawalRequest {
   requestedBy: string | null;
   requestedAt: string;
   decisionNotes: string | null;
+  approvalStep: number | null;
 }
 
 export default function WithdrawalApprovalsPage() {
@@ -88,15 +89,16 @@ export default function WithdrawalApprovalsPage() {
   async function decide(id: string, action: 'approve' | 'reject') {
     const token = readToken();
     if (!token) return;
-    if (action === 'approve' && !window.confirm('Post this withdrawal to the ledger?')) return;
+    if (action === 'approve' && !window.confirm('Approve this withdrawal step?' )) return;
     setBusy(true);
     setError(null);
     try {
-      await apiFetch(`/savings/withdrawals/${id}/${action}`, token, {
+      const result = await apiFetch<{approvalStatus?:string;currentStep?:number}>(`/savings/withdrawals/${id}/${action}`, token, {
         method: 'POST',
-        body: JSON.stringify(action === 'reject' ? { notes: 'rejected from the portal' } : {}),
+        body: JSON.stringify({...(action === 'reject' ? { notes: 'rejected from the portal' } : {}),
+          ...(rows.find(r=>r.id===id)?.approvalStep ? {expectedStepNo:rows.find(r=>r.id===id)!.approvalStep} : {})}),
       });
-      setMessage(action === 'approve' ? 'Withdrawal posted.' : 'Withdrawal rejected.');
+      setMessage(result.approvalStatus==='PENDING' ? `Step approved; awaiting step ${result.currentStep}.` : action === 'approve' ? 'Withdrawal posted.' : 'Withdrawal rejected.');
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Action failed');

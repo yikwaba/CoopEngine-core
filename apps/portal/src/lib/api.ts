@@ -157,22 +157,33 @@ function requestStepUp(message: string): Promise<string | null> {
 interface FinancialBrowserIntent { storageKey:string; key:string; body:string }
 /** Keep one intent through uncertain responses and refresh; successful acknowledgement ends it. */
 export function prepareFinancialWrite(path:string,init?:RequestInit):FinancialBrowserIntent|null {
- if (typeof window==='undefined' || init?.method?.toUpperCase()!=='POST' ||
-     !(/^\/savings\/accounts\/[^/]+\/(deposits|withdrawals)$/.test(path) ||
-       /^\/loans\/[^/]+\/repayments$/.test(path) ||
-       /^\/shares\/member\/[^/]+\/(purchases|redemptions)$/.test(path) || path==='/member/withdrawals/request')) return null;
+ const keyed=/^\/savings\/accounts\/[^/]+\/(deposits|withdrawals)$/.test(path) ||
+   /^\/loans\/[^/]+\/repayments$/.test(path) ||
+   /^\/shares\/member\/[^/]+\/(purchases|redemptions)$/.test(path) || path==='/member/withdrawals/request';
+ const stepped=/^\/savings\/withdrawals\/[^/]+\/(approve|reject)$/.test(path) || /^\/approvals\/requests\/[^/]+\/decisions$/.test(path);
+ const natural=stepped || /^\/loans\/[^/]+\/(approve|reject|disburse)$/.test(path) ||
+   /^\/payroll\/batches\/[^/]+\/(approve|reject|reverse)$/.test(path) ||
+   /^\/approvals\/payroll\/[^/]+\/(approve|reject)$/.test(path) ||
+   /^\/ledger\/journals\/[^/]+\/(approve-post|reverse)$/.test(path) || /^\/approvals\/journals\/[^/]+\/approve$/.test(path);
+ if (typeof window==='undefined' || init?.method?.toUpperCase()!=='POST' || !(keyed || natural)) return null;
  if (typeof init.body!=='string') throw new Error('Payment details must be JSON.');
  const details=JSON.parse(init.body) as Record<string,unknown>;
- if (details.idempotencyKey) return null;
+ if (keyed && details.idempotencyKey) return null;
  const identity=localStorage.getItem(USER_KEY)??'session';
  const storageKey='coopengine-payment:'+identity+':'+path;
- const payload=JSON.stringify(details);
+ let payload=JSON.stringify(details);
  const old=sessionStorage.getItem(storageKey);
  const pending=old?JSON.parse(old) as {key:string;payload:string}:null;
+ if (pending && stepped) {
+  const original=JSON.parse(pending.payload) as Record<string,unknown>;
+  if ('expectedStepNo' in original) details.expectedStepNo=original.expectedStepNo;
+  else delete details.expectedStepNo;
+  payload=JSON.stringify(details);
+ }
  if (pending && pending.payload!==payload) throw new Error('A previous payment has an uncertain result. Retry its original details or review the account before starting another payment.');
  const key=pending?.key??crypto.randomUUID();
  sessionStorage.setItem(storageKey,JSON.stringify({key,payload}));
- return {storageKey,key,body:JSON.stringify({...details,idempotencyKey:key})};
+ return {storageKey,key,body:keyed?JSON.stringify({...details,idempotencyKey:key}):payload};
 }
 export function acknowledgeFinancialWrite(intent:FinancialBrowserIntent|null):void {
  if (!intent) return;

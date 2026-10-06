@@ -15,7 +15,7 @@ import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthPrincipal } from '../common/auth.types';
-import { IsIn, IsNumber, IsObject, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
+import { IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApprovalsService } from './approvals.service';
 
@@ -52,6 +52,11 @@ class DecideApprovalRequestDto {
   decision!: 'APPROVE' | 'REJECT';
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  expectedStepNo?: number;
+
+  @IsOptional()
   @IsString()
   @MaxLength(1000)
   comment?: string;
@@ -77,7 +82,7 @@ export class ApprovalsController {
 
   @Post('requests/:id/decisions')
   @HttpCode(HttpStatus.OK)
-  @RequirePermissions('savings.approve', 'payroll.approve', 'loans.approve', 'ledger.approve')
+  @RequirePermissions('savings.approve', 'payroll.approve', 'loans.approve', 'journals.approve')
   @SensitiveAction('approvals.decideRequest')
   decideRequest(
     @CurrentUser() principal: AuthPrincipal,
@@ -92,7 +97,7 @@ export class ApprovalsController {
   @RequirePermissions(
     'savings.approve',
     'loans.approve',
-    'ledger.approve',
+    'journals.approve',
     'payroll.approve',
     'payments.reconcile',
   )
@@ -128,7 +133,7 @@ export class ApprovalsController {
 
   @Post('journals/:id/approve')
   @HttpCode(HttpStatus.OK)
-  @RequirePermissions('ledger.approve')
+  @RequirePermissions('journals.approve')
   @SensitiveAction('approvals.approveJournal')
   approveJournal(
     @CurrentUser() principal: AuthPrincipal,

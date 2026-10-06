@@ -12,7 +12,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
+import { IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 import { SavingsService } from './savings.service';
 import { SavingsWithdrawalsService } from './savings-withdrawals.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -66,7 +66,14 @@ export class WithdrawalPolicyDto {
   threshold!: number | null;
 }
 
-export class RejectWithdrawalDto {
+export class ApprovalStepDto {
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  expectedStepNo?: number;
+}
+
+export class RejectWithdrawalDto extends ApprovalStepDto {
   @IsOptional()
   @IsString()
   notes?: string;
@@ -238,8 +245,9 @@ export class SavingsController {
   approveWithdrawal(
     @CurrentUser() principal: AuthPrincipal,
     @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ApprovalStepDto,
   ) {
-    return this.withdrawals.approve(principal.organizationId, principal.userId, id);
+    return this.withdrawals.approve(principal.organizationId, principal.userId, id, dto.expectedStepNo);
   }
 
   @Post('withdrawals/:id/reject')
@@ -250,6 +258,6 @@ export class SavingsController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: RejectWithdrawalDto,
   ) {
-    return this.withdrawals.reject(principal.organizationId, principal.userId, id, dto.notes);
+    return this.withdrawals.reject(principal.organizationId, principal.userId, id, dto.notes, dto.expectedStepNo);
   }
 }

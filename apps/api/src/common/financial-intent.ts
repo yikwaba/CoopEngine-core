@@ -47,3 +47,12 @@ export async function financialIntent<T>(
   };
   return existingClient ? run(existingClient) : withTenant(pool,orgId,run);
 }
+
+/** An explicit step is a new approval intent; legacy retries stay bound to the actor's first decision. */
+export function approvalStepKey(entityId: string, actorUserId: string, expectedStepNo?: number): string {
+  if (expectedStepNo !== undefined) {
+    if (!Number.isSafeInteger(expectedStepNo) || expectedStepNo < 1) throw new BadRequestException('expectedStepNo must be a positive integer');
+    return `approval-step:${entityId}:${expectedStepNo}`;
+  }
+  return 'approval-actor:'+createHash('sha256').update(JSON.stringify([entityId,actorUserId])).digest('hex');
+}

@@ -1,3 +1,4 @@
+import { financialIntent } from '../common/financial-intent';
 import { moneyDecimal, moneyKobo } from '../common/money';
 import {
   BadRequestException,
@@ -8,7 +9,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
 import { LedgerService } from '../ledger/ledger.service';
@@ -175,12 +176,13 @@ export class PayrollService {
     orgId: string,
     actorUserId: string,
     batchId: string,
+    existingClient?: PoolClient,
   ): Promise<PayrollCommitResult> {
     const skipped: { row: number; reason: string }[] = [];
     let committed = 0;
     let totalPosted = 0n;
 
-    await withTenant(this.pool, orgId, async (c) => {
+    const run=async (c: PoolClient) => {
       const batch = await c.query(
         `SELECT id, status, rows FROM payroll_batches
           WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
@@ -304,7 +306,7 @@ export class PayrollService {
         `SELECT id FROM ledger_periods
           WHERE organization_id = $1 AND status = 'OPEN'
             AND now()::date BETWEEN start_date AND end_date
-          ORDER BY start_date DESC LIMIT 1`,
+          ORDER BY start_date DESC LIMIT 1 FOR SHARE`,
         [orgId],
       );
       const periodId = (period.rows[0] as { id: string } | undefined)?.id;
@@ -416,7 +418,8 @@ export class PayrollService {
       );
       committed = amountsByMember.size;
       totalPosted = total;
-    });
+    };
+    if (existingClient) await run(existingClient); else await withTenant(this.pool,orgId,run);
     return { batchId, committed, totalAmount: Number(moneyDecimal(totalPosted)), skipped };
   }
 
@@ -468,28 +471,16 @@ export class PayrollService {
    * posts in one transaction or not at all.
    */
   async approve(organizationId: string | null, actorUserId: string, batchId: string) {
-    const orgId = this.requireOrg(organizationId);
-    const submittedBy = await withTenant(this.pool, orgId, async (c) => {
-      const { rows } = await c.query(
-        `SELECT submitted_by, created_by, status FROM payroll_batches
-          WHERE organization_id = $1 AND id = $2`,
-        [orgId, batchId],
-      );
-      const batch = rows[0] as
-        | { submitted_by: string | null; created_by: string | null; status: string }
-        | undefined;
-      if (!batch) throw new NotFoundException('Payroll batch not found');
-      if (batch.status !== 'SUBMITTED') {
-        throw new ConflictException('Only a submitted batch can be approved');
-      }
-      return batch.submitted_by ?? batch.created_by;
-    });
-    if (submittedBy && submittedBy === actorUserId) {
-      throw new ConflictException(
-        'A payroll batch must be approved by a different user (segregation of duties)',
-      );
-    }
-    return this.postBatch(orgId, actorUserId, batchId);
+    const orgId=this.requireOrg(organizationId);
+    return financialIntent(this.pool,orgId,'payroll.approve',`entity:${batchId}`,
+      {actorUserId,batchId},async c=>{
+        const {rows}=await c.query(`SELECT submitted_by,created_by,status FROM payroll_batches WHERE organization_id=$1 AND id=$2 FOR UPDATE`,[orgId,batchId]);
+        const batch=rows[0];
+        if (!batch) throw new NotFoundException('Payroll batch not found');
+        if (batch.status!=='SUBMITTED') throw new ConflictException('Only a submitted batch can be approved');
+        if ((batch.submitted_by??batch.created_by)===actorUserId) throw new ConflictException('A payroll batch must be approved by a different user (segregation of duties)');
+        return this.postBatch(orgId,actorUserId,batchId,c);
+      });
   }
 
   /** Reject a submitted batch: nothing is posted and the reason is kept. */
@@ -501,7 +492,8 @@ export class PayrollService {
   ) {
     const orgId = this.requireOrg(organizationId);
     if (typeof reason !== 'string' || !reason.trim()) throw new BadRequestException('A rejection reason is required');
-    return withTenant(this.pool, orgId, async (c) => {
+    return financialIntent(this.pool,orgId,'payroll.reject',`entity:${batchId}`,
+      {actorUserId,batchId,reason:reason.trim()},async (c) => {
       const { rows } = await c.query(
         `UPDATE payroll_batches
             SET status = 'REJECTED', rejected_by = $1, rejected_at = now(), rejection_reason = $4
@@ -532,7 +524,8 @@ export class PayrollService {
     const orgId = this.requireOrg(organizationId);
     if (typeof reason !== 'string' || !reason.trim()) throw new BadRequestException('A reversal reason is required');
 
-    return withTenant(this.pool, orgId, async (c) => {
+    return financialIntent(this.pool,orgId,'payroll.reverse',`entity:${batchId}`,
+      {actorUserId,batchId,reason:reason.trim()},async (c) => {
       const batchResult = await c.query(
         `SELECT id,status,journal_entry_ids FROM payroll_batches
           WHERE organization_id=$1 AND id=$2 FOR UPDATE`, [orgId,batchId],
