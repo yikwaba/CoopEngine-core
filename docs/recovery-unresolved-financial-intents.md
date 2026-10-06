@@ -14,7 +14,7 @@ A valid financial JSON response acknowledges the intent. Empty, malformed or sca
 
 ## Verification
 
-Browser transport regressions cover explicit recovery, response loss and reload, account/cooperative switches, legacy records, malformed/empty responses, permission and validation refusals after uncertainty, sign-out/recovery, original approval steps, explicit caller keys and concurrent acknowledgements.
+52 browser transport regressions cover explicit recovery, response loss and reload, account/cooperative switches, legacy records, malformed/empty responses, permission and validation refusals after uncertainty, sign-out/recovery, original approval steps, explicit caller keys and concurrent acknowledgements.
 
 Real PostgreSQL regressions check authenticated scope denial before posting and receipt replay, current authorization on completed receipts, and member scope binding with one pending withdrawal. The existing financial retry suite independently checks one financial effect and receipt across concurrent submissions, rollback and replay.
 

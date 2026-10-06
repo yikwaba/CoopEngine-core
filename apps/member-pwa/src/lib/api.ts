@@ -16,7 +16,7 @@ export async function apiFetch<T>(
   _token?: string,
   init?: RequestInit,
 ): Promise<T> {
-  const intent=await prepareFinancialWrite(path,init);
+  const intent=await prepareFinancialWrite(path,init).catch(error=>{notifyFinancialWrites();throw error;});
   if (intent) init={...init,body:intent.body,headers:{...init?.headers,'X-CoopEngine-Financial-Scope':intent.scope}};
   try {
   const res = await fetch(`${API_BASE}${path}`, {

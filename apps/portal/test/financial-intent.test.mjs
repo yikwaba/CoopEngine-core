@@ -91,3 +91,10 @@ for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposi
   localStorage.setItem(identityKey,identity);localStorage.setItem(marker,'cookie');setFetch(async()=>Response.json({recorded:5}));await api.recoverFinancialWrite(old.storageKey);assert.equal(api.pendingFinancialWrites().length,0);
  });
 }
+
+for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposits'],['member',member,'/member/withdrawals/request']]) {
+ test(`${name}: failed account verification sends no financial write and leaves a recoverable original key`,async()=>{
+  let writes=0;globalThis.fetch=async()=>{throw new TypeError('account lookup offline');};await assert.rejects(api.apiFetch(path,undefined,{method:'POST',body:'{"amount":5}'}));const old=api.pendingFinancialWrites()[0];assert.equal(old.scope,'UNSENT');
+  setFetch(async(_url,options)=>{writes++;assert.equal(JSON.parse(options.body).idempotencyKey,old.key);return Response.json({recorded:5});});await api.recoverFinancialWrite(old.storageKey);assert.equal(writes,1);assert.equal(api.pendingFinancialWrites().length,0);
+ });
+}
