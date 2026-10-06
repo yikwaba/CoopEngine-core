@@ -110,7 +110,7 @@ describe('payroll deduction import', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${account1Id}/deposits`)
       .set(auth)
-      .send({ amount: 5000 });
+      .send({ idempotencyKey: randomUUID(), amount: 5000 });
 
     // CSV: 2 valid + 1 unknown memberNo + 1 duplicate of member 1
     const csv = [

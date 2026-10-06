@@ -99,7 +99,7 @@ describe('share redemption and member exit', () => {
     const buy = await request(app.getHttpServer())
       .post(`/api/v1/shares/member/${member.id}/purchases`)
       .set(auth)
-      .send({ amount: 10000 });
+      .send({ idempotencyKey: randomUUID(), amount: 10000 });
     expect(buy.status).toBe(201);
     expect(buy.body.currentBalance).toBe(10000);
 
@@ -107,7 +107,7 @@ describe('share redemption and member exit', () => {
     const redeem = await request(app.getHttpServer())
       .post(`/api/v1/shares/member/${member.id}/redemptions`)
       .set(auth)
-      .send({ amount: 4000 });
+      .send({ idempotencyKey: randomUUID(), amount: 4000 });
     expect(redeem.status).toBe(201);
     expect(redeem.body.currentBalance).toBe(6000);
 
@@ -115,7 +115,7 @@ describe('share redemption and member exit', () => {
     const over = await request(app.getHttpServer())
       .post(`/api/v1/shares/member/${member.id}/redemptions`)
       .set(auth)
-      .send({ amount: 6001 });
+      .send({ idempotencyKey: randomUUID(), amount: 6001 });
     expect(over.status).toBe(400);
 
     // Ledger: share capital 3000 net -6000, cash 1000 net +4000 (purchase+redemption)
@@ -146,11 +146,11 @@ describe('share redemption and member exit', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${savingsId}/deposits`)
       .set(auth)
-      .send({ amount: 30000 });
+      .send({ idempotencyKey: randomUUID(), amount: 30000 });
     await request(app.getHttpServer())
       .post(`/api/v1/shares/member/${leaver.id}/purchases`)
       .set(auth)
-      .send({ amount: 10000 });
+      .send({ idempotencyKey: randomUUID(), amount: 10000 });
 
     // Give the debtor an open loan (needs 2 guarantors + savings for the 3x rule)
     const debtSav = await request(app.getHttpServer())
@@ -160,7 +160,7 @@ describe('share redemption and member exit', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${debtSav.body.id as string}/deposits`)
       .set(auth)
-      .send({ amount: 20000 });
+      .send({ idempotencyKey: randomUUID(), amount: 20000 });
     const g2 = await createActiveMember(coop, 'G2');
     const products = await request(app.getHttpServer()).get('/api/v1/loans/products').set(auth);
     const cashLoan = (products.body as { code: string; id: string }[]).find(

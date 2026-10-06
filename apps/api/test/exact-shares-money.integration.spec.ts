@@ -25,8 +25,8 @@ describe('exact share purchases, redemptions and balances (PostgreSQL)',()=>{
   const member=(await request(app.getHttpServer()).post('/api/v1/members').set(auth).send({firstName:'Exact',lastName:'Synthetic'}).expect(201)).body.id;
   await request(app.getHttpServer()).post(`/api/v1/members/${member}/approve`).set(auth).expect(200);
   const tenant=<T>(fn:Parameters<typeof withTenant<T>>[2])=>withTenant(pool,org,fn);
-  const purchase=(amount:number,key?:string)=>request(app.getHttpServer()).post(`/api/v1/shares/member/${member}/purchases`).set(auth).send({amount,...(key?{idempotencyKey:key}:{})});
-  const redeem=(amount:number,key?:string)=>request(app.getHttpServer()).post(`/api/v1/shares/member/${member}/redemptions`).set(auth).send({amount,...(key?{idempotencyKey:key}:{})});
+  const purchase=(amount:number,key?:string)=>request(app.getHttpServer()).post(`/api/v1/shares/member/${member}/purchases`).set(auth).send({amount,idempotencyKey:key??randomUUID()});
+  const redeem=(amount:number,key?:string)=>request(app.getHttpServer()).post(`/api/v1/shares/member/${member}/redemptions`).set(auth).send({amount,idempotencyKey:key??randomUUID()});
   async function proof(){return tenant(async c=>(await c.query(`SELECT a.current_balance,
    (SELECT sum(signed_amount)::text FROM share_transactions WHERE account_id=a.id) AS movements,
    (SELECT count(*)::int FROM share_transactions WHERE account_id=a.id) AS transactions,
@@ -86,8 +86,8 @@ describe('exact share purchases, redemptions and balances (PostgreSQL)',()=>{
  });
  it('denies purchases, redemptions and account reads across tenants',async()=>{
   const a=await fixture(),b=await fixture();await b.purchase(0.23).expect(201);const before=await b.proof();
-  await request(app.getHttpServer()).post(`/api/v1/shares/member/${b.member}/purchases`).set(a.auth).send({amount:0.01}).expect(404);
-  await request(app.getHttpServer()).post(`/api/v1/shares/member/${b.member}/redemptions`).set(a.auth).send({amount:0.01}).expect(404);
+  await request(app.getHttpServer()).post(`/api/v1/shares/member/${b.member}/purchases`).set(a.auth).send({ idempotencyKey: randomUUID(),amount:0.01}).expect(404);
+  await request(app.getHttpServer()).post(`/api/v1/shares/member/${b.member}/redemptions`).set(a.auth).send({ idempotencyKey: randomUUID(),amount:0.01}).expect(404);
   await request(app.getHttpServer()).get(`/api/v1/shares/member/${b.member}`).set(a.auth).expect(404);expect(await b.proof()).toEqual(before);
  });
 });

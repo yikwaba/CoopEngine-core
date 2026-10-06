@@ -128,7 +128,7 @@ describe('savings withdrawal approvals', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/deposits`)
       .set(officer)
-      .send({ amount: 100000, description: 'opening deposit' });
+      .send({ idempotencyKey: randomUUID(), amount: 100000, description: 'opening deposit' });
 
     const balanceOf = async () => {
       const res = await request(app.getHttpServer()).get('/api/v1/reports/savings-book').set(officer);
@@ -141,7 +141,7 @@ describe('savings withdrawal approvals', () => {
     const direct = await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/withdrawals`)
       .set(officer)
-      .send({ amount: 10000, description: 'cash at counter' });
+      .send({ idempotencyKey: randomUUID(), amount: 10000, description: 'cash at counter' });
     expect(direct.status).toBe(200);
     expect(await balanceOf()).toBe(90000);
 
@@ -190,7 +190,7 @@ describe('savings withdrawal approvals', () => {
     const parked = await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/withdrawals`)
       .set(officer)
-      .send({ amount: 25000, description: 'school fees' });
+      .send({ idempotencyKey: randomUUID(), amount: 25000, description: 'school fees' });
     expect(parked.status).toBe(200);
     expect(parked.body.kind).toBe('PENDING');
     const requestId = parked.body.requestId as string;
@@ -245,7 +245,7 @@ describe('savings withdrawal approvals', () => {
     const parked2 = await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/withdrawals`)
       .set(officer)
-      .send({ amount: 6000, description: 'transport' });
+      .send({ idempotencyKey: randomUUID(), amount: 6000, description: 'transport' });
     const rejected = await request(app.getHttpServer())
       .post(`/api/v1/savings/withdrawals/${parked2.body.requestId}/reject`)
       .set(approver)
@@ -292,7 +292,7 @@ describe('savings withdrawal approvals', () => {
     const memberReq = await request(app.getHttpServer())
       .post('/api/v1/member/withdrawals/request')
       .set(member)
-      .send({ accountId, amount: 1000, description: 'personal need' });
+      .send({ idempotencyKey: randomUUID(), accountId, amount: 1000, description: 'personal need' });
     expect(memberReq.status).toBe(201);
     expect(memberReq.body.kind).toBe('PENDING');
     expect(await balanceOf()).toBe(65000);

@@ -75,7 +75,7 @@ describe('month-end close', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/deposits`)
       .set(auth)
-      .send({ amount: 25000, description: 'month deposit' });
+      .send({ idempotencyKey: randomUUID(), amount: 25000, description: 'month deposit' });
 
     // ---- period creation is idempotent -----------------------------------
     const future = await request(app.getHttpServer())
@@ -167,7 +167,7 @@ describe('month-end close', () => {
     const afterClose = await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/deposits`)
       .set(auth)
-      .send({ amount: 1000, description: 'too late' });
+      .send({ idempotencyKey: randomUUID(), amount: 1000, description: 'too late' });
     expect(afterClose.status).toBe(409);
 
     // ---- reopening lets the cooperative continue -------------------------
@@ -179,7 +179,7 @@ describe('month-end close', () => {
     const depositAgain = await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${accountId}/deposits`)
       .set(auth)
-      .send({ amount: 1000, description: 'reopened' });
+      .send({ idempotencyKey: randomUUID(), amount: 1000, description: 'reopened' });
     expect([200, 201]).toContain(depositAgain.status);
 
     // ---- locking is final ------------------------------------------------

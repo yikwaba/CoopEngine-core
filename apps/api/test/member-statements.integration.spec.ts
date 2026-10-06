@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 /**
  * Member self-service: savings view + downloadable statements.
  *
@@ -96,7 +97,7 @@ describe('member savings view and statements', () => {
     await http
       .post(`/api/v1/savings/accounts/${accountId}/deposits`)
       .set({ Authorization: `Bearer ${staffToken}` })
-      .send({ amount: 5000, description: 'March savings' })
+      .send({ idempotencyKey: randomUUID(), amount: 5000, description: 'March savings' })
       .expect(201);
 
     tokenA = await memberToken(A.email);

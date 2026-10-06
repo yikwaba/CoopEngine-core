@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 /**
  * Co-opEngine end-to-end demo (FR walkthrough).
  *
@@ -135,12 +136,12 @@ async function main() {
   await api(`/savings/accounts/${lAcc.id}/deposits`, {
     method: 'POST',
     token: staffTok,
-    body: { amount: 30000 },
+    body: { amount: 30000, idempotencyKey: randomUUID() },
   });
   await api(`/shares/member/${linus.id}/purchases`, {
     method: 'POST',
     token: staffTok,
-    body: { amount: 10000 },
+    body: { amount: 10000, idempotencyKey: randomUUID() },
   });
   ok('linus savings', naira(30000));
   ok('linus shares', naira(10000));
@@ -172,7 +173,7 @@ async function main() {
   const repayment = await api(`/loans/${loan.id}/repayments`, {
     method: 'POST',
     token: staffTok,
-    body: { amount: dueTotal },
+    body: { amount: dueTotal, idempotencyKey: randomUUID() },
   });
   ok('repaid', `${naira(dueTotal)} · outstanding now ${naira(repayment.loan.outstandingPrincipal)}`);
 

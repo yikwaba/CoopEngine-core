@@ -98,11 +98,11 @@ describe('reports and audit', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${opened.body.id as string}/deposits`)
       .set(auth)
-      .send({ amount: 30000 });
+      .send({ idempotencyKey: randomUUID(), amount: 30000 });
     await request(app.getHttpServer())
       .post(`/api/v1/shares/member/${borrower}/purchases`)
       .set(auth)
-      .send({ amount: 10000 });
+      .send({ idempotencyKey: randomUUID(), amount: 10000 });
 
     // Disburse a 20,000 cash loan (needs guarantors)
     const g1 = await member(coop, 'G1');
@@ -172,7 +172,7 @@ describe('reports and audit', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${openedA.body.id as string}/deposits`)
       .set(aAuth)
-      .send({ amount: 5000 });
+      .send({ idempotencyKey: randomUUID(), amount: 5000 });
     const products = await request(app.getHttpServer()).get('/api/v1/loans/products').set(aAuth);
     const cashLoan = (products.body as { code: string; id: string }[]).find((p) => p.code === 'CASH-LOAN') as { id: string };
     const applied = await request(app.getHttpServer())

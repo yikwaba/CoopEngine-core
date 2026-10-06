@@ -283,7 +283,7 @@ async function main() {
     await api(`/savings/accounts/${account.id}/withdrawals`, {
       token,
       method: 'POST',
-      body: { amount: 80000, description: 'School fees — pending second officer' },
+      body: { idempotencyKey: `showcase-withdraw-${Date.now()}`, amount: 80000, description: 'School fees — pending second officer' },
     });
     return 'limit set at ₦50,000; ₦80,000 awaiting approval';
   });

@@ -1,3 +1,4 @@
+import { FinancialWriteDto } from '../common/dto/financial-write.dto';
 import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
@@ -12,7 +13,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
+import { IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 import { SavingsService } from './savings.service';
 import { SavingsWithdrawalsService } from './savings-withdrawals.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -34,7 +35,7 @@ class OpenAccountDto {
   productId?: string;
 }
 
-class MoneyOpDto {
+class MoneyOpDto extends FinancialWriteDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   @Max(100_000_000_000)
@@ -45,11 +46,6 @@ class MoneyOpDto {
   @MaxLength(255)
   description?: string;
 
-  @IsOptional()
-  @IsString()
-  @MinLength(16)
-  @MaxLength(100)
-  idempotencyKey?: string;
 }
 
 class StatementQueryDto {

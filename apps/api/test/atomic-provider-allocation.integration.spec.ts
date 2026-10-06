@@ -7,6 +7,7 @@ import { withTenant } from '@coopengine/db';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
+import { SavingsService } from '../src/savings/savings.service';
 import { ReconciliationService } from '../src/payments/reconciliation.service';
 import { ADMIN_PASSWORD, TEST_DATABASE_URL, ensureRbacSeeded } from './helpers';
 
@@ -66,7 +67,7 @@ describe('atomic provider allocation and retries (PostgreSQL)',()=>{
  const net=(p:Awaited<ReturnType<typeof proof>>,code:string)=>p.totals.find(x=>x.code===code)?.net??'0.00';
  async function loan(f:F){
   const account=(await request(app.getHttpServer()).post(`/api/v1/savings/member/${f.members[0]}/account`).set(f.auth).send({}).expect(201)).body.id;
-  await request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(f.auth).send({amount:1000}).expect(201);
+  await request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(f.auth).send({ idempotencyKey: randomUUID(),amount:1000}).expect(201);
   const product=(await request(app.getHttpServer()).get('/api/v1/loans/products').set(f.auth).expect(200)).body.find((p:{code:string})=>p.code==='CASH-LOAN').id;
   await f.tenant(c=>c.query('UPDATE loan_products SET interest_rate_pa=12 WHERE id=$1',[product]));
   const id=(await request(app.getHttpServer()).post('/api/v1/loans').set(f.auth).send({memberId:f.members[0],productId:product,principal:1.15,termMonths:5,guarantorIds:f.members.slice(1)}).expect(201)).body.id;
@@ -145,7 +146,8 @@ describe('atomic provider allocation and retries (PostgreSQL)',()=>{
  });
  it('historical partial postings fail closed instead of marking matched from an idempotency error',async()=>{
   const f=await fixture(),i=await f.intent(),reference=randomUUID();const account=(await request(app.getHttpServer()).post(`/api/v1/savings/member/${f.members[0]}/account`).set(f.auth).send({}).expect(201)).body.id;
-  await request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(f.auth).send({amount:0.23,idempotencyKey:`pay:manual:${reference}`}).expect(201);
+  const actor=(await request(app.getHttpServer()).get('/api/v1/auth/me').set(f.auth).expect(200)).body.user.id;
+  await app.get(SavingsService).deposit(f.org,actor,account,0.23,undefined,`pay:manual:${reference}`);
   const id=await f.tenant(async c=>(await c.query(`INSERT INTO provider_transactions (organization_id,provider_reference,amount,narration) VALUES ($1,$2,'0.23',$3) RETURNING id`,[f.org,reference,i.reference])).rows[0].id);
   const before=await proof(f);await expect(service.match(f.org,null,id)).rejects.toThrow(/Historical provider posting/);expect(await proof(f)).toEqual(before);
  });

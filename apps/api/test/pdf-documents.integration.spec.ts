@@ -95,7 +95,7 @@ describe('printable documents', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/savings/accounts/${accountId}/deposits`)
         .set(auth)
-        .send({ amount, description: `deposit ${amount}` });
+        .send({ idempotencyKey: randomUUID(), amount, description: `deposit ${amount}` });
     }
     // cooperative loans need two ACTIVE guarantors (the Sprint 25 gate)
     const guarantors: string[] = [];

@@ -84,7 +84,7 @@ async function fundSavings(
   const deposit = await request(app.getHttpServer())
     .post(`/api/v1/savings/accounts/${opened.body.id as string}/deposits`)
     .set(auth)
-    .send({ amount });
+    .send({ idempotencyKey: randomUUID(), amount });
   expect(deposit.status).toBe(201);
   return opened.body.id as string;
 }

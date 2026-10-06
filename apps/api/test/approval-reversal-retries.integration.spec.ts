@@ -64,13 +64,13 @@ describe('approval and reversal retry receipts (PostgreSQL)',()=>{
  }
  async function withdrawal(stepped=false){
   const f=await fixture(1),account=(await post(f,`/savings/member/${f.members[0]!.id}/account`).expect(201)).body.id;
-  await post(f,`/savings/accounts/${account}/deposits`,{amount:1.15}).expect(201);
+  await post(f,`/savings/accounts/${account}/deposits`,{idempotencyKey:randomUUID(),amount:1.15}).expect(201);
   await request(app.getHttpServer()).patch('/api/v1/savings/settings/withdrawal-approval').set(f.auth).send({threshold:0}).expect(200);
   if(stepped)await f.tenant(async c=>{
    const policy=(await c.query("INSERT INTO approval_policies (organization_id,kind,min_amount,max_amount,version,description) VALUES ($1,'WITHDRAWAL',0,NULL,1,'Synthetic same checker chain') RETURNING id",[f.org])).rows[0].id;
    await c.query("INSERT INTO approval_policy_steps (organization_id,policy_id,step_no,approver_role_code) VALUES ($1,$2,1,'COOP_ADMIN'),($1,$2,2,'COOP_ADMIN')",[f.org,policy]);
   });
-  const id=(await post(f,`/savings/accounts/${account}/withdrawals`,{amount:0.23}).expect(200)).body.requestId as string;
+  const id=(await post(f,`/savings/accounts/${account}/withdrawals`,{idempotencyKey:randomUUID(),amount:0.23}).expect(200)).body.requestId as string;
   return {f,account,id};
  }
  it('payroll approval aliases replay the original result even after reversal',async()=>{
@@ -105,7 +105,7 @@ describe('approval and reversal retry receipts (PostgreSQL)',()=>{
   const f=await fixture(1),id=await journal(f);await post(f,`/ledger/journals/${id}/approve-post`).expect(200);const before=await state(f),path=`/ledger/journals/${id}/reverse`,body={reason:'Correction'};await failReceipt(f,'ledger.reverse',async()=>{await post(f,path,body).expect(500);expect(await state(f)).toEqual(before);});await post(f,path,body).expect(200);
  });
  it('legacy withdrawal concurrent approval has one payout and replays the original balance',async()=>{
-  const {f,id,account}=await withdrawal(),path=`/savings/withdrawals/${id}/approve`;const results=await Promise.all([post(f,path,{},true).expect(200),post(f,path,{},true).expect(200)]);expect(results[0].body).toEqual(results[1].body);await post(f,`/savings/accounts/${account}/deposits`,{amount:0.01}).expect(201);const before=await state(f);expect((await post(f,path,{},true).expect(200)).body).toEqual(results[0].body);expect(await state(f)).toEqual(before);
+  const {f,id,account}=await withdrawal(),path=`/savings/withdrawals/${id}/approve`;const results=await Promise.all([post(f,path,{},true).expect(200),post(f,path,{},true).expect(200)]);expect(results[0].body).toEqual(results[1].body);await post(f,`/savings/accounts/${account}/deposits`,{idempotencyKey:randomUUID(),amount:0.01}).expect(201);const before=await state(f);expect((await post(f,path,{},true).expect(200)).body).toEqual(results[0].body);expect(await state(f)).toEqual(before);
   expect(await f.tenant(async c=>(await c.query("SELECT count(*)::int AS n FROM savings_transactions WHERE type='WITHDRAWAL'")).rows[0].n)).toBe(1);
  });
  it('withdrawal rejection retries preserve one outcome and refuse changed notes',async()=>{
@@ -132,7 +132,7 @@ describe('approval and reversal retry receipts (PostgreSQL)',()=>{
  });
  async function loan(){
   const f=await fixture(4),account=(await post(f,`/savings/member/${f.members[0]!.id}/account`).expect(201)).body.id;
-  await post(f,`/savings/accounts/${account}/deposits`,{amount:1000}).expect(201);
+  await post(f,`/savings/accounts/${account}/deposits`,{idempotencyKey:randomUUID(),amount:1000}).expect(201);
   const product=(await request(app.getHttpServer()).get('/api/v1/loans/products').set(f.auth).expect(200)).body.find((p:{code:string})=>p.code==='CASH-LOAN').id;
   await f.tenant(c=>c.query('UPDATE loan_products SET interest_rate_pa=0 WHERE id=$1',[product]));
   const id=(await post(f,'/loans',{memberId:f.members[0]!.id,productId:product,principal:1.15,termMonths:5,guarantorIds:f.members.slice(1).map(m=>m.id)}).expect(201)).body.id;

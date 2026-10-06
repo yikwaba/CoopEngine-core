@@ -76,7 +76,7 @@ describe('report CSV exports', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${acc.body.id}/deposits`)
       .set(auth)
-      .send({ amount: 12500 });
+      .send({ idempotencyKey: randomUUID(), amount: 12500 });
 
     const savings = await request(app.getHttpServer())
       .get('/api/v1/reports/export/savings-book')

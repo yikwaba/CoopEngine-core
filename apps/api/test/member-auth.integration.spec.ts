@@ -104,7 +104,7 @@ describe('member self-service access', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/savings/accounts/${opened.body.id as string}/deposits`)
       .set(auth)
-      .send({ amount: 40000 });
+      .send({ idempotencyKey: randomUUID(), amount: 40000 });
 
     // Request OTP (dev provider returns the code)
     const otpReq = await request(app.getHttpServer())
