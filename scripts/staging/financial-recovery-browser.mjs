@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 assert.equal(process.env.COOPENGINE_BROWSER_TEST,'isolated-staging','Explicit isolated marker required');
@@ -24,26 +26,52 @@ try {
  await call(`/members/${member.id}/approve`,{token:staff.tokens.accessToken,method:'POST'});
  account=await call(`/savings/member/${member.id}/account`,{token:staff.tokens.accessToken,status:201,body:{}});
 } finally {await call('/auth/logout',{token:platform.tokens.accessToken,method:'POST',status:204});}
-const browser=await chromium.launch({headless:true}),context=await browser.newContext(),page=await context.newPage();
-page.setDefaultTimeout(20000);
-const errors=[];page.on('pageerror',error=>errors.push(error.name));page.on('dialog',dialog=>dialog.accept());
-await context.route('**/*',route=>[portal,'http://localhost:4399'].includes(new URL(route.request().url()).origin)?route.continue():route.abort());
-const keys=[];
-await context.route(`**/api/v1/savings/accounts/${account.id}/deposits`,async route=>{
- keys.push(route.request().postDataJSON().idempotencyKey);
- const response=await route.fetch();assert.equal(response.status(),201,'Synthetic deposit commits');
- if(keys.length===1)await route.abort('failed');else await route.fulfill({response});
-});
+const profile=await mkdtemp(join(tmpdir(),'coopengine-intent-profile-'));
+let context;
+const keys=[],errors=[];
+let releaseSend;
+const sendGate=new Promise(resolve=>releaseSend=resolve);
+let arrived;
+const firstSend=new Promise(resolve=>arrived=resolve);
+async function openBrowser() {
+ context=await chromium.launchPersistentContext(profile,{headless:true});
+ await context.route('**/*',route=>[portal,'http://localhost:4399'].includes(new URL(route.request().url()).origin)?route.continue():route.abort());
+ await context.route(`**/api/v1/savings/accounts/${account.id}/deposits`,async route=>{
+  keys.push(route.request().postDataJSON().idempotencyKey);
+  if(keys.length===1) {arrived();await sendGate;}
+  const response=await route.fetch();assert.equal(response.status(),201,'Synthetic deposit commits');
+  if(keys.length===1)await route.abort('failed');else await route.fulfill({response});
+ });
+ for(const page of context.pages()) watch(page);
+ context.on('page',watch);
+ return context.pages()[0]??context.newPage();
+}
+function watch(page){page.setDefaultTimeout(20000);page.on('pageerror',error=>errors.push(error.name));page.on('dialog',dialog=>dialog.accept());}
+let page;
 try {
+ page=await openBrowser();
  await page.goto(portal+'/login');await page.getByLabel('Email',{exact:true}).fill(email);await page.getByLabel('Password',{exact:true}).fill(password);await page.getByLabel(/^Cooperative /).fill(slug);await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.getByRole('heading',{name:'Dashboard',exact:true}).waitFor();
  const refused=await context.request.post(api+`/savings/accounts/${account.id}/deposits`,{data:{amount:0.23}});assert.equal(refused.status(),400,'Unkeyed external financial write refused');assert.match(JSON.stringify(await refused.json()),/idempotencyKey/);assert.equal(Number((await call(`/savings/accounts/${account.id}`,{token:staff.tokens.accessToken})).currentBalance),0,'Missing key cannot post');
+ // Two pages share a real browser storage partition and cookie session.
+ const other=await context.newPage();await other.goto(portal+'/front-desk');await other.getByPlaceholder('Name, phone, email or member number').fill('Recovery');await other.getByRole('button',{name:'Find member',exact:true}).click();await other.getByPlaceholder('5000').fill('0.23');
  await page.goto(portal+'/front-desk');await page.getByPlaceholder('Name, phone, email or member number').fill('Recovery');await page.getByRole('button',{name:'Find member',exact:true}).click();await page.getByPlaceholder('5000').fill('0.23');await page.getByRole('button',{name:'Take a deposit',exact:true}).click();
- await page.getByRole('button',{name:'Take a deposit',exact:true}).waitFor({state:'visible'});
- await page.getByText(/Failed to fetch|fetch failed|NetworkError/).waitFor();
+ let timeout;try {await Promise.race([firstSend,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('First synthetic deposit was not sent')),20000);})]);}finally{clearTimeout(timeout);}
+ await other.getByRole('button',{name:'Take a deposit',exact:true}).click();await other.getByText(/already being checked in another tab/).waitFor();assert.equal(keys.length,1,'Overlapping tab sent no second request');
+ releaseSend();await page.getByText(/Failed to fetch|fetch failed|NetworkError/).waitFor();
  assert.equal(Number((await call(`/savings/accounts/${account.id}`,{token:staff.tokens.accessToken})).currentBalance),0.23,'Lost browser response still committed exactly 23 kobo');
- await page.reload();await page.getByRole('complementary',{name:'Financial request recovery'}).waitFor();await page.getByRole('button',{name:'Recover original request',exact:true}).click();await page.getByText('The original request has been acknowledged. Refresh the account view to see the current balance or status.',{exact:true}).waitFor();
- assert.equal(keys.length,2);assert.equal(keys[0],keys[1],'Recovery retained original key across reload');
+ await other.getByRole('complementary',{name:'Financial request recovery'}).waitFor();
+ const original=await page.evaluate(()=>Object.entries(localStorage).filter(([key])=>key.startsWith('coopengine-payment:')));assert.equal(original.length,1,'One durable original request');
+ await page.close();await other.reload();await other.getByRole('complementary',{name:'Financial request recovery'}).waitFor();
+ // Close the entire browser profile, then reopen its on-disk state (not storageState injection).
+ await context.close();page=await openBrowser();await page.goto(portal+'/login');
+ await page.getByLabel('Email',{exact:true}).fill(email);await page.getByLabel('Password',{exact:true}).fill(password);await page.getByLabel(/^Cooperative /).fill(slug);await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.getByRole('heading',{name:'Dashboard',exact:true}).waitFor();
+ await page.getByRole('complementary',{name:'Financial request recovery'}).waitFor();
+ const restored=await page.evaluate(()=>Object.entries(localStorage).filter(([key])=>key.startsWith('coopengine-payment:')));assert.deepEqual(restored,original,'Restart preserved original key, payload and scope');
+ const observer=await context.newPage();await observer.goto(portal+'/');await observer.getByRole('complementary',{name:'Financial request recovery'}).waitFor();
+ await page.getByRole('button',{name:'Recover original request',exact:true}).click();await page.getByText('The original request has been acknowledged. Refresh the account view to see the current balance or status.',{exact:true}).waitFor();
+ await observer.getByRole('complementary',{name:'Financial request recovery'}).waitFor({state:'hidden'});
+ assert.equal(keys.length,2);assert.equal(keys[0],keys[1],'Recovery retained original key across browser restart');
  assert.equal(Number((await call(`/savings/accounts/${account.id}`,{token:staff.tokens.accessToken})).currentBalance),0.23,'Recovery did not double the balance');
  const journals=await call('/ledger/journals',{token:staff.tokens.accessToken});assert.equal(journals.filter(entry=>entry.source==='SAVINGS_DEPOSIT').length,1,'One deposit journal');assert.equal(errors.length,0,'No browser runtime errors');
- console.log('PASS: unkeyed external deposit returned 400 with no balance effect; isolated Chromium keyed deposit committed, response deliberately lost, reload preserved pending request, recovery acknowledged the original key, one 23-kobo balance and one journal. No external provider or production access.');
-} finally {await context.close();await browser.close();await call('/auth/logout',{token:staff.tokens.accessToken,method:'POST',status:204});}
+ console.log('PASS: unkeyed deposit refused; real Chromium overlapping tabs sent one request; committed response loss survived tab closure and full persistent-profile restart; original key/payload/scope recovered; observer tab cleared after acknowledgement; one 23-kobo balance and one journal. No external provider or production access.');
+} finally {releaseSend();await context?.close();await rm(profile,{recursive:true,force:true});await call('/auth/logout',{token:staff.tokens.accessToken,method:'POST',status:204});}

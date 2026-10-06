@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { FINANCIAL_WRITES_EVENT, pendingFinancialWrites, recoverFinancialWrite } from '../lib/api';
+import { FINANCIAL_WRITES_EVENT, pendingFinancialWrites, recoverFinancialWrite, syncFinancialWrites } from '../lib/api';
 
 function description(path:string,payload:string):string {
  const action=path.split('/').at(-1)??'request';
@@ -14,14 +14,14 @@ export default function FinancialRecovery() {
  const [busy,setBusy]=useState(false);
  const [message,setMessage]=useState('');
  useEffect(()=>{
-  const refresh=()=>setPending(pendingFinancialWrites());
+  const refresh=()=>{void syncFinancialWrites().then(()=>setPending(pendingFinancialWrites())).catch(error=>setMessage(error instanceof Error?error.message:'Financial recovery storage is unavailable. Recover with the original key.'));};
   refresh();window.addEventListener(FINANCIAL_WRITES_EVENT,refresh);window.addEventListener('focus',refresh);window.addEventListener('storage',refresh);
   return()=>{window.removeEventListener(FINANCIAL_WRITES_EVENT,refresh);window.removeEventListener('focus',refresh);window.removeEventListener('storage',refresh);};
  },[]);
  if (!pending.length && !message) return null;
  return <aside aria-label="Financial request recovery" style={{position:'fixed',bottom:16,right:16,maxWidth:420,maxHeight:'60vh',overflow:'auto',padding:20,background:'#fff',color:'#172b3a',border:'2px solid #b7791f',borderRadius:12,zIndex:40,boxShadow:'0 4px 20px #0002'}}>
   <h2>Financial requests to check</h2>
-  {pending.length>0 && <p>These requests have no acknowledged result. Keep this tab open until recovery completes. Recover the original request before submitting another payment. A retry may complete a request that was never posted.</p>}
+  {pending.length>0 && <p>These requests have no acknowledged result. They are retained in this browser across tabs and restarts. Sign in to the original account to recover them. Do not clear browser data while a request is unresolved. Recover the original request before submitting another payment. A retry may complete a request that was never posted.</p>}
   <ul>{pending.map(record=><li key={record.storageKey} style={{marginBottom:12}}>
    <p>{description(record.path,record.payload)}</p>
    <button type="button" disabled={busy || !record.scope} onClick={async()=>{
