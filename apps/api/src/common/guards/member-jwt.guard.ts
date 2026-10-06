@@ -9,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ENV } from '../../config/env';
 import { MemberClaims } from '../../member-auth/member-auth.service';
 import { readAccessCookie } from '../auth-cookies';
+import { assertFinancialScope } from '../financial-scope';
 
 /** Authenticated member principal attached by MemberJwtGuard. */
 export interface MemberPrincipal {
@@ -45,6 +46,7 @@ export class MemberJwtGuard implements CanActivate {
     if (claims.typ !== 'member') {
       throw new ForbiddenException('This endpoint is for members only');
     }
+    assertFinancialScope(request.headers, claims.org, claims.sub);
     request.member = {
       memberId: claims.sub,
       organizationId: claims.org,

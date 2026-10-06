@@ -13,6 +13,7 @@ import { JwtClaims, AuthPrincipal } from '../auth.types';
 import { readAccessCookie } from '../auth-cookies';
 import { withTenant } from '@coopengine/db';
 import { isPrivilegedStaff, requiresPrivilegedMfa } from '../../auth/mfa-policy';
+import { assertFinancialScope } from '../financial-scope';
 
 /**
  * Verifies the Bearer access token and confirms the underlying session is
@@ -94,6 +95,7 @@ export class JwtAuthGuard implements CanActivate {
       organizationId: session.organization_id,
       permissions: logoutOnly ? [] : session.permissions,
     };
+    assertFinancialScope(request.headers, principal.organizationId, principal.userId);
     request.user = principal;
     return true;
   }
