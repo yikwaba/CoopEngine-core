@@ -54,8 +54,9 @@ export async function apiFetch<T>(
   _token?: string,
   init?: RequestInit,
 ): Promise<T> {
-  const intent=prepareFinancialWrite(path,init);
-  if (intent) init={...init,body:intent.body};
+  const intent=await prepareFinancialWrite(path,init).catch(error=>{notifyFinancialWrites();throw error;});
+  if (intent) init={...init,body:intent.body,headers:{...init?.headers,'X-CoopEngine-Financial-Scope':intent.scope}};
+  try {
   const res = await apiResponse(path, {
     ...init,
     headers: {
@@ -63,7 +64,7 @@ export async function apiFetch<T>(
       ...(init?.headers ?? {}),
     },
   });
-  if ([400,403,404,422].includes(res.status)) acknowledgeFinancialWrite(intent);
+  if ([400,422].includes(res.status) && !intent?.wasPending) acknowledgeFinancialWrite(intent);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -78,9 +79,15 @@ export async function apiFetch<T>(
   // A 200 can carry an empty body (e.g. "nothing to return yet"); parsing that as JSON
   // throws "Unexpected end of JSON input" and takes the whole page down with it.
   const text = await res.text();
+  if (intent && !text) throw new Error('The financial response was empty. Recover the original request to confirm its result.');
   const result=(text ? JSON.parse(text) : null) as T;
+  if (intent && (result===null || typeof result!=='object')) throw new Error('The financial response was invalid. The original request is retained.');
   acknowledgeFinancialWrite(intent);
   return result;
+  } catch (error) {
+    notifyFinancialWrites();
+    throw error;
+  }
 }
 
 /**
@@ -96,6 +103,7 @@ export function storeSession(_tokens: SessionTokens, email: string): void {
   localStorage.setItem(SESSION_MARKER, 'cookie');
   localStorage.setItem(USER_KEY, JSON.stringify({ email }));
   localStorage.removeItem(TOKEN_KEY);
+  notifyFinancialWrites();
 }
 
 export function clearSession(): void {
@@ -103,6 +111,7 @@ export function clearSession(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   localStorage.removeItem(SESSION_MARKER);
+  notifyFinancialWrites();
 }
 
 /**
@@ -154,9 +163,9 @@ function requestStepUp(message: string): Promise<string | null> {
   });
 }
 
-interface FinancialBrowserIntent { storageKey:string; key:string; body:string }
+export interface FinancialBrowserIntent { storageKey:string; key:string; body:string; scope:string; wasPending:boolean }
 /** Keep one intent through uncertain responses and refresh; successful acknowledgement ends it. */
-export function prepareFinancialWrite(path:string,init?:RequestInit):FinancialBrowserIntent|null {
+export async function prepareFinancialWrite(path:string,init?:RequestInit):Promise<FinancialBrowserIntent|null> {
  const keyed=/^\/savings\/accounts\/[^/]+\/(deposits|withdrawals)$/.test(path) ||
    /^\/loans\/[^/]+\/repayments$/.test(path) ||
    /^\/shares\/member\/[^/]+\/(purchases|redemptions)$/.test(path) || path==='/member/withdrawals/request';
@@ -168,12 +177,13 @@ export function prepareFinancialWrite(path:string,init?:RequestInit):FinancialBr
  if (typeof window==='undefined' || init?.method?.toUpperCase()!=='POST' || !(keyed || natural)) return null;
  if (typeof init.body!=='string') throw new Error('Payment details must be JSON.');
  const details=JSON.parse(init.body) as Record<string,unknown>;
- if (keyed && details.idempotencyKey) return null;
- const identity=localStorage.getItem(USER_KEY)??'session';
+
+ const identity=localStorage.getItem(USER_KEY);
+ if (!identity) throw new Error('Sign in before sending a financial request.');
  const storageKey='coopengine-payment:'+identity+':'+path;
  let payload=JSON.stringify(details);
  const old=sessionStorage.getItem(storageKey);
- const pending=old?JSON.parse(old) as {key:string;payload:string}:null;
+ const pending=old?JSON.parse(old) as {key:string;payload:string;scope?:string}:null;
  if (pending && stepped) {
   const original=JSON.parse(pending.payload) as Record<string,unknown>;
   if ('expectedStepNo' in original) details.expectedStepNo=original.expectedStepNo;
@@ -181,12 +191,56 @@ export function prepareFinancialWrite(path:string,init?:RequestInit):FinancialBr
   payload=JSON.stringify(details);
  }
  if (pending && pending.payload!==payload) throw new Error('A previous payment has an uncertain result. Retry its original details or review the account before starting another payment.');
- const key=pending?.key??crypto.randomUUID();
- sessionStorage.setItem(storageKey,JSON.stringify({key,payload}));
- return {storageKey,key,body:keyed?JSON.stringify({...details,idempotencyKey:key}):payload};
+ if (pending && !pending.scope) throw new Error('This older pending request needs account review before another payment. Its original record has been retained.');
+ const reservedKey=pending?.key??(typeof details.idempotencyKey==='string'?details.idempotencyKey:crypto.randomUUID());
+ if (!pending) sessionStorage.setItem(storageKey,JSON.stringify({key:reservedKey,payload,scope:'UNSENT'}));
+ const response=await fetch(`${API_BASE}/auth/me`,{credentials:'include',cache:'no-store'});
+ if (!response.ok) throw new Error('Sign in to the original account before recovering a financial request.');
+ const context=await response.json() as {financialScope?:string};
+ if (!context.financialScope) throw new Error('Financial account verification failed. No payment was sent.');
+ if (pending && pending.scope!=='UNSENT' && pending.scope!==context.financialScope) throw new Error('This pending request belongs to another account or cooperative. Sign in to its original account.');
+ // Recheck after the asynchronous account lookup: two submissions must claim one intent.
+ const latest=sessionStorage.getItem(storageKey);
+ const concurrent=latest?JSON.parse(latest) as {key:string;payload:string;scope:string}:null;
+ if (concurrent && (concurrent.key!==reservedKey || concurrent.payload!==payload || (concurrent.scope!=='UNSENT' && concurrent.scope!==context.financialScope))) throw new Error('A previous payment has an uncertain result. Recover it first.');
+ const key=reservedKey;
+ const scope=context.financialScope;
+ sessionStorage.setItem(storageKey,JSON.stringify({key,payload,scope}));
+ notifyFinancialWrites();
+ return {storageKey,key,scope,wasPending:!!pending && pending.scope!=='UNSENT',body:keyed?JSON.stringify({...details,idempotencyKey:key}):payload};
 }
 export function acknowledgeFinancialWrite(intent:FinancialBrowserIntent|null):void {
  if (!intent) return;
  const current=sessionStorage.getItem(intent.storageKey);
  if (current && (JSON.parse(current) as {key:string}).key===intent.key) sessionStorage.removeItem(intent.storageKey);
+ notifyFinancialWrites();
+}
+
+export const FINANCIAL_WRITES_EVENT = 'coopengine-financial-writes';
+function notifyFinancialWrites(): void {
+ if (typeof window!=='undefined' && typeof window.dispatchEvent==='function') window.dispatchEvent(new Event(FINANCIAL_WRITES_EVENT));
+}
+/** Only records for the currently signed-in browser identity are exposed. Never offer discard. */
+export function pendingFinancialWrites(): {storageKey:string;path:string;key:string;scope?:string;payload:string}[] {
+ if (typeof window==='undefined' || !localStorage.getItem(SESSION_MARKER)) return [];
+ const identity=localStorage.getItem(USER_KEY);
+ if (!identity) return [];
+ const prefix='coopengine-payment:'+identity+':';
+ const result=[];
+ for(let i=0;i<sessionStorage.length;i++) {
+  const storageKey=sessionStorage.key(i);
+  if (!storageKey?.startsWith(prefix)) continue;
+  try {
+   const record=JSON.parse(sessionStorage.getItem(storageKey)??'null');
+   if (record && typeof record.payload==='string' && typeof record.key==='string') result.push({storageKey,path:storageKey.slice(prefix.length),...record});
+  } catch { /* A malformed record is retained for review, never replaced by a new key. */ }
+ }
+ return result;
+}
+export async function recoverFinancialWrite(storageKey:string):Promise<unknown> {
+ const pending=pendingFinancialWrites().find(record=>record.storageKey===storageKey);
+ if (!pending) throw new Error('This pending request is unavailable for the signed-in account.');
+ if (!pending.scope) throw new Error('This older request needs account review. Its original record has been retained.');
+ // Use the ordinary authorized route, current permissions, and step-up verification.
+ return apiFetch(pending.path,undefined,{method:'POST',body:pending.payload});
 }

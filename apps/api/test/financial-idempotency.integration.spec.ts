@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Pool } from 'pg';
+import { JwtService } from '@nestjs/jwt';
+import { ENV } from '../src/config/env';
 import { withTenant } from '@coopengine/db';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -122,6 +124,26 @@ describe('durable financial retry receipts (PostgreSQL)',()=>{
  it('completed receipts cannot be changed by an ordinary tenant transaction',async()=>{
   const f=await savings(),key=randomUUID();await deposit(f,key).expect(201);const before=await state(f);
   await expect(f.tenant(async c=>{await c.query("SET LOCAL app.maintenance='off'");await c.query("UPDATE financial_write_receipts SET response='{}'::jsonb");})).rejects.toThrow(/immutable/);expect(await state(f)).toEqual(before);
+ });
+
+ it('authenticated scope rejects wrong tenant or actor before posting and before receipt replay',async()=>{
+  const f=await savings(),key=randomUUID(),me=(await request(app.getHttpServer()).get('/api/v1/auth/me').set(f.auth).expect(200)).body;
+  expect(me.financialScope).toBe(`${f.org}:${me.user.id}`);
+  const send=(scope:string)=>request(app.getHttpServer()).post(`/api/v1/savings/accounts/${f.account}/deposits`).set(f.auth).set('X-CoopEngine-Financial-Scope',scope).send({amount:0.23,idempotencyKey:key});
+  const empty=await state(f);await send(`${randomUUID()}:${me.user.id}`).expect(409);await send(`${f.org}:${randomUUID()}`).expect(409);expect(await state(f)).toEqual(empty);
+  const first=await send(me.financialScope).expect(201),posted=await state(f);expect((await send(me.financialScope).expect(201)).body).toEqual(first.body);await send(`${randomUUID()}:${me.user.id}`).expect(409);expect(await state(f)).toEqual(posted);
+ });
+ it('current permissions still gate recovery of a completed receipt',async()=>{
+  const f=await savings(),key=randomUUID();await deposit(f,key).expect(201);const before=await state(f),me=(await request(app.getHttpServer()).get('/api/v1/auth/me').set(f.auth).expect(200)).body;
+  await pool.query('DELETE FROM user_roles WHERE user_id=$1',[me.user.id]);await deposit(f,key).expect(401);expect(await state(f)).toEqual(before);
+ });
+
+ it('member recovery is bound to the current member and cooperative',async()=>{
+  const f=await savings(),m=f.members[0]!,token=await app.get(JwtService).signAsync({typ:'member',sub:m.id,org:f.org,mid:String(m.memberNo)},{secret:ENV.jwtAccessSecret,expiresIn:'5m'}),auth={Authorization:`Bearer ${token}`};
+  const me=(await request(app.getHttpServer()).get('/api/v1/member/me').set(auth).expect(200)).body;expect(me.financialScope).toBe(`${f.org}:${m.id}`);
+  const key=randomUUID(),send=(scope:string)=>request(app.getHttpServer()).post('/api/v1/member/withdrawals/request').set(auth).set('X-CoopEngine-Financial-Scope',scope).send({accountId:f.account,amount:5,idempotencyKey:key});
+  const before=await state(f);await send(`${f.org}:${randomUUID()}`).expect(409);await send(`${randomUUID()}:${m.id}`).expect(409);expect(await state(f)).toEqual(before);
+  const first=await send(me.financialScope).expect(201),after=await state(f);expect((await send(me.financialScope).expect(201)).body).toEqual(first.body);expect(await state(f)).toEqual(after);expect(after.requests).toHaveLength(1);
  });
 
 });

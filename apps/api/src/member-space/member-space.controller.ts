@@ -127,11 +127,12 @@ export class MemberSpaceController {
   ) {}
 
   @Get('me')
-  me(@CurrentMember() principal: MemberPrincipal) {
-    return this.memberSpaceService.me(
+  async me(@CurrentMember() principal: MemberPrincipal) {
+    const member = await this.memberSpaceService.me(
       principal.organizationId,
       principal.memberId,
     );
+    return { ...member, financialScope: `${principal.organizationId}:${principal.memberId}` };
   }
 
   @Get('dashboard')

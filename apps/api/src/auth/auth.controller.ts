@@ -267,6 +267,7 @@ export class AuthController {
       organizationId: principal.organizationId,
       organizationSlug: organizations.find(org => org.id === principal.organizationId)?.slug ?? null,
       sessionId: principal.sessionId,
+      financialScope: `${principal.organizationId}:${principal.userId}`,
       permissions: principal.permissions,
     };
   }
