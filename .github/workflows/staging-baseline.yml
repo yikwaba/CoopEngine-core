@@ -13,6 +13,7 @@ on:
       - apps/api/src/common/financial-intent.ts
       - apps/api/src/ledger/**
       - apps/portal/src/**
+      - apps/member-pwa/src/**
       - packages/db/migrations/**
       - staging/**
       - scripts/staging/**
@@ -81,7 +82,7 @@ jobs:
           COOPENGINE_BROWSER_TEST: isolated-staging
         run: |
           BROWSER_TEST_MODULE_ROOT="$RUNNER_TEMP/coopengine-browser/node_modules" node scripts/staging/mfa-browser.mjs
-      - name: Recover a committed financial request after browser response loss
+      - name: Recover a committed request across tabs and browser restart
         env:
           COOPENGINE_BROWSER_TEST: isolated-staging
         run: |

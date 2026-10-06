@@ -11,7 +11,7 @@ export const API_BASE =
  * signed in is kept locally, for the header. A token written by an earlier build is deleted on
  * sight, so an upgrade does not leave one lying around.
  */
-export async function apiFetch<T>(
+async function sendApiFetch<T>(
   path: string,
   _token?: string,
   init?: RequestInit,
@@ -136,8 +136,69 @@ export async function downloadMemberPdf(path: string, filename: string): Promise
   URL.revokeObjectURL(url);
 }
 
+/** Exclusion spans verification, send and acknowledgement; a second tab never queues a new payment. */
+export async function apiFetch<T>(path:string,token?:string,init?:RequestInit):Promise<T> {
+ if (typeof window==='undefined' || init?.method?.toUpperCase()!=='POST' || !isFinancialPath(path)) return sendApiFetch<T>(path,token,init);
+ if (!window.navigator?.locks) throw new Error('This browser cannot safely coordinate financial requests. Use a supported browser over HTTPS or localhost. No payment was sent.');
+ return window.navigator.locks.request('coopengine-financial-write', {ifAvailable:true}, async lock=>{
+  if (!lock) throw new Error('A financial request is already being checked in another tab or window. Wait for its result, then recover the original request if needed. No second payment was sent.');
+  migrateLegacyFinancialRecords();
+  return sendApiFetch<T>(path,token,init);
+ });
+}
+function isFinancialPath(path:string):boolean {
+ return /^\/savings\/accounts\/[^/]+\/(deposits|withdrawals)$/.test(path) ||
+  /^\/loans\/[^/]+\/repayments$/.test(path) || /^\/shares\/member\/[^/]+\/(purchases|redemptions)$/.test(path) || path==='/member/withdrawals/request' ||
+  /^\/savings\/withdrawals\/[^/]+\/(approve|reject)$/.test(path) || /^\/approvals\/requests\/[^/]+\/decisions$/.test(path) ||
+  /^\/loans\/[^/]+\/(approve|reject|disburse)$/.test(path) || /^\/payroll\/batches\/[^/]+\/(approve|reject|reverse)$/.test(path) ||
+  /^\/approvals\/payroll\/[^/]+\/(approve|reject)$/.test(path) || /^\/ledger\/journals\/[^/]+\/(approve-post|reverse)$/.test(path) || /^\/approvals\/journals\/[^/]+\/approve$/.test(path);
+}
+/** Display fields never define the durable account namespace. Server scope still authorizes replay. */
+function financialBrowserIdentity(raw:string|null):string|null {
+ try {
+  const identity=JSON.parse(raw??'null') as Record<string,unknown>|null;
+  const value=identity?.id;
+  return typeof value==='string' && value.trim()?JSON.stringify({id:value.trim()}):null;
+ }catch{return null;}
+}
+/** Import tab records and old display-field namespaces without overwriting conflicting intents. */
+function migrateLegacyFinancialRecords():void {
+ const identity=financialBrowserIdentity(localStorage.getItem(MEMBER_INFO_KEY));if(!identity) return;
+ const prefix='coopengine-payment:',sources:{storage:Storage;key:string}[]=[];
+ for(const storage of [localStorage,sessionStorage]) {
+  for(let i=0;i<storage.length;i++) {const key=storage.key(i);if(key?.startsWith(prefix)) sources.push({storage,key});}
+ }
+ for(const {storage,key:sourceKey} of sources) {
+  // The final JSON object terminator separates old identity metadata from the API route.
+  const separator=sourceKey.lastIndexOf('}:/');
+  if(separator<0 || financialBrowserIdentity(sourceKey.slice(prefix.length,separator+1))!==identity) continue;
+  const storageKey=prefix+identity+sourceKey.slice(separator+1);
+  if(storage===localStorage && sourceKey===storageKey) continue;
+  const raw=storage.getItem(sourceKey);if(!raw) continue;
+  const old=JSON.parse(raw) as {key:string;payload:string;scope?:string};
+  if(!old || typeof old.key!=='string' || typeof old.payload!=='string') throw new Error('An older financial request needs account review. Its original record is retained.');
+  const ack='coopengine-payment-ack:'+storageKey+':'+old.key;
+  // Respect both the canonical marker and the marker written by the previous display-field namespace.
+  if(localStorage.getItem(ack)==='acknowledged' || localStorage.getItem('coopengine-payment-ack:'+sourceKey+':'+old.key)==='acknowledged') {
+   localStorage.setItem(ack,'acknowledged');storage.removeItem(sourceKey);continue;
+  }
+  const current=localStorage.getItem(storageKey);
+  if(current) {
+   const record=JSON.parse(current) as {key:string;payload:string;scope?:string};
+   if(record.key!==old.key || record.payload!==old.payload || record.scope!==old.scope) throw new Error('Conflicting financial records from older tabs need account review. Both original records are retained.');
+  }
+  localStorage.setItem(storageKey,JSON.stringify({...old,legacy:true}));
+  storage.removeItem(sourceKey);
+ }
+}
+/** Import legacy records before rendering recovery under the same cross-tab lock. */
+export async function syncFinancialWrites():Promise<void> {
+ if(typeof window==='undefined' || !window.navigator?.locks) return;
+ await window.navigator.locks.request('coopengine-financial-write',()=>{migrateLegacyFinancialRecords();});
+}
+
 export interface FinancialBrowserIntent { storageKey:string; key:string; body:string; scope:string; wasPending:boolean }
-/** Keep one intent through uncertain responses and refresh; successful acknowledgement ends it. */
+/** Keep one intent across tabs, restarts and uncertain responses; successful acknowledgement ends it. */
 export async function prepareFinancialWrite(path:string,init?:RequestInit):Promise<FinancialBrowserIntent|null> {
  if (typeof window==='undefined' || init?.method?.toUpperCase()!=='POST' ||
      !(/^\/savings\/accounts\/[^/]+\/(deposits|withdrawals)$/.test(path) ||
@@ -146,35 +207,43 @@ export async function prepareFinancialWrite(path:string,init?:RequestInit):Promi
  if (typeof init.body!=='string') throw new Error('Payment details must be JSON.');
  const details=JSON.parse(init.body) as Record<string,unknown>;
 
- const identity=localStorage.getItem(MEMBER_INFO_KEY);
+ const identity=financialBrowserIdentity(localStorage.getItem(MEMBER_INFO_KEY));
  if (!identity) throw new Error('Sign in before sending a financial request.');
  const storageKey='coopengine-payment:'+identity+':'+path;
  const payload=JSON.stringify(details);
- const old=sessionStorage.getItem(storageKey);
+ const old=localStorage.getItem(storageKey);
  const pending=old?JSON.parse(old) as {key:string;payload:string;scope?:string}:null;
+ if(old && (!pending || typeof pending.key!=='string' || typeof pending.payload!=='string')) throw new Error('A malformed financial record needs account review. Its original record is retained.');
  if (pending && pending.payload!==payload) throw new Error('A previous payment has an uncertain result. Retry its original details or review the account before starting another payment.');
  if (pending && !pending.scope) throw new Error('This older pending request needs account review before another payment. Its original record has been retained.');
  const reservedKey=pending?.key??(typeof details.idempotencyKey==='string'?details.idempotencyKey:crypto.randomUUID());
- if (!pending) sessionStorage.setItem(storageKey,JSON.stringify({key:reservedKey,payload,scope:'UNSENT'}));
+ if (!pending) localStorage.setItem(storageKey,JSON.stringify({key:reservedKey,payload,scope:'UNSENT'}));
  const response=await fetch(`${API_BASE}/member/me`,{credentials:'include',cache:'no-store'});
  if (!response.ok) throw new Error('Sign in to the original account before recovering a financial request.');
  const context=await response.json() as {financialScope?:string};
  if (!context.financialScope) throw new Error('Financial account verification failed. No payment was sent.');
  if (pending && pending.scope!=='UNSENT' && pending.scope!==context.financialScope) throw new Error('This pending request belongs to another account or cooperative. Sign in to its original account.');
  // Recheck after the asynchronous account lookup: two submissions must claim one intent.
- const latest=sessionStorage.getItem(storageKey);
+ const latest=localStorage.getItem(storageKey);
  const concurrent=latest?JSON.parse(latest) as {key:string;payload:string;scope:string}:null;
  if (concurrent && (concurrent.key!==reservedKey || concurrent.payload!==payload || (concurrent.scope!=='UNSENT' && concurrent.scope!==context.financialScope))) throw new Error('A previous payment has an uncertain result. Recover it first.');
  const key=reservedKey;
  const scope=context.financialScope;
- sessionStorage.setItem(storageKey,JSON.stringify({key,payload,scope}));
+ localStorage.setItem(storageKey,JSON.stringify({key,payload,scope,...(pending && 'legacy' in pending && pending.legacy?{legacy:true}:{})}));
  notifyFinancialWrites();
  return {storageKey,key,scope,wasPending:!!pending && pending.scope!=='UNSENT',body:JSON.stringify({...details,idempotencyKey:key})};
 }
 export function acknowledgeFinancialWrite(intent:FinancialBrowserIntent|null):void {
  if (!intent) return;
- const current=sessionStorage.getItem(intent.storageKey);
- if (current && (JSON.parse(current) as {key:string}).key===intent.key) sessionStorage.removeItem(intent.storageKey);
+ const current=localStorage.getItem(intent.storageKey);
+ if (current) {
+  const record=JSON.parse(current) as {key:string;legacy?:boolean};
+  if(record.key===intent.key) {
+   // A pre-update tab may still retain this migrated key.
+   if(record.legacy) localStorage.setItem('coopengine-payment-ack:'+intent.storageKey+':'+record.key,'acknowledged');
+   localStorage.removeItem(intent.storageKey);
+  }
+ }
  notifyFinancialWrites();
 }
 
@@ -185,15 +254,15 @@ function notifyFinancialWrites(): void {
 /** Only records for the currently signed-in browser identity are exposed. Never offer discard. */
 export function pendingFinancialWrites(): {storageKey:string;path:string;key:string;scope?:string;payload:string}[] {
  if (typeof window==='undefined' || !localStorage.getItem(MEMBER_SESSION_MARKER)) return [];
- const identity=localStorage.getItem(MEMBER_INFO_KEY);
+ const identity=financialBrowserIdentity(localStorage.getItem(MEMBER_INFO_KEY));
  if (!identity) return [];
  const prefix='coopengine-payment:'+identity+':';
  const result=[];
- for(let i=0;i<sessionStorage.length;i++) {
-  const storageKey=sessionStorage.key(i);
+ for(let i=0;i<localStorage.length;i++) {
+  const storageKey=localStorage.key(i);
   if (!storageKey?.startsWith(prefix)) continue;
   try {
-   const record=JSON.parse(sessionStorage.getItem(storageKey)??'null');
+   const record=JSON.parse(localStorage.getItem(storageKey)??'null');
    if (record && typeof record.payload==='string' && typeof record.key==='string') result.push({storageKey,path:storageKey.slice(prefix.length),...record});
   } catch { /* A malformed record is retained for review, never replaced by a new key. */ }
  }

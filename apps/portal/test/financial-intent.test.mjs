@@ -7,7 +7,8 @@ let scope='org-a:actor-a';
 function setFetch(handler){globalThis.fetch=async(url,options)=>String(url).endsWith('/auth/me')||String(url).endsWith('/member/me')?Response.json({financialScope:scope}):handler(url,options);}
 
 const memory=()=>{const values=new Map();return {getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k),key:i=>Array.from(values.keys())[i]??null,get length(){return values.size}};};
-beforeEach(()=>{scope='org-a:actor-a';globalThis.window={location:{pathname:'/front-desk'}};globalThis.localStorage=memory();globalThis.sessionStorage=memory();localStorage.setItem(staff.USER_KEY,'{"email":"staff@example.invalid"}');localStorage.setItem(staff.SESSION_MARKER,'cookie');localStorage.setItem(member.MEMBER_INFO_KEY,'{"id":"member-a"}');localStorage.setItem(member.MEMBER_SESSION_MARKER,'cookie');});
+function locks(){let held=false;const waiters=[];return {async request(_name,options,callback){if(typeof options==='function'){callback=options;options={};}if(held && options.ifAvailable)return callback(null);if(held)await new Promise(resolve=>waiters.push(resolve));held=true;try{return await callback({name:_name});}finally{held=false;waiters.shift()?.();}}};}
+beforeEach(()=>{scope='org-a:actor-a';globalThis.window={location:{pathname:'/front-desk'},navigator:{locks:locks()}};globalThis.localStorage=memory();globalThis.sessionStorage=memory();localStorage.setItem(staff.USER_KEY,'{"email":"staff@example.invalid"}');localStorage.setItem(staff.SESSION_MARKER,'cookie');localStorage.setItem(member.MEMBER_INFO_KEY,'{"id":"member-a"}');localStorage.setItem(member.MEMBER_SESSION_MARKER,'cookie');});
 afterEach(()=>{globalThis.fetch=originalFetch;delete globalThis.window;delete globalThis.localStorage;delete globalThis.sessionStorage;});
 for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposits'],['member',member,'/member/withdrawals/request']]){
  const init={method:'POST',body:JSON.stringify({amount:5})};
@@ -21,8 +22,8 @@ for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposi
  test(`${name}: a malformed successful response retains the original key`,async()=>{
   const keys=[];setFetch(async(_url,options)=>{keys.push(JSON.parse(options.body).idempotencyKey);return keys.length===1?new Response('{',{status:200}):Response.json({recorded:5});});await assert.rejects(api.apiFetch(path,undefined,init));await api.apiFetch(path,undefined,init);assert.equal(keys[0],keys[1]);
  });
- test(`${name}: concurrent duplicate submissions retain one key`,async()=>{
-  const keys=[];setFetch(async(_url,options)=>{keys.push(JSON.parse(options.body).idempotencyKey);await Promise.resolve();return Response.json({recorded:5});});await Promise.all([api.apiFetch(path,undefined,init),api.apiFetch(path,undefined,init)]);assert.equal(keys[0],keys[1]);
+ test(`${name}: an overlapping submission is refused rather than queued as a new payment`,async()=>{
+  const keys=[];setFetch(async(_url,options)=>{keys.push(JSON.parse(options.body).idempotencyKey);await Promise.resolve();return Response.json({recorded:5});});const first=api.apiFetch(path,undefined,init);await assert.rejects(api.apiFetch(path,undefined,init),/another tab/);await first;assert.equal(keys.length,1);
  });
  test(`${name}: definitive validation refusal allows corrected details`,async()=>{
   let calls=0;setFetch(async()=>++calls===1?Response.json({message:'Invalid amount'},{status:400}):Response.json({recorded:6}));await assert.rejects(api.apiFetch(path,undefined,init),/Invalid amount/);assert.deepEqual(await api.apiFetch(path,undefined,{...init,body:'{"amount":6}'}),{recorded:6});
@@ -67,12 +68,12 @@ for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposi
  });
  test(`${name}: legacy unbound requests are retained and cannot be replayed`,async()=>{
   const identity=localStorage.getItem(name==='staff'?staff.USER_KEY:member.MEMBER_INFO_KEY),storageKey='coopengine-payment:'+identity+':'+path;
-  sessionStorage.setItem(storageKey,JSON.stringify({key:'legacy-key-123456789',payload:init.body}));let calls=0;setFetch(async()=>{calls++;return Response.json({});});await assert.rejects(api.recoverFinancialWrite(storageKey),/older request/);assert.equal(calls,0);assert.equal(api.pendingFinancialWrites().length,1);
+  sessionStorage.setItem(storageKey,JSON.stringify({key:'legacy-key-123456789',payload:init.body}));await api.syncFinancialWrites();let calls=0;setFetch(async()=>{calls++;return Response.json({});});await assert.rejects(api.recoverFinancialWrite(storageKey),/older request/);assert.equal(calls,0);assert.equal(api.pendingFinancialWrites().length,1);
  });
- test(`${name}: fast acknowledgement cannot give a concurrent submission a new key`,async()=>{
+ test(`${name}: account verification holds the cross-tab lock until acknowledgement`,async()=>{
   let release;const gate=new Promise(resolve=>release=resolve);let lookups=0;const keys=[];
-  globalThis.fetch=async(url,options)=>{if(String(url).endsWith('/me')){if(++lookups===2)await gate;return Response.json({financialScope:scope});}keys.push(JSON.parse(options.body).idempotencyKey);return Response.json({recorded:5});};
-  const first=api.apiFetch(path,undefined,init),second=api.apiFetch(path,undefined,init);await first;release();await second;assert.equal(keys[0],keys[1]);
+  globalThis.fetch=async(url,options)=>{if(String(url).endsWith('/me')){lookups++;await gate;return Response.json({financialScope:scope});}keys.push(JSON.parse(options.body).idempotencyKey);return Response.json({recorded:5});};
+  const first=api.apiFetch(path,undefined,init);await assert.rejects(api.apiFetch(path,undefined,init),/another tab/);release();await first;assert.equal(lookups,1);assert.equal(keys.length,1);
  });
 }
 
@@ -87,7 +88,7 @@ for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposi
  test(`${name}: sign-out hides but retains a pending request; the original sign-in can recover`,async()=>{
   setFetch(async()=>{throw new TypeError('lost response');});await assert.rejects(api.apiFetch(path,undefined,{method:'POST',body:'{"amount":5}'}));
   const old=api.pendingFinancialWrites()[0],identityKey=name==='staff'?staff.USER_KEY:member.MEMBER_INFO_KEY,marker=name==='staff'?staff.SESSION_MARKER:member.MEMBER_SESSION_MARKER,identity=localStorage.getItem(identityKey);
-  name==='staff'?staff.clearSession():member.clearMemberSession();assert.equal(api.pendingFinancialWrites().length,0);assert.ok(sessionStorage.getItem(old.storageKey));
+  name==='staff'?staff.clearSession():member.clearMemberSession();assert.equal(api.pendingFinancialWrites().length,0);assert.ok(localStorage.getItem(old.storageKey));
   localStorage.setItem(identityKey,identity);localStorage.setItem(marker,'cookie');setFetch(async()=>Response.json({recorded:5}));await api.recoverFinancialWrite(old.storageKey);assert.equal(api.pendingFinancialWrites().length,0);
  });
 }
@@ -96,5 +97,60 @@ for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposi
  test(`${name}: failed account verification sends no financial write and leaves a recoverable original key`,async()=>{
   let writes=0;globalThis.fetch=async()=>{throw new TypeError('account lookup offline');};await assert.rejects(api.apiFetch(path,undefined,{method:'POST',body:'{"amount":5}'}));const old=api.pendingFinancialWrites()[0];assert.equal(old.scope,'UNSENT');
   setFetch(async(_url,options)=>{writes++;assert.equal(JSON.parse(options.body).idempotencyKey,old.key);return Response.json({recorded:5});});await api.recoverFinancialWrite(old.storageKey);assert.equal(writes,1);assert.equal(api.pendingFinancialWrites().length,0);
+ });
+}
+
+for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposits'],['member',member,'/member/withdrawals/request']]) {
+ const init={method:'POST',body:'{"amount":5}'};
+ test(`${name}: a new tab and browser session recover the original persistent record`,async()=>{
+  let key;setFetch(async(_url,options)=>{key=JSON.parse(options.body).idempotencyKey;throw new TypeError('lost response');});await assert.rejects(api.apiFetch(path,undefined,init));const pending=api.pendingFinancialWrites()[0];
+  globalThis.sessionStorage=memory();setFetch(async(_url,options)=>{assert.equal(JSON.parse(options.body).idempotencyKey,key);return Response.json({recorded:5});});await api.recoverFinancialWrite(pending.storageKey);assert.equal(api.pendingFinancialWrites().length,0);
+ });
+ test(`${name}: migrated bound legacy key is recovered and old tab copies cannot resurrect it`,async()=>{
+  const identity=localStorage.getItem(name==='staff'?staff.USER_KEY:member.MEMBER_INFO_KEY),storageKey='coopengine-payment:'+identity+':'+path;
+  const raw=JSON.stringify({key:'migrated-key-123456789',payload:init.body,scope});sessionStorage.setItem(storageKey,raw);await api.syncFinancialWrites();assert.equal(sessionStorage.getItem(storageKey),null);
+  setFetch(async(_url,options)=>{assert.equal(JSON.parse(options.body).idempotencyKey,'migrated-key-123456789');return Response.json({recorded:5});});await api.recoverFinancialWrite(storageKey);
+  sessionStorage.setItem(storageKey,raw);await api.syncFinancialWrites();assert.equal(api.pendingFinancialWrites().length,0);assert.equal(sessionStorage.getItem(storageKey),null);
+ });
+ test(`${name}: conflicting old tab records preserve both keys and send nothing`,async()=>{
+  setFetch(async()=>{throw new TypeError('lost response');});await assert.rejects(api.apiFetch(path,undefined,init));const old=api.pendingFinancialWrites()[0],durable=localStorage.getItem(old.storageKey),legacy=JSON.stringify({key:'different-key-123456789',payload:init.body,scope});
+  sessionStorage.setItem(old.storageKey,legacy);let sent=0;setFetch(async()=>{sent++;return Response.json({});});await assert.rejects(api.apiFetch(path,undefined,init),/Conflicting financial records/);assert.equal(sent,0);assert.equal(localStorage.getItem(old.storageKey),durable);assert.equal(sessionStorage.getItem(old.storageKey),legacy);
+ });
+ test(`${name}: storage failure refuses before any lookup or financial send`,async()=>{
+  const original=localStorage.setItem;localStorage.setItem=()=>{throw new Error('Storage quota exhausted');};let calls=0;globalThis.fetch=async()=>{calls++;return Response.json({});};await assert.rejects(api.apiFetch(path,undefined,init),/quota/);assert.equal(calls,0);localStorage.setItem=original;
+ });
+ test(`${name}: unavailable cross-tab coordination fails closed`,async()=>{
+  window.navigator={};let calls=0;globalThis.fetch=async()=>{calls++;return Response.json({});};await assert.rejects(api.apiFetch(path,undefined,init),/cannot safely coordinate/);assert.equal(calls,0);
+ });
+ test(`${name}: a storage error after commit retains the original request for recovery`,async()=>{
+  const remove=localStorage.removeItem;let key;setFetch(async(_url,options)=>{key=JSON.parse(options.body).idempotencyKey;localStorage.removeItem=()=>{throw new Error('Storage remove failed');};return Response.json({recorded:5});});await assert.rejects(api.apiFetch(path,undefined,init),/Storage remove failed/);localStorage.removeItem=remove;
+  const old=api.pendingFinancialWrites()[0];assert.equal(old.key,key);setFetch(async(_url,options)=>{assert.equal(JSON.parse(options.body).idempotencyKey,key);return Response.json({recorded:5});});await api.recoverFinancialWrite(old.storageKey);
+ });
+}
+for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposits'],['member',member,'/member/withdrawals/request']]) {
+ test(`${name}: malformed persistent records are preserved and cannot be replaced`,async()=>{
+  const identity=localStorage.getItem(name==='staff'?staff.USER_KEY:member.MEMBER_INFO_KEY),key='coopengine-payment:'+identity+':'+path;
+  localStorage.setItem(key,'{');let sent=0;globalThis.fetch=async()=>{sent++;return Response.json({});};await assert.rejects(api.apiFetch(path,undefined,{method:'POST',body:'{"amount":5}'}));assert.equal(sent,0);assert.equal(localStorage.getItem(key),'{');
+ });
+ test(`${name}: legacy acknowledgements are scoped to the original identity and route`,async()=>{
+  const identityKey=name==='staff'?staff.USER_KEY:member.MEMBER_INFO_KEY,identity=localStorage.getItem(identityKey),key='coopengine-payment:'+identity+':'+path,raw=JSON.stringify({key:'same-legacy-key-123456789',payload:'{"amount":5}',scope});
+  sessionStorage.setItem(key,raw);await api.syncFinancialWrites();setFetch(async()=>Response.json({recorded:5}));await api.recoverFinancialWrite(key);
+  const second=name==='staff'?'{"email":"other@example.invalid"}':'{"id":"other-identity"}';localStorage.setItem(identityKey,second);const otherKey='coopengine-payment:'+second+':'+path;sessionStorage.setItem(otherKey,raw);await api.syncFinancialWrites();assert.equal(api.pendingFinancialWrites().length,1);assert.equal(api.pendingFinancialWrites()[0].key,'same-legacy-key-123456789');
+ });
+}
+
+for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposits'],['member',member,'/member/withdrawals/request']]) {
+ const init={method:'POST',body:'{"amount":5}'};
+ const info=name==='staff'?staff.USER_KEY:member.MEMBER_INFO_KEY;
+ const changed=name==='staff'?JSON.stringify({email:' STAFF@EXAMPLE.INVALID ',display:'Changed'}):JSON.stringify({id:'member-a',firstName:'Changed',lastName:'Name',email:'new@example.invalid'});
+ test(`${name}: display/profile edits and email casing cannot hide a pending request`,async()=>{
+  setFetch(async()=>{throw new TypeError('lost response');});await assert.rejects(api.apiFetch(path,undefined,init));const old=api.pendingFinancialWrites()[0];localStorage.setItem(info,changed);assert.equal(api.pendingFinancialWrites()[0].key,old.key);
+  setFetch(async(_url,options)=>{assert.equal(JSON.parse(options.body).idempotencyKey,old.key);return Response.json({recorded:5});});await api.recoverFinancialWrite(old.storageKey);assert.equal(api.pendingFinancialWrites().length,0);
+ });
+ for(const source of ['session','local']) test(`${name}: old ${source} display-field namespace migrates to the stable identity`,async()=>{
+  const oldIdentity=name==='staff'?JSON.stringify({email:'STAFF@EXAMPLE.INVALID',display:'Old'}):JSON.stringify({id:'member-a',firstName:'Old',lastName:'Name',email:'old@example.invalid'}),oldKey='coopengine-payment:'+oldIdentity+':'+path;
+  const storage=source==='session'?sessionStorage:localStorage;storage.setItem(oldKey,JSON.stringify({key:'stable-migrated-key-123456789',payload:init.body,scope}));localStorage.setItem(info,changed);
+  await api.syncFinancialWrites();assert.equal(storage.getItem(oldKey),null);const pending=api.pendingFinancialWrites();assert.equal(pending.length,1);assert.notEqual(pending[0].storageKey,oldKey);
+  setFetch(async(_url,options)=>{assert.equal(JSON.parse(options.body).idempotencyKey,'stable-migrated-key-123456789');return Response.json({recorded:5});});await api.recoverFinancialWrite(pending[0].storageKey);assert.equal(api.pendingFinancialWrites().length,0);
  });
 }
