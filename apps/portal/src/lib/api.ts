@@ -103,6 +103,7 @@ export function storeSession(_tokens: SessionTokens, email: string): void {
   localStorage.setItem(SESSION_MARKER, 'cookie');
   localStorage.setItem(USER_KEY, JSON.stringify({ email }));
   localStorage.removeItem(TOKEN_KEY);
+  notifyFinancialWrites();
 }
 
 export function clearSession(): void {

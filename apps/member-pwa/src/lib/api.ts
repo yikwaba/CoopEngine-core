@@ -66,6 +66,7 @@ export function storeMemberSession(_accessToken: string, info: unknown): void {
   localStorage.removeItem(MEMBER_TOKEN_KEY);
   localStorage.setItem(MEMBER_SESSION_MARKER, 'cookie');
   localStorage.setItem(MEMBER_INFO_KEY, JSON.stringify(info));
+  notifyFinancialWrites();
 }
 
 export function clearMemberSession(): void {
