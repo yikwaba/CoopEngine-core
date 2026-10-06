@@ -18,11 +18,11 @@ describe('approval and reversal retry receipts (PostgreSQL)',()=>{
  });
  afterAll(async()=>{await app?.close();await pool?.end();});
  async function fixture(count=2){
-  const suffix=randomUUID().slice(0,8),email=`retry-decisions-${suffix}@coopengine.test`;
+  const suffix=randomUUID().slice(0,8),email=`retry-decisions-${suffix}@approval-retry.invalid`;
   const org=(await request(app.getHttpServer()).post('/api/v1/organizations').set('Authorization',`Bearer ${platform}`).send({name:`Exact payroll ${suffix}`,slug:`retry-decisions-${suffix}`,adminEmail:email,adminPassword:'ExactPayrollPass123!'}).expect(201)).body.id;
   const token=(await request(app.getHttpServer()).post('/api/v1/auth/login').send({email,password:'ExactPayrollPass123!'}).expect(200)).body.tokens.accessToken;
   const auth={Authorization:`Bearer ${token}`};
-  const invited=(await request(app.getHttpServer()).post('/api/v1/users').set(auth).send({email:`checker-${suffix}@coopengine.test`,roleCodes:['COOP_ADMIN']}).expect(201)).body;
+  const invited=(await request(app.getHttpServer()).post('/api/v1/users').set(auth).send({email:`checker-${suffix}@approval-retry.invalid`,roleCodes:['COOP_ADMIN']}).expect(201)).body;
   const checkerToken=(await request(app.getHttpServer()).post('/api/v1/auth/login').send({email:invited.email,password:invited.tempPassword}).expect(200)).body.tokens.accessToken;
   const checker={Authorization:`Bearer ${checkerToken}`},members:{id:string;memberNo:number}[]=[];
   for(let i=0;i<count;i++){
@@ -93,7 +93,7 @@ describe('approval and reversal retry receipts (PostgreSQL)',()=>{
   const f=await fixture(1),id=await f.staged(['0.23']);await f.approve(id).expect(200);const before=await state(f),path=`/payroll/batches/${id}/reverse`,body={reason:'Correction'};await failReceipt(f,'payroll.reverse',async()=>{await post(f,path,body).expect(500);expect(await state(f)).toEqual(before);});await post(f,path,body).expect(200);
  });
  it('journal approval aliases serialize and replay the posted snapshot after reversal',async()=>{
-  const f=await fixture(1),id=await journal(f);const results=await Promise.all([post(f,`/ledger/journals/${id}/approve-post`).expect(200),post(f,`/approvals/journals/${id}/approve`).expect(200)]);expect(results[0].body).toEqual(results[1].body.journal);await post(f,`/ledger/journals/${id}/reverse`,{reason:'Correction'}).expect(200);const before=await state(f);expect((await post(f,`/ledger/journals/${id}/approve-post`).expect(200)).body).toEqual(results[0].body);expect(await state(f)).toEqual(before);
+  const f=await fixture(1),id=await journal(f);const results=await Promise.all([post(f,`/ledger/journals/${id}/approve-post`,{},true).expect(200),post(f,`/approvals/journals/${id}/approve`,{},true).expect(200)]);expect(results[0].body).toEqual(results[1].body.journal);await post(f,`/ledger/journals/${id}/reverse`,{reason:'Correction'}).expect(200);const before=await state(f);expect((await post(f,`/ledger/journals/${id}/approve-post`,{},true).expect(200)).body).toEqual(results[0].body);expect(await state(f)).toEqual(before);
  });
  it('journal approval receipt failure leaves the entry submitted and counter unchanged',async()=>{
   const f=await fixture(1),id=await journal(f),before=await state(f);await failReceipt(f,'ledger.approve',async()=>{await post(f,`/ledger/journals/${id}/approve-post`).expect(500);expect(await state(f)).toEqual(before);});await post(f,`/ledger/journals/${id}/approve-post`).expect(200);

@@ -82,7 +82,7 @@ export class ApprovalsController {
 
   @Post('requests/:id/decisions')
   @HttpCode(HttpStatus.OK)
-  @RequirePermissions('savings.approve', 'payroll.approve', 'loans.approve', 'ledger.approve')
+  @RequirePermissions('savings.approve', 'payroll.approve', 'loans.approve', 'journals.approve')
   @SensitiveAction('approvals.decideRequest')
   decideRequest(
     @CurrentUser() principal: AuthPrincipal,
@@ -97,7 +97,7 @@ export class ApprovalsController {
   @RequirePermissions(
     'savings.approve',
     'loans.approve',
-    'ledger.approve',
+    'journals.approve',
     'payroll.approve',
     'payments.reconcile',
   )
@@ -133,7 +133,7 @@ export class ApprovalsController {
 
   @Post('journals/:id/approve')
   @HttpCode(HttpStatus.OK)
-  @RequirePermissions('ledger.approve')
+  @RequirePermissions('journals.approve')
   @SensitiveAction('approvals.approveJournal')
   approveJournal(
     @CurrentUser() principal: AuthPrincipal,

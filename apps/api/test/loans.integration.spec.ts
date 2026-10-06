@@ -243,11 +243,12 @@ describe('loans lifecycle', () => {
     const sources = (journals.body as { source: string }[]).map((j) => j.source);
     expect(sources).toContain('LOAN_DISBURSEMENT');
 
-    // Double-disburse -> 409
+    // A duplicate disbursement returns its original receipt without posting again
     const reDisburse = await request(app.getHttpServer())
       .post(`/api/v1/loans/${loanId}/disburse`)
       .set(auth);
-    expect(reDisburse.status).toBe(409);
+    expect(reDisburse.status).toBe(200);
+    expect(reDisburse.body).toEqual(disbursed.body);
   });
 
   it('rejects with reason and isolates loans between cooperatives', async () => {

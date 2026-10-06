@@ -83,7 +83,7 @@ export class ApprovalsService {
   private static readonly ACTION_PERMISSION: Record<ApprovalItem['type'], string> = {
     WITHDRAWAL: 'savings.approve',
     LOAN: 'loans.approve',
-    JOURNAL: 'ledger.approve',
+    JOURNAL: 'journals.approve',
     PAYROLL: 'payroll.approve',
   };
 
