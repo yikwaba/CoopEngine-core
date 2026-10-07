@@ -21,6 +21,7 @@ const LINKS = [
   { href: '/collections', label: 'Collections' },
   { href: '/audit', label: 'Audit' },
   { href: '/interest', label: 'Interest' },
+  { href: '/dividends', label: 'Dividends' },
   { href: '/users', label: 'Users' },
   { href: '/admin/tenants', label: 'Cooperatives' },
   { href: '/security', label: 'Security' },

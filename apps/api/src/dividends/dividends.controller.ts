@@ -1,3 +1,5 @@
+import { ApiProperty } from '@nestjs/swagger';
+import { MAX_NUMERIC_MONEY_INPUT } from '../common/money';
 import { SensitiveAction } from '../auth/sensitive-action';
 import {
   Body,
@@ -9,7 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+import { IsNumber, IsDefined, MinLength, MaxLength, Max, IsString, Matches, Min } from 'class-validator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
@@ -18,12 +20,17 @@ import { AuthPrincipal } from '../common/auth.types';
 import { DividendsService } from './dividends.service';
 import { PlanLimitsService } from '../admin/plan-limits.service';
 
-class DividendPostDto {
-  @IsOptional()
+export class DividendPostDto {
+  @ApiProperty({required:true,minLength:4,maxLength:4,pattern:'^\\d{4}$',example:'2026'})
+  @IsDefined()
+  @MinLength(4)
+  @MaxLength(4)
   @IsString()
   @Matches(/^\d{4}$/)
-  periodLabel?: string;
+  periodLabel!: string;
 
+  @ApiProperty({minimum:0.01,maximum:MAX_NUMERIC_MONEY_INPUT})
+  @Max(MAX_NUMERIC_MONEY_INPUT)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   distributableAmount!: number;

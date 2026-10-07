@@ -89,4 +89,10 @@ describe('OpenAPI contract', () => {
     expect(schema.required).toContain('period');expect(schema.properties?.period?.pattern).toBe('^\\d{4}-(0[1-9]|1[0-2])$');
   });
 
+ it('requires explicit dividend year and bounded money in the contract',()=>{
+ const doc=SwaggerModule.createDocument(app,new DocumentBuilder().setTitle('Co-opEngine API').build());
+ const schema=doc.components?.schemas?.DividendPostDto as {required?:string[];properties?:Record<string,{pattern?:string;maximum?:number}>};
+ expect(schema.required).toContain('periodLabel');expect(schema.required).toContain('distributableAmount');expect(schema.properties?.periodLabel?.pattern).toBe('^\\d{4}$');expect(schema.properties?.distributableAmount?.maximum).toBe(100000000000);
+ });
+
 });

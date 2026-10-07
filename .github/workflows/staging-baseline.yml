@@ -92,6 +92,11 @@ jobs:
           COOPENGINE_BROWSER_TEST: isolated-staging
         run: |
           BROWSER_TEST_MODULE_ROOT="$RUNNER_TEMP/coopengine-browser/node_modules" node scripts/staging/interest-recovery-browser.mjs
+      - name: Recover annual dividends after committed browser response loss
+        env:
+          COOPENGINE_BROWSER_TEST: isolated-staging
+        run: |
+          BROWSER_TEST_MODULE_ROOT="$RUNNER_TEMP/coopengine-browser/node_modules" node scripts/staging/dividend-recovery-browser.mjs
       - name: Inspect failed synthetic startup
         if: failure()
         run: docker compose --project-name coopengine-recovery-staging --env-file .staging/compose.env -f staging/compose.yml logs --no-color migrate api fixtures gateway

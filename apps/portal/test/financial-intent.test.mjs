@@ -175,3 +175,25 @@ test('interest: overlap is refused without queuing a second period',async()=>{
 test('interest: initial validation refusal permits correcting the explicit period',async()=>{
  let sends=0;setFetch(async()=>++sends===1?Response.json({message:'Invalid period'},{status:400}):Response.json({total:0.01}));await assert.rejects(staff.apiFetch(interestPath,undefined,{method:'POST',body:'{"period":"bad"}'}),/Invalid/);await staff.apiFetch(interestPath,undefined,interestInit);assert.equal(sends,2);
 });
+
+const dividendPath='/dividends/post',dividendInit={method:'POST',body:'{"periodLabel":"2026","distributableAmount":0.01}'};
+test('dividend: response loss retains the original year/amount and refuses a changed year/amount',async()=>{
+ const bodies=[];setFetch(async(_url,options)=>{bodies.push(JSON.parse(options.body));if(bodies.length===1)throw new TypeError('lost response');return Response.json({periodLabel:'2026',total:0.01});});
+ await assert.rejects(staff.apiFetch(dividendPath,undefined,dividendInit));await assert.rejects(staff.apiFetch(dividendPath,undefined,{...dividendInit,body:'{"periodLabel":"2027","distributableAmount":0.02}'}),/uncertain result/);
+ await staff.recoverFinancialWrite(staff.pendingFinancialWrites()[0].storageKey);assert.deepEqual(bodies,[{periodLabel:'2026',distributableAmount:0.01},{periodLabel:'2026',distributableAmount:0.01}]);assert.equal(staff.pendingFinancialWrites().length,0);
+});
+test('dividend: empty success retains an explicit natural period without adding an arbitrary body key',async()=>{
+ setFetch(async(_url,options)=>{assert.deepEqual(JSON.parse(options.body),{periodLabel:'2026',distributableAmount:0.01});return new Response('',{status:200});});await assert.rejects(staff.apiFetch(dividendPath,undefined,dividendInit),/empty/);assert.equal(staff.pendingFinancialWrites()[0].payload,dividendInit.body);
+});
+test('dividend: account change refuses original-year/amount recovery before a write',async()=>{
+ let calls=0;setFetch(async()=>{calls++;throw new TypeError('lost');});await assert.rejects(staff.apiFetch(dividendPath,undefined,dividendInit));scope='another-org:another-actor';await assert.rejects(staff.recoverFinancialWrite(staff.pendingFinancialWrites()[0].storageKey),/another account/);assert.equal(calls,1);
+});
+test('dividend: a browser restart retains the original year/amount for authorized recovery',async()=>{
+ setFetch(async()=>{throw new TypeError('lost');});await assert.rejects(staff.apiFetch(dividendPath,undefined,dividendInit));const old=staff.pendingFinancialWrites()[0];globalThis.sessionStorage=memory();setFetch(async(_url,options)=>{assert.equal(options.body,dividendInit.body);return Response.json({total:0.01});});await staff.recoverFinancialWrite(old.storageKey);assert.equal(staff.pendingFinancialWrites().length,0);
+});
+test('dividend: overlap is refused without queuing a second period',async()=>{
+ let release;const gate=new Promise(resolve=>release=resolve);let sends=0;setFetch(async()=>{sends++;await gate;return Response.json({total:0.01});});const first=staff.apiFetch(dividendPath,undefined,dividendInit);await assert.rejects(staff.apiFetch(dividendPath,undefined,dividendInit),/another tab/);release();await first;assert.equal(sends,1);
+});
+test('dividend: initial validation refusal permits correcting the explicit period',async()=>{
+ let sends=0;setFetch(async()=>++sends===1?Response.json({message:'Invalid period'},{status:400}):Response.json({total:0.01}));await assert.rejects(staff.apiFetch(dividendPath,undefined,{method:'POST',body:'{"periodLabel":"bad","distributableAmount":0.01}'}),/Invalid/);await staff.apiFetch(dividendPath,undefined,dividendInit);assert.equal(sends,2);
+});

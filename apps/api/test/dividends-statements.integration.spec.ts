@@ -150,7 +150,8 @@ describe('dividends, statements and guarantor consent', () => {
       .post('/api/v1/dividends/post')
       .set(auth)
       .send({ periodLabel: '2026', distributableAmount: 100000 });
-    expect(replay.status).toBe(409);
+    expect(replay.status).toBe(201);
+    expect(replay.body).toEqual(posted.body);
 
     // Runs register + allocations
     const runs = await request(app.getHttpServer()).get('/api/v1/dividends').set(auth);
