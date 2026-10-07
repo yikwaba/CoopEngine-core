@@ -35,7 +35,7 @@ export default function FinancialRecovery() {
    <p>{description(record.path,record.payload)}</p>
    <button type="button" disabled={busy || !record.scope} onClick={async()=>{
     setBusy(true);setMessage('Checking the original request…');setCreated(null);setCurrentStatus('');setPreviewResult(null);
-    try {const result=await recoverFinancialWrite(record.storageKey);if(record.path==='/payroll/import/preview')setPreviewResult(result as NonNullable<typeof previewResult>);if(record.path==='/loans'||record.path==='/ledger/journals'||/^\/ledger\/journals\/[^/]+\/submit$/.test(record.path)){const entry=result as {id:string;status:string};setCreated({path:record.path.endsWith('/submit')?record.path.slice(0,-7):record.path,id:entry.id,status:entry.status});}setMessage('The original request has been acknowledged. Refresh the account view to see the current balance or status.');}
+    try {const result=await recoverFinancialWrite(record.storageKey);if(record.path==='/payroll/import/preview')setPreviewResult(result as NonNullable<typeof previewResult>);if(record.path==='/loans'||record.path==='/ledger/journals'||/^\/ledger\/journals\/[^/]+\/submit$/.test(record.path)){const entry=result as {id:string;status:string};setCreated({path:record.path.endsWith('/submit')?'/ledger/journals':record.path,id:entry.id,status:entry.status});}setMessage('The original request has been acknowledged. Refresh the account view to see the current balance or status.');}
     catch(error){setMessage(error instanceof Error?error.message:'Recovery failed. The original request is retained.');}
     finally{setBusy(false);setPending(pendingFinancialWrites());}
    }}>Recover original request</button>
