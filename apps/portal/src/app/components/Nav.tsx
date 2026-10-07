@@ -23,6 +23,8 @@ const LINKS = [
   { href: '/interest', label: 'Interest' },
   { href: '/dividends', label: 'Dividends' },
   { href: '/payroll', label: 'Payroll submissions' },
+  { href: '/loan-applications', label: 'Loan applications' },
+  { href: '/journal-drafts', label: 'Journal drafts' },
   { href: '/users', label: 'Users' },
   { href: '/admin/tenants', label: 'Cooperatives' },
   { href: '/security', label: 'Security' },

@@ -259,10 +259,14 @@ export class LedgerService {
     dto: CreateJournalDto,
   ): Promise<JournalEntryRow> {
     const orgId = this.requireOrg(organizationId);
-    this.validateLines(dto.lines);
-    const entryId = randomUUID();
+    if (!dto.idempotencyKey) throw new BadRequestException('idempotencyKey is required for journal creation retries');
     try {
-      await withTenant(this.pool, orgId, async (c) => {
+      return await financialIntent(this.pool, orgId, 'ledger.create', dto.idempotencyKey,
+        { actorUserId, entryDate: dto.entryDate, description: dto.description,
+          lines: dto.lines.map(line => ({ accountCode: line.accountCode, debit: line.debit ?? 0,
+            credit: line.credit ?? 0, memo: line.memo ?? null, memberId: line.memberId ?? null })) }, async (c, journalKey) => {
+        this.validateLines(dto.lines);
+        const entryId = randomUUID();
         // entryDate must fall inside an existing OPEN period (FR-052)
         const period = await c.query(
           `SELECT id, status FROM ledger_periods
@@ -290,7 +294,7 @@ export class LedgerService {
             p.id,
             dto.entryDate,
             dto.description,
-            dto.idempotencyKey ?? null,
+            journalKey,
             actorUserId,
           ],
         );
@@ -319,8 +323,8 @@ export class LedgerService {
            VALUES ${values.join(', ')}`,
           params,
         );
+        return (await this.getJournalTx(c, orgId, entryId)).entry;
       });
-      return this.getJournal(orgId, entryId).then((j) => j.entry);
     } catch (error) {
       if (isPgError(error, '23505')) {
         throw new ConflictException('idempotencyKey has already been used');

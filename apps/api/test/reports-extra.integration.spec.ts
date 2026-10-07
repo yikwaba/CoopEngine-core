@@ -145,7 +145,7 @@ describe('phase-5 report endpoints', () => {
     const apply = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         memberId: m1.id,
         productId: cashLoan.id,
         principal: 20000,

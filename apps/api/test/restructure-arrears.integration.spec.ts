@@ -100,7 +100,7 @@ describe('loan restructuring and arrears automation', () => {
     const loan = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         memberId: borrower,
         productId: products.body[0].id,
         principal: 30000,

@@ -70,7 +70,7 @@ describe('atomic provider allocation and retries (PostgreSQL)',()=>{
   await request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(f.auth).send({ idempotencyKey: randomUUID(),amount:1000}).expect(201);
   const product=(await request(app.getHttpServer()).get('/api/v1/loans/products').set(f.auth).expect(200)).body.find((p:{code:string})=>p.code==='CASH-LOAN').id;
   await f.tenant(c=>c.query('UPDATE loan_products SET interest_rate_pa=12 WHERE id=$1',[product]));
-  const id=(await request(app.getHttpServer()).post('/api/v1/loans').set(f.auth).send({memberId:f.members[0],productId:product,principal:1.15,termMonths:5,guarantorIds:f.members.slice(1)}).expect(201)).body.id;
+  const id=(await request(app.getHttpServer()).post('/api/v1/loans').set(f.auth).send({idempotencyKey:randomUUID(),memberId:f.members[0],productId:product,principal:1.15,termMonths:5,guarantorIds:f.members.slice(1)}).expect(201)).body.id;
   await request(app.getHttpServer()).post(`/api/v1/loans/${id}/approve`).set(f.auth).expect(200);
   await request(app.getHttpServer()).post(`/api/v1/loans/${id}/disburse`).set(f.auth).send({}).expect(200);return id;
  }

@@ -12,7 +12,8 @@ import {
   MinLength,
 } from 'class-validator';
 
-export class CreateLoanDto {
+import { FinancialWriteDto } from '../../common/dto/financial-write.dto';
+export class CreateLoanDto extends FinancialWriteDto {
   @IsUUID()
   memberId!: string;
 

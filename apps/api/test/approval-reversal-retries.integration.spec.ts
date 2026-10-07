@@ -59,7 +59,7 @@ describe('approval and reversal retry receipts (PostgreSQL)',()=>{
   try{await run();}finally{await pool.query('DROP TRIGGER retry_test_fail_receipt ON financial_write_receipts');await pool.query('DROP FUNCTION retry_test_fail_receipt()');}
  }
  async function journal(f:Awaited<ReturnType<typeof fixture>>){
-  const id=(await post(f,'/ledger/journals',{entryDate:new Date().toISOString().slice(0,10),description:'Synthetic recovery expense',lines:[{accountCode:'5010',debit:0.23},{accountCode:'1000',credit:0.23}]}).expect(201)).body.id;
+  const id=(await post(f,'/ledger/journals',{idempotencyKey:randomUUID(),entryDate:new Date().toISOString().slice(0,10),description:'Synthetic recovery expense',lines:[{accountCode:'5010',debit:0.23},{accountCode:'1000',credit:0.23}]}).expect(201)).body.id;
   await post(f,`/ledger/journals/${id}/submit`).expect(200);return id as string;
  }
  async function withdrawal(stepped=false){
@@ -135,7 +135,7 @@ describe('approval and reversal retry receipts (PostgreSQL)',()=>{
   await post(f,`/savings/accounts/${account}/deposits`,{idempotencyKey:randomUUID(),amount:1000}).expect(201);
   const product=(await request(app.getHttpServer()).get('/api/v1/loans/products').set(f.auth).expect(200)).body.find((p:{code:string})=>p.code==='CASH-LOAN').id;
   await f.tenant(c=>c.query('UPDATE loan_products SET interest_rate_pa=0 WHERE id=$1',[product]));
-  const id=(await post(f,'/loans',{memberId:f.members[0]!.id,productId:product,principal:1.15,termMonths:5,guarantorIds:f.members.slice(1).map(m=>m.id)}).expect(201)).body.id;
+  const id=(await post(f,'/loans',{idempotencyKey:randomUUID(),memberId:f.members[0]!.id,productId:product,principal:1.15,termMonths:5,guarantorIds:f.members.slice(1).map(m=>m.id)}).expect(201)).body.id;
   return {f,id};
  }
  async function loanState(f:Awaited<ReturnType<typeof fixture>>){return {...await state(f),loan:await f.tenant(async c=>({loans:(await c.query('SELECT * FROM loans ORDER BY id')).rows,schedule:(await c.query('SELECT * FROM loan_repayments ORDER BY id')).rows,notifications:(await c.query('SELECT * FROM notifications ORDER BY id')).rows}))};}
