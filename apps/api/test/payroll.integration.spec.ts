@@ -124,7 +124,7 @@ describe('payroll deduction import', () => {
     const preview = await request(app.getHttpServer())
       .post('/api/v1/payroll/import/preview')
       .set(auth)
-      .send({ filename: 'august-deductions.csv', csv });
+      .send({ idempotencyKey: randomUUID(), filename: 'august-deductions.csv', csv });
     expect(preview.status).toBe(201);
     expect(preview.body.totals).toMatchObject({ totalRows: 4, valid: 2, invalid: 2 });
     expect(preview.body.totals.totalAmount).toBe(35000);

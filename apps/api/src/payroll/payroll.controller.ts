@@ -14,7 +14,7 @@ import {
 import { IsUUID } from 'class-validator';
 import { PayrollService } from './payroll.service';
 import { PlanLimitsService } from '../admin/plan-limits.service';
-import { PreviewImportDto } from '../members/dto/import-member.dto';
+import { PayrollPreviewDto } from './payroll-preview.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
@@ -37,7 +37,7 @@ export class PayrollController {
   @RequirePermissions('payroll.upload')
   preview(
     @CurrentUser() principal: AuthPrincipal,
-    @Body() dto: PreviewImportDto,
+    @Body() dto: PayrollPreviewDto,
   ) {
     return this.payrollService.preview(
       principal.organizationId,
