@@ -7,7 +7,7 @@ export function allocateDividends(amount: number, shares: string[]): {total:bigi
  const total=moneyKobo(amount),balances=shares.map(moneyKobo);
  if(total<=0n) throw new BadRequestException('distributableAmount must be greater than zero');
  if(!balances.length || balances.some(x=>x<=0n)) throw new BadRequestException('No members hold share capital — nothing to distribute');
- const totalShares=balances.reduce((a,b)=>a+b,0n);moneyDecimal(totalShares);
+ const totalShares=balances.reduce((a,b)=>a+b,0n);
  const amounts=balances.map(balance=>roundedRatio(total*balance,totalShares));
  const drift=total-amounts.reduce((a,b)=>a+b,0n);
  let biggest=0;

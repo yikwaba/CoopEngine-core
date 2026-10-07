@@ -30,7 +30,6 @@ export interface DividendPreview {
 }
 
 
-
 @Injectable()
 export class DividendsService {
   constructor(@Inject(DB_POOL) private readonly pool: Pool) {}
@@ -79,7 +78,7 @@ export class DividendsService {
       return {
         periodLabel: period,
         distributableAmount: Number(moneyDecimal(result.total)),
-        totalShares: Number(moneyDecimal(result.totalShares)),
+        totalShares: Number(`${result.totalShares/100n}.${String(result.totalShares%100n).padStart(2,'0')}`),
         allocations: holders.map((h, index) => ({...h, amount: Number(moneyDecimal(result.amounts[index]!))})),
       };
     });
