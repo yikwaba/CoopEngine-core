@@ -46,7 +46,7 @@ describe('payroll submission receipts (PostgreSQL)',()=>{
   const actor=(await request(app.getHttpServer()).get('/api/v1/auth/me').set(auth).expect(200)).body.user.id as string;
   const id=(await preview(`memberNo,amount\n${members[0]!.memberNo},0.23`).expect(201)).body.batchId as string;
   const send=()=>submit(id);
-  const snapshot=()=>tenant(async c=>{const result:Record<string,unknown>={};for(const table of ['payroll_batches','financial_write_receipts','audit_logs','journal_entries','journal_lines','member_savings_accounts','savings_transactions','org_counters'])result[table]=(await c.query(`SELECT * FROM ${table} ORDER BY ${table==='org_counters'?'organization_id':'id'}`)).rows;return result;});
+  const snapshot=()=>tenant(async c=>{const result:Record<string,unknown>={};for(const table of ['payroll_batches','financial_write_receipts','audit_logs','journal_entries','journal_lines','member_savings_accounts','savings_transactions','org_counters'])result[table]=(await c.query(`SELECT * FROM ${table} WHERE organization_id=$1 ORDER BY ${table==='org_counters'?'organization_id':'id'}`,[org])).rows;return result;});
   return{org,auth,checker,members,tenant,preview,submit,approve,staged,proof,actor,id,send,snapshot};
  }
 
