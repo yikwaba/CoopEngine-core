@@ -299,6 +299,11 @@ export class LedgerService {
           ],
         );
         const accountIds = await this.resolveAccounts(c, orgId, dto.lines);
+        const memberIds = [...new Set(dto.lines.flatMap(line => line.memberId ? [line.memberId] : []))];
+        if (memberIds.length) {
+          const linked = await c.query('SELECT id FROM members WHERE organization_id=$1 AND id=ANY($2::uuid[])', [orgId, memberIds]);
+          if (linked.rows.length !== memberIds.length) throw new BadRequestException('Journal members must belong to this cooperative');
+        }
         // Single multi-row insert: the balance trigger is statement-level, so
         // all lines of an entry must land in ONE statement.
         const values: string[] = [];
