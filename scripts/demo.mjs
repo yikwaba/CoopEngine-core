@@ -118,7 +118,7 @@ async function main() {
   const preview = await api('/payroll/import/preview', {
     method: 'POST',
     token: staffTok,
-    body: { filename: 'demo-deductions.csv', csv: payrollCsv },
+    body: { idempotencyKey: randomUUID(), filename: 'demo-deductions.csv', csv: payrollCsv },
   });
   const commit = await api('/payroll/import/commit', {
     method: 'POST',

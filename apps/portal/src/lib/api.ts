@@ -174,7 +174,7 @@ export async function apiFetch<T>(path:string,token?:string,init?:RequestInit):P
  });
 }
 function isFinancialPath(path:string):boolean {
- return path==='/payroll/import/commit' || /^\/savings\/accounts\/[^/]+\/(deposits|withdrawals)$/.test(path) ||
+ return path==='/payroll/import/preview' || path==='/payroll/import/commit' || /^\/savings\/accounts\/[^/]+\/(deposits|withdrawals)$/.test(path) ||
   /^\/loans\/[^/]+\/repayments$/.test(path) || /^\/shares\/member\/[^/]+\/(purchases|redemptions)$/.test(path) || path==='/member/withdrawals/request' || path==='/savings/interest/post' || path==='/dividends/post' ||
   /^\/savings\/withdrawals\/[^/]+\/(approve|reject)$/.test(path) || /^\/approvals\/requests\/[^/]+\/decisions$/.test(path) ||
   /^\/loans\/[^/]+\/(approve|reject|disburse)$/.test(path) || /^\/payroll\/batches\/[^/]+\/(approve|reject|reverse)$/.test(path) ||
@@ -227,7 +227,7 @@ export async function syncFinancialWrites():Promise<void> {
 export interface FinancialBrowserIntent { storageKey:string; key:string; body:string; scope:string; wasPending:boolean }
 /** Keep one intent across tabs, restarts and uncertain responses; successful acknowledgement ends it. */
 export async function prepareFinancialWrite(path:string,init?:RequestInit):Promise<FinancialBrowserIntent|null> {
- const keyed=/^\/savings\/accounts\/[^/]+\/(deposits|withdrawals)$/.test(path) ||
+ const keyed=path==='/payroll/import/preview' || /^\/savings\/accounts\/[^/]+\/(deposits|withdrawals)$/.test(path) ||
    /^\/loans\/[^/]+\/repayments$/.test(path) ||
    /^\/shares\/member\/[^/]+\/(purchases|redemptions)$/.test(path) || path==='/member/withdrawals/request';
  const stepped=/^\/savings\/withdrawals\/[^/]+\/(approve|reject)$/.test(path) || /^\/approvals\/requests\/[^/]+\/decisions$/.test(path);

@@ -14,7 +14,7 @@ import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
 import { LedgerService } from '../ledger/ledger.service';
 import { parseCsv } from '../members/csv';
-import { PreviewImportDto } from '../members/dto/import-member.dto';
+import { PayrollPreviewDto } from './payroll-preview.dto';
 
 export interface PayrollPreviewResult {
   batchId: string;
@@ -59,59 +59,61 @@ export class PayrollService {
   async preview(
     organizationId: string | null,
     actorUserId: string,
-    dto: PreviewImportDto,
+    dto: PayrollPreviewDto,
   ): Promise<PayrollPreviewResult> {
     const orgId = this.requireOrg(organizationId);
-    const parsed = parseCsv(dto.csv);
-    if (parsed.length < 2) {
-      throw new BadRequestException('CSV must contain a header row and data rows');
-    }
-    const headerMap = new Map<string, number>();
-    parsed[0]!.forEach((h, i) => {
-      const key = NORM(h);
-      if (!headerMap.has(key)) headerMap.set(key, i);
-    });
-    const missing = REQUIRED_HEADERS.filter((h) => !headerMap.has(NORM(h)));
-    if (missing.length > 0) {
-      throw new BadRequestException(`Missing CSV columns: ${missing.join(', ')}`);
-    }
-
-    const errors: { row: number; reason: string }[] = [];
-    const valid: ValidRow[] = [];
-    const seenMembers = new Set<number>();
-    const indexOf = (h: string) => headerMap.get(NORM(h))!;
-
-    for (let i = 1; i < parsed.length; i += 1) {
-      const cells = parsed[i]!;
-      const csvRow = i + 1;
-      const memberNoRaw = (cells[indexOf('memberNo')] ?? '').trim();
-      const amountRaw = (cells[indexOf('amount')] ?? '').trim();
-      const memberNo = Number(memberNoRaw);
-      let amount = 0n;
-      const reasons: string[] = [];
-      if (!Number.isInteger(memberNo) || memberNo < 1) {
-        reasons.push('memberNo must be a positive integer');
+    if (!dto.idempotencyKey) throw new BadRequestException('idempotencyKey is required for payroll preview retries');
+    return financialIntent(this.pool, orgId, 'payroll.preview', dto.idempotencyKey,
+      { actorUserId, filename: dto.filename, csv: dto.csv }, async (c) => {
+      const parsed = parseCsv(dto.csv);
+      if (parsed.length < 2) {
+        throw new BadRequestException('CSV must contain a header row and data rows');
       }
-      try {
-        amount = moneyKobo(amountRaw);
-        if (amount <= 0n || amount > MAX_AMOUNT_KOBO) reasons.push('amount must be > 0 and at most 100000000');
-      } catch { reasons.push('amount must be a decimal with at most 2 places'); }
-      if (memberNo >= 1 && seenMembers.has(memberNo)) {
-        reasons.push(`duplicate memberNo ${memberNo} in file`);
+      const headerMap = new Map<string, number>();
+      parsed[0]!.forEach((h, i) => {
+        const key = NORM(h);
+        if (!headerMap.has(key)) headerMap.set(key, i);
+      });
+      const missing = REQUIRED_HEADERS.filter((h) => !headerMap.has(NORM(h)));
+      if (missing.length > 0) {
+        throw new BadRequestException(`Missing CSV columns: ${missing.join(', ')}`);
       }
-      if (reasons.length > 0) {
-        errors.push({ row: csvRow, reason: reasons.join('; ') });
-        continue;
-      }
-      seenMembers.add(memberNo);
-      valid.push({ memberNo, memberId: '', amount: moneyDecimal(amount) });
-    }
 
-    // Resolve members + persist the preview batch inside one tenant tx (RLS)
-    const batchId = randomUUID();
-    let totalAmount = 0n;
-    const rowsJson: ValidRow[] = [];
-    await withTenant(this.pool, orgId, async (c) => {
+      const errors: { row: number; reason: string }[] = [];
+      const valid: ValidRow[] = [];
+      const seenMembers = new Set<number>();
+      const indexOf = (h: string) => headerMap.get(NORM(h))!;
+
+      for (let i = 1; i < parsed.length; i += 1) {
+        const cells = parsed[i]!;
+        const csvRow = i + 1;
+        const memberNoRaw = (cells[indexOf('memberNo')] ?? '').trim();
+        const amountRaw = (cells[indexOf('amount')] ?? '').trim();
+        const memberNo = Number(memberNoRaw);
+        let amount = 0n;
+        const reasons: string[] = [];
+        if (!Number.isInteger(memberNo) || memberNo < 1) {
+          reasons.push('memberNo must be a positive integer');
+        }
+        try {
+          amount = moneyKobo(amountRaw);
+          if (amount <= 0n || amount > MAX_AMOUNT_KOBO) reasons.push('amount must be > 0 and at most 100000000');
+        } catch { reasons.push('amount must be a decimal with at most 2 places'); }
+        if (memberNo >= 1 && seenMembers.has(memberNo)) {
+          reasons.push(`duplicate memberNo ${memberNo} in file`);
+        }
+        if (reasons.length > 0) {
+          errors.push({ row: csvRow, reason: reasons.join('; ') });
+          continue;
+        }
+        seenMembers.add(memberNo);
+        valid.push({ memberNo, memberId: '', amount: moneyDecimal(amount) });
+      }
+
+      // Resolve members + persist the preview batch inside one tenant tx (RLS)
+      const batchId = randomUUID();
+      let totalAmount = 0n;
+      const rowsJson: ValidRow[] = [];
       const memberNos = [...new Set(valid.map((v) => v.memberNo))];
       const memberById = new Map<number, { id: string; status: string }>();
       const { rows } = await c.query(
@@ -152,19 +154,18 @@ export class PayrollService {
           actorUserId,
         ],
       );
+      return {
+        batchId,
+        filename: dto.filename,
+        totals: {
+          totalRows: parsed.length - 1,
+          valid: rowsJson.length,
+          invalid: errors.length,
+          totalAmount: Number(moneyDecimal(totalAmount)),
+        },
+        errors,
+      };
     });
-
-    return {
-      batchId,
-      filename: dto.filename,
-      totals: {
-        totalRows: parsed.length - 1,
-        valid: rowsJson.length,
-        invalid: errors.length,
-        totalAmount: Number(moneyDecimal(totalAmount)),
-      },
-      errors,
-    };
   }
 
   /**

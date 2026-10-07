@@ -90,7 +90,7 @@ describe('approvals inbox', () => {
     const preview = await http
       .post('/api/v1/payroll/import/preview')
       .set(scheme(adminToken))
-      .send({ filename: 'approvals.csv', csv })
+      .send({ idempotencyKey: randomUUID(), filename: 'approvals.csv', csv })
       .expect(201);
     batchId = preview.body.batchId as string;
     await http
