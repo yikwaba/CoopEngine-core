@@ -22,6 +22,7 @@ const LINKS = [
   { href: '/audit', label: 'Audit' },
   { href: '/interest', label: 'Interest' },
   { href: '/dividends', label: 'Dividends' },
+  { href: '/payroll', label: 'Payroll submissions' },
   { href: '/users', label: 'Users' },
   { href: '/admin/tenants', label: 'Cooperatives' },
   { href: '/security', label: 'Security' },

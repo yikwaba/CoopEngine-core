@@ -426,7 +426,8 @@ export class PayrollService {
   /** Upload staged a preview; this puts it in front of an approver. */
   async submit(organizationId: string | null, actorUserId: string, batchId: string) {
     const orgId = this.requireOrg(organizationId);
-    return withTenant(this.pool, orgId, async (c) => {
+    return financialIntent(this.pool, orgId, 'payroll.submit', `entity:${batchId}`,
+      { actorUserId, batchId }, async (c) => {
       const { rows } = await c.query(
         `SELECT id, status, valid_rows, total_amount FROM payroll_batches
           WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
@@ -444,6 +445,9 @@ export class PayrollService {
       }
       if (Number(batch.valid_rows) === 0) {
         throw new ConflictException('This batch has no valid rows to submit');
+      }
+      if (batch.status !== 'PREVIEWED') {
+        throw new ConflictException('Only a previewed batch can be submitted; rejected batches require a corrected new batch');
       }
       await c.query(
         `UPDATE payroll_batches

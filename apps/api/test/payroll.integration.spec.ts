@@ -199,12 +199,13 @@ describe('payroll deduction import', () => {
     expect(debitTotal).toBe(35000);
     expect(creditTotal).toBe(35000);
 
-    // Double-commit -> 409 (it has already been posted)
+    // Retry acknowledges the original submission without changing the posted batch.
     const again = await request(app.getHttpServer())
       .post('/api/v1/payroll/import/commit')
       .set(auth)
       .send({ batchId });
-    expect(again.status).toBe(409);
+    expect(again.status).toBe(200);
+    expect(again.body).toEqual(commit.body);
 
     // Reconciliation: every account matches the ledger
     const reconcile = await request(app.getHttpServer())
