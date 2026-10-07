@@ -159,7 +159,7 @@ describe('loans lifecycle', () => {
     const overLimit = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         memberId: borrower,
         productId: cashLoan?.id,
         principal: 65000,
@@ -172,7 +172,7 @@ describe('loans lifecycle', () => {
     const fewGuarantors = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         memberId: borrower,
         productId: cashLoan?.id,
         principal: 50000,
@@ -185,7 +185,7 @@ describe('loans lifecycle', () => {
     const applied = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         memberId: borrower,
         productId: cashLoan?.id,
         principal: 50000,
@@ -280,7 +280,7 @@ describe('loans lifecycle', () => {
     const applied = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set({ Authorization: `Bearer ${coopA.tokens.accessToken}` })
-      .send({
+      .send({idempotencyKey:randomUUID(),
         memberId: borrower,
         productId: cashLoanA.id,
         principal: 10000,

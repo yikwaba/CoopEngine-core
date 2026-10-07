@@ -115,21 +115,24 @@ export class LoansService {
     dto: CreateLoanDto,
   ): Promise<LoanRow> {
     const orgId = this.requireOrg(organizationId);
-    const principalKobo = moneyKobo(dto.principal);
-    const principal = moneyDecimal(principalKobo);
-    if (principalKobo <= 0n) throw new BadRequestException('Invalid principal');
-    if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 60) {
-      throw new BadRequestException('termMonths must be 1..60');
-    }
-    const guarantorIds = [...new Set(dto.guarantorIds ?? [])];
-    if (guarantorIds.length < MIN_GUARANTORS) {
-      throw new BadRequestException(
-        `At least ${MIN_GUARANTORS} guarantors are required`,
-      );
-    }
+    if (!dto.idempotencyKey) throw new BadRequestException('idempotencyKey is required for loan application retries');
+    return financialIntent(this.pool, orgId, 'loans.apply', dto.idempotencyKey,
+      { actorUserId, memberId: dto.memberId, productId: dto.productId, principal: dto.principal,
+        termMonths: dto.termMonths, guarantorIds: dto.guarantorIds }, async (c) => {
+      const principalKobo = moneyKobo(dto.principal);
+      const principal = moneyDecimal(principalKobo);
+      if (principalKobo <= 0n) throw new BadRequestException('Invalid principal');
+      if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 60) {
+        throw new BadRequestException('termMonths must be 1..60');
+      }
+      const guarantorIds = [...new Set(dto.guarantorIds ?? [])];
+      if (guarantorIds.length < MIN_GUARANTORS) {
+        throw new BadRequestException(
+          `At least ${MIN_GUARANTORS} guarantors are required`,
+        );
+      }
 
-    const loanId = randomUUID();
-    await withTenant(this.pool, orgId, async (c) => {
+      const loanId = randomUUID();
       const member = await c.query(
         `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2`,
         [orgId, dto.memberId],
@@ -219,8 +222,9 @@ export class LoansService {
          VALUES ($1, $2, 'loan.applied', 'loan', $3, $4)`,
         [orgId, actorUserId, loanId, JSON.stringify({ principal, termMonths: dto.termMonths })],
       );
+      const result = await c.query(`${selectLoan} WHERE l.organization_id=$1 AND l.id=$2`, [orgId, loanId]);
+      return this.mapLoan(result.rows[0] as Record<string, unknown>);
     });
-    return this.getLoan(orgId, loanId);
   }
 
   async list(

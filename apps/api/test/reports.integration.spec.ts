@@ -114,7 +114,7 @@ describe('reports and audit', () => {
     const applied = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({ memberId: borrower, productId: cashLoan.id, principal: 20000, termMonths: 6, guarantorIds: [g1, g2] });
+      .send({idempotencyKey:randomUUID(), memberId: borrower, productId: cashLoan.id, principal: 20000, termMonths: 6, guarantorIds: [g1, g2] });
     expect(applied.status).toBe(201);
     const loanId = applied.body.id as string;
     await request(app.getHttpServer()).post(`/api/v1/loans/${loanId}/approve`).set(auth);
@@ -178,7 +178,7 @@ describe('reports and audit', () => {
     const applied = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(aAuth)
-      .send({ memberId: borrower, productId: cashLoan.id, principal: 5000, termMonths: 3, guarantorIds: [g1, g2] });
+      .send({idempotencyKey:randomUUID(), memberId: borrower, productId: cashLoan.id, principal: 5000, termMonths: 3, guarantorIds: [g1, g2] });
     await request(app.getHttpServer()).post(`/api/v1/loans/${applied.body.id as string}/approve`).set(aAuth);
     await request(app.getHttpServer()).post(`/api/v1/loans/${applied.body.id as string}/disburse`).set(aAuth);
 

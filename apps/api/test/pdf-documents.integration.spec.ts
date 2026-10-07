@@ -123,7 +123,7 @@ describe('printable documents', () => {
     const loan = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({ memberId, productId, principal: 40000, termMonths: 6, guarantorIds: guarantors });
+      .send({idempotencyKey:randomUUID(), memberId, productId, principal: 40000, termMonths: 6, guarantorIds: guarantors });
     expect([200, 201], `loan create: ${JSON.stringify(loan.body).slice(0, 160)}`).toContain(loan.status);
     const loanId = (loan.body.id ?? loan.body.loanId) as string;
     await request(app.getHttpServer()).post(`/api/v1/loans/${loanId}/approve`).set(auth).send({});

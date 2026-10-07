@@ -178,7 +178,7 @@ describe('ledger core (double entry)', () => {
     const unbalanced = await request(app.getHttpServer())
       .post('/api/v1/ledger/journals')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         entryDate: todayIso,
         description: 'Bad entry',
         lines: [
@@ -192,7 +192,7 @@ describe('ledger core (double entry)', () => {
     const bothSides = await request(app.getHttpServer())
       .post('/api/v1/ledger/journals')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         entryDate: todayIso,
         description: 'Bad line',
         lines: [
@@ -206,7 +206,7 @@ describe('ledger core (double entry)', () => {
     const unknown = await request(app.getHttpServer())
       .post('/api/v1/ledger/journals')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         entryDate: todayIso,
         description: 'Bad account',
         lines: [
@@ -253,7 +253,7 @@ describe('ledger core (double entry)', () => {
     const draft = await request(app.getHttpServer())
       .post('/api/v1/ledger/journals')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         entryDate: todayIso,
         description: 'Admin expense',
         lines: [
@@ -302,7 +302,7 @@ describe('ledger core (double entry)', () => {
     const draft = await request(app.getHttpServer())
       .post('/api/v1/ledger/journals')
       .set({ Authorization: `Bearer ${coopB.tokens.accessToken}` })
-      .send({
+      .send({idempotencyKey:randomUUID(),
         entryDate: todayIso,
         description: 'Org B entry',
         lines: [

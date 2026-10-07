@@ -212,7 +212,7 @@ describe('dividends, statements and guarantor consent', () => {
     const loan = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         memberId: borrower.id,
         productId: (
           await request(app.getHttpServer()).get('/api/v1/loans/products').set(auth)

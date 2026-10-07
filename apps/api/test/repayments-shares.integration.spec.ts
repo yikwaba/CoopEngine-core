@@ -95,7 +95,7 @@ async function disburseLoan(
   const applied = await request(app.getHttpServer())
     .post('/api/v1/loans')
     .set(auth)
-    .send({
+    .send({idempotencyKey:randomUUID(),
       memberId: borrowerId,
       productId: product.id,
       principal,

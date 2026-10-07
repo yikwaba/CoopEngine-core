@@ -187,7 +187,7 @@ describe('product administration + member loan applications', () => {
     const staffLoan = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         memberId: borrower.id,
         productId: loanProduct.body.id,
         principal: 100000,

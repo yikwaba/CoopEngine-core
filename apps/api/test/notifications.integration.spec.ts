@@ -95,7 +95,7 @@ describe('notification centre', () => {
     const loan = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         memberId: borrower.id,
         productId: products.body[0].id,
         principal: 20000,

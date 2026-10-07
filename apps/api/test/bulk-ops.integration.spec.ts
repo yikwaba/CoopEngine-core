@@ -143,7 +143,7 @@ describe('bulk money operations', () => {
     const loan = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({ memberId: m1.id, productId: cashLoan.id, principal: 30000, termMonths: 3, guarantorIds: [m2.id, g.id] });
+      .send({idempotencyKey:randomUUID(), memberId: m1.id, productId: cashLoan.id, principal: 30000, termMonths: 3, guarantorIds: [m2.id, g.id] });
     expect(loan.status).toBe(201);
     const loanId = loan.body.id as string;
     await request(app.getHttpServer()).post(`/api/v1/loans/${loanId}/approve`).set(auth).send({});

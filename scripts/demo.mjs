@@ -157,6 +157,7 @@ async function main() {
       productId: cashLoan.id,
       principal: 40000,
       termMonths: 3,
+      idempotencyKey: randomUUID(),
       guarantorIds: [linus.id, chiamaka.id, tunde.id],
     },
   });

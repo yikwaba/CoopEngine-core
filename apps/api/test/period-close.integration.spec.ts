@@ -115,7 +115,7 @@ describe('month-end close', () => {
     const draft = await request(app.getHttpServer())
       .post('/api/v1/ledger/journals')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         entryDate: new Date().toISOString().slice(0, 10),
         description: 'Month-end adjustment pending review',
         lines: [

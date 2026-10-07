@@ -259,10 +259,14 @@ export class LedgerService {
     dto: CreateJournalDto,
   ): Promise<JournalEntryRow> {
     const orgId = this.requireOrg(organizationId);
-    this.validateLines(dto.lines);
-    const entryId = randomUUID();
+    if (!dto.idempotencyKey) throw new BadRequestException('idempotencyKey is required for journal creation retries');
     try {
-      await withTenant(this.pool, orgId, async (c) => {
+      return await financialIntent(this.pool, orgId, 'ledger.create', dto.idempotencyKey,
+        { actorUserId, entryDate: dto.entryDate, description: dto.description,
+          lines: dto.lines.map(line => ({ accountCode: line.accountCode, debit: line.debit ?? 0,
+            credit: line.credit ?? 0, memo: line.memo ?? null, memberId: line.memberId ?? null })) }, async (c, journalKey) => {
+        this.validateLines(dto.lines);
+        const entryId = randomUUID();
         // entryDate must fall inside an existing OPEN period (FR-052)
         const period = await c.query(
           `SELECT id, status FROM ledger_periods
@@ -290,11 +294,16 @@ export class LedgerService {
             p.id,
             dto.entryDate,
             dto.description,
-            dto.idempotencyKey ?? null,
+            journalKey,
             actorUserId,
           ],
         );
         const accountIds = await this.resolveAccounts(c, orgId, dto.lines);
+        const memberIds = [...new Set(dto.lines.flatMap(line => line.memberId ? [line.memberId] : []))];
+        if (memberIds.length) {
+          const linked = await c.query('SELECT id FROM members WHERE organization_id=$1 AND id=ANY($2::uuid[])', [orgId, memberIds]);
+          if (linked.rows.length !== memberIds.length) throw new BadRequestException('Journal members must belong to this cooperative');
+        }
         // Single multi-row insert: the balance trigger is statement-level, so
         // all lines of an entry must land in ONE statement.
         const values: string[] = [];
@@ -319,8 +328,8 @@ export class LedgerService {
            VALUES ${values.join(', ')}`,
           params,
         );
+        return (await this.getJournalTx(c, orgId, entryId)).entry;
       });
-      return this.getJournal(orgId, entryId).then((j) => j.entry);
     } catch (error) {
       if (isPgError(error, '23505')) {
         throw new ConflictException('idempotencyKey has already been used');

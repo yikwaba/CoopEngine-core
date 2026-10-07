@@ -42,7 +42,8 @@ export class JournalLineDto {
   memberId?: string;
 }
 
-export class CreateJournalDto {
+import { FinancialWriteDto } from '../../common/dto/financial-write.dto';
+export class CreateJournalDto extends FinancialWriteDto {
   @IsString()
   @Matches(DATE_RE, { message: 'entryDate must be YYYY-MM-DD' })
   entryDate!: string;
@@ -51,12 +52,6 @@ export class CreateJournalDto {
   @MinLength(3)
   @MaxLength(255)
   description!: string;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(16)
-  @MaxLength(100)
-  idempotencyKey?: string;
 
   @IsArray()
   @ArrayMinSize(2)

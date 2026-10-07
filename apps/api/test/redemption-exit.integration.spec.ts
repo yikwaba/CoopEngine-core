@@ -169,7 +169,7 @@ describe('share redemption and member exit', () => {
     const apply = await request(app.getHttpServer())
       .post('/api/v1/loans')
       .set(auth)
-      .send({
+      .send({idempotencyKey:randomUUID(),
         memberId: debtor.id,
         productId: cashLoan.id,
         principal: 15000,

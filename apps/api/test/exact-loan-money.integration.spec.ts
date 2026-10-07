@@ -13,7 +13,7 @@ describe('exact loan origination, schedule and journal amounts (PostgreSQL)',()=
  let app:INestApplication,pool:Pool,orgId:string,token:string,borrower:string,account:string,cash:string,asset:string;
  const guarantors:string[]=[];
  const auth=()=>({Authorization:`Bearer ${token}`});
- const apply=(principal:number,termMonths:number,productId=cash)=>request(app.getHttpServer()).post('/api/v1/loans').set(auth()).send({memberId:borrower,productId,principal,termMonths,guarantorIds:guarantors});
+ const apply=(principal:number,termMonths:number,productId=cash)=>request(app.getHttpServer()).post('/api/v1/loans').set(auth()).send({idempotencyKey:randomUUID(),memberId:borrower,productId,principal,termMonths,guarantorIds:guarantors});
  const tenant=<T>(fn:Parameters<typeof withTenant<T>>[2])=>withTenant(pool,orgId,fn);
  beforeAll(async()=>{
   process.env.DATABASE_URL=TEST_DATABASE_URL;pool=new Pool({connectionString:TEST_DATABASE_URL});await ensureRbacSeeded(pool);
