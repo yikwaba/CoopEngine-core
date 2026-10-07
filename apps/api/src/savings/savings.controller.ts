@@ -1,3 +1,4 @@
+import { ApiProperty } from '@nestjs/swagger';
 import { FinancialWriteDto } from '../common/dto/financial-write.dto';
 import { SensitiveAction } from '../auth/sensitive-action';
 import {
@@ -13,7 +14,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateIf } from 'class-validator';
+import { IsDefined, Matches, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 import { SavingsService } from './savings.service';
 import { SavingsWithdrawalsService } from './savings-withdrawals.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -51,6 +52,14 @@ class MoneyOpDto extends FinancialWriteDto {
 class StatementQueryDto {
   @IsOptional()
   limit?: number;
+}
+
+export class InterestPeriodDto {
+  @ApiProperty({required:true,pattern:'^\\d{4}-(0[1-9]|1[0-2])$',example:'2026-10',description:'Explicit month from the interest preview. Retain this month when recovering a timeout; posting never selects a new month automatically.'})
+  @IsDefined()
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
+  period!: string;
 }
 
 export class WithdrawalPolicyDto {
@@ -127,7 +136,7 @@ export class SavingsController {
   @SensitiveAction('savings.postInterest')
   postInterest(
     @CurrentUser() principal: AuthPrincipal,
-    @Body() body: { period?: string },
+    @Body() body: InterestPeriodDto,
   ) {
     return this.savingsService.postInterest(
       principal.organizationId,

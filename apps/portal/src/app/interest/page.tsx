@@ -54,7 +54,7 @@ export default function InterestPage() {
 
   async function runPost(): Promise<void> {
     const token = readToken();
-    if (!token) return;
+    if (!token || !preview) return;
     if (preview && !confirm(`Post ${naira(preview.total)} of savings interest for ${preview.period}?`)) {
       return;
     }
@@ -65,7 +65,7 @@ export default function InterestPage() {
       const result = await apiFetch<{ period: string; total: number; accounts: number; entryNo: number }>(
         '/savings/interest/post',
         token,
-        { method: 'POST' },
+        { method: 'POST', body: JSON.stringify({period:preview.period}) },
       );
       setNotice(
         `Posted ${naira(result.total)} to ${result.accounts} account(s) for ${result.period} (journal #${result.entryNo}).`,

@@ -3,7 +3,7 @@
  *
  * Proves: preview accrues one month at product rates (balance * rate/100/12),
  * posting credits balances + transaction projections in one balanced journal
- * (Dr 5000 / Cr 2000), is idempotent per org+period (double post -> 409),
+ * (Dr 5000 / Cr 2000), is idempotent per org+period (double post replays the original receipt),
  * requires an OPEN ledger period, and keeps trial balance at net zero.
  */
 import { randomUUID } from 'node:crypto';
@@ -136,7 +136,7 @@ describe('savings interest engine', () => {
     const posted = await request(app.getHttpServer())
       .post('/api/v1/savings/interest/post')
       .set(auth)
-      .send({});
+      .send({period:preview.body.period});
     expect(posted.status).toBe(200);
     expect(posted.body.total).toBe(150);
     expect(posted.body.accounts).toBe(2);
@@ -159,12 +159,13 @@ describe('savings interest engine', () => {
     expect(stmt.body[0].type).toBe('INTEREST');
     expect(stmt.body[0].signedAmount).toBe(100);
 
-    // Double-post the same period -> 409
+    // Retry the same period -> original response, no second posting
     const again = await request(app.getHttpServer())
       .post('/api/v1/savings/interest/post')
       .set(auth)
-      .send({});
-    expect(again.status).toBe(409);
+      .send({period:preview.body.period});
+    expect(again.status).toBe(200);
+    expect(again.body).toEqual(posted.body);
 
     // Ledger: trial balance nets to zero, expense 5000 = -? No: Dr side +
     const tb = await request(app.getHttpServer())

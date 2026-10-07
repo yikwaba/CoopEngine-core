@@ -83,4 +83,10 @@ describe('OpenAPI contract', () => {
     }
   });
 
+  it('requires an explicit interest month in the generated contract',()=>{
+    const doc=SwaggerModule.createDocument(app,new DocumentBuilder().setTitle('Co-opEngine API').build());
+    const schema=doc.components?.schemas?.InterestPeriodDto as {required?:string[];properties?:Record<string,{pattern?:string}>};
+    expect(schema.required).toContain('period');expect(schema.properties?.period?.pattern).toBe('^\\d{4}-(0[1-9]|1[0-2])$');
+  });
+
 });
