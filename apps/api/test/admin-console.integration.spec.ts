@@ -199,7 +199,7 @@ describe('SaaS administration console', () => {
     const dividends = await http
       .post('/api/v1/dividends/post')
       .set(auth(adminToken))
-      .send({ distributableAmount: 1000 });
+      .send({ periodLabel: '2026', distributableAmount: 1000 });
     expect(dividends.status, JSON.stringify(dividends.body)).toBe(403);
     expect(JSON.stringify(dividends.body)).toMatch(/plan does not include dividends/i);
 
