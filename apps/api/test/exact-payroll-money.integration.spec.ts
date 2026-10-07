@@ -77,7 +77,7 @@ describe('exact payroll preview, allocation and posting (PostgreSQL)',()=>{
  });
  it('serializes duplicate submissions before approval',async()=>{
   const f=await fixture(1),preview=await f.preview(`memberNo,amount\n${f.members[0]!.memberNo},0.01`).expect(201),id=preview.body.batchId;
-  const responses=await Promise.all([f.submit(id),f.submit(id)]);expect(responses.map(r=>r.status).sort()).toEqual([200,409]);await f.approve(id).expect(200);expect((await f.proof(id)).journal.entries).toBe(1);
+  const responses=await Promise.all([f.submit(id),f.submit(id)]);expect(responses.map(r=>r.status).sort()).toEqual([200,200]);expect(responses[0].body).toEqual(responses[1].body);await f.approve(id).expect(200);expect((await f.proof(id)).journal.entries).toBe(1);
  });
  it('conserves a concurrent payroll credit and ordinary savings deposit',async()=>{
   const f=await fixture(1),member=f.members[0]!,account=(await request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(f.auth).send({}).expect(201)).body.id;
