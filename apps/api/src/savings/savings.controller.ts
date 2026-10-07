@@ -14,7 +14,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsDefined, Matches, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateIf } from 'class-validator';
+import { IsDefined, IsLength, Matches, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 import { SavingsService } from './savings.service';
 import { SavingsWithdrawalsService } from './savings-withdrawals.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -55,10 +55,11 @@ class StatementQueryDto {
 }
 
 export class InterestPeriodDto {
-  @ApiProperty({required:true,pattern:'^\\d{4}-(0[1-9]|1[0-2])$',example:'2026-10',description:'Explicit month from the interest preview. Retain this month when recovering a timeout; posting never selects a new month automatically.'})
+  @ApiProperty({required:true,minLength:7,maxLength:7,pattern:'^\\d{4}-(0[1-9]|1[0-2])$',example:'2026-10',description:'Explicit month from the interest preview. Retain this month when recovering a timeout; posting never selects a new month automatically.'})
   @IsDefined()
   @IsString()
   @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
+  @IsLength(7,7)
   period!: string;
 }
 

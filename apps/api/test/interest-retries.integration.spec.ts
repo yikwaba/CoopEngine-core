@@ -72,7 +72,7 @@ describe('monthly interest retry receipts (PostgreSQL)',()=>{
   const f=await fixture(),p=await f.snapshot();await f.interest().set('X-CoopEngine-Financial-Scope',`${randomUUID()}:${f.actor}`).expect(409);expect(await f.snapshot()).toEqual(p);
  });
  it('missing and invalid explicit periods refuse without a receipt or financial change',async()=>{
-  const f=await fixture(),p=await f.snapshot();for(const period of [undefined,null,'','2026-00','2026-13','2026-1',202610,{}])await f.interest(period===undefined?{}:{period}).expect(400);expect(await f.snapshot()).toEqual(p);
+  const f=await fixture(),p=await f.snapshot();for(const period of [undefined,null,'','2026-00','2026-13','2026-1','2026-10\n',202610,{}])await f.interest(period===undefined?{}:{period}).expect(400);expect(await f.snapshot()).toEqual(p);
  });
  it('a refused first attempt leaves no receipt and can succeed when the period reopens',async()=>{
   const f=await fixture();await f.tenant(c=>c.query("UPDATE ledger_periods SET status='CLOSED' WHERE code=$1",[f.period]));const p=await f.snapshot();await f.interest().expect(409);expect(await f.snapshot()).toEqual(p);await f.tenant(c=>c.query("UPDATE ledger_periods SET status='OPEN' WHERE code=$1",[f.period]));await f.interest().expect(200);

@@ -513,7 +513,7 @@ export class SavingsService {
 
   private validPeriodCode(periodCode?: string): string {
     const code = periodCode ?? this.currentPeriodCode();
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(code)) {
+    if (code.length !== 7 || !/^\d{4}-(0[1-9]|1[0-2])$/.test(code)) {
       throw new BadRequestException('period must be in YYYY-MM format');
     }
     return code;
