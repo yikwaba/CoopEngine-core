@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { FINANCIAL_WRITES_EVENT, pendingFinancialWrites, recoverFinancialWrite, syncFinancialWrites } from '../lib/api';
 
 function description(path:string,payload:string):string {
+ if(path==='/dividends/post') {try {const details=JSON.parse(payload);return 'Dividend · '+details.periodLabel+' · ₦'+details.distributableAmount;}catch{return 'Dividend requiring review';}}
  if(path==='/savings/interest/post') {try {return 'Savings interest · '+JSON.parse(payload).period;}catch{return 'Savings interest requiring review';}}
  const action=path.split('/').at(-1)??'request';
  const names:Record<string,string>={deposits:'Savings deposit',withdrawals:'Savings withdrawal',repayments:'Loan repayment',purchases:'Share purchase',redemptions:'Share redemption',request:'Withdrawal request',approve:'Approval',reject:'Rejection',disburse:'Loan disbursement',reverse:'Reversal','approve-post':'Journal approval',decisions:'Approval decision'};

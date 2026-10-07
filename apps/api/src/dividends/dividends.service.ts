@@ -7,6 +7,9 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
+import { financialIntent } from '../common/financial-intent';
+import { moneyKobo, moneyDecimal } from '../common/money';
+import { allocateDividends } from './dividend-allocation';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
 import { enqueueNotification, outboundChannels } from '../notifications/enqueue';
@@ -26,7 +29,7 @@ export interface DividendPreview {
   allocations: DividendAllocationPreview[];
 }
 
-const round2 = (n: number): number => Math.round(n * 100) / 100;
+
 
 @Injectable()
 export class DividendsService {
@@ -38,8 +41,8 @@ export class DividendsService {
   }
 
   private validPeriod(periodLabel?: string): string {
-    const value = periodLabel?.trim() || String(new Date().getUTCFullYear());
-    if (!/^\d{4}$/.test(value)) {
+    const value = periodLabel ?? String(new Date().getUTCFullYear());
+    if (typeof value !== 'string' || value.length !== 4 || !/^\d{4}$/.test(value)) {
       throw new BadRequestException('periodLabel must be a 4-digit year, e.g. 2026');
     }
     return value;
@@ -72,31 +75,12 @@ export class DividendsService {
         memberName: r.member_name as string,
         shareBalance: Number(r.current_balance),
       }));
-      const totalShares = round2(holders.reduce((a, h) => a + h.shareBalance, 0));
-      if (holders.length === 0 || totalShares <= 0) {
-        throw new BadRequestException('No members hold share capital — nothing to distribute');
-      }
-      const allocations = holders.map((h) => ({
-        ...h,
-        amount: round2((amount * h.shareBalance) / totalShares),
-      }));
-      // Absorb rounding drift into the largest allocation so the total is exact
-      const drift = round2(amount - allocations.reduce((a, x) => a + x.amount, 0));
-      if (drift !== 0 && allocations.length > 0) {
-        let biggest = 0;
-        for (let i = 1; i < allocations.length; i += 1) {
-          const cur = allocations[i];
-          const top = allocations[biggest];
-          if (cur && top && cur.shareBalance > top.shareBalance) biggest = i;
-        }
-        const target = allocations[biggest];
-        if (target) target.amount = round2(target.amount + drift);
-      }
+      const result = allocateDividends(amount, rows.map(r => String(r.current_balance)));
       return {
         periodLabel: period,
-        distributableAmount: round2(amount),
-        totalShares,
-        allocations,
+        distributableAmount: Number(moneyDecimal(result.total)),
+        totalShares: Number(moneyDecimal(result.totalShares)),
+        allocations: holders.map((h, index) => ({...h, amount: Number(moneyDecimal(result.amounts[index]!))})),
       };
     });
   }
@@ -105,25 +89,24 @@ export class DividendsService {
    * Post a dividend run: one balanced journal — Dr Retained Earnings (3100)
    * with the total, Cr each member's savings account (2000) with their
    * allocation — plus allocations, savings credits and projections.
-   * Idempotent per organization + period (409 on replay).
+   * Atomic organization/year receipt: identical retries return the original response.
    */
   async post(
     organizationId: string | null,
     actorUserId: string,
-    periodLabel: string | undefined,
+    periodLabel: string,
     amount: number,
   ): Promise<{ runId: string; periodLabel: string; total: number; members: number; entryNo: number }> {
     const orgId = this.requireOrg(organizationId);
+    if (!periodLabel) throw new BadRequestException('An explicit four-digit dividend year is required');
     const period = this.validPeriod(periodLabel);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new BadRequestException('distributableAmount must be greater than zero');
-    }
-    const runId = randomUUID();
-    let entryNo = 0;
-    let total = 0;
-    let members = 0;
-
-    await withTenant(this.pool, orgId, async (c) => {
+    const value = moneyKobo(amount);
+    if (value <= 0n) throw new BadRequestException('distributableAmount must be greater than zero');
+    return financialIntent(this.pool, orgId, 'dividends.post', `dividend-year:${period}`,
+      {actorUserId, period, amount: moneyDecimal(value)}, async c => {
+      const runId = randomUUID();
+      let entryNo = 0;
+      let members = 0;
       const already = await c.query(
         `SELECT 1 FROM dividend_runs WHERE organization_id = $1 AND period_label = $2`,
         [orgId, period],
@@ -132,42 +115,30 @@ export class DividendsService {
         throw new ConflictException(`Dividends already posted for ${period}`);
       }
 
-      // Shares snapshot (same maths as the preview) inside the transaction
-      const { rows } = await c.query(
-        `SELECT sa.member_id, m.member_no,
-                (m.first_name || ' ' || m.last_name) AS member_name,
-                sa.current_balance
-           FROM member_share_accounts sa
-           JOIN members m ON m.id = sa.member_id
-          WHERE sa.status = 'ACTIVE' AND sa.current_balance > 0
-          ORDER BY m.member_no`,
-      );
-      const holders = rows.map((r) => ({
-        memberId: r.member_id as string,
-        memberNo: Number(r.member_no),
-        shareBalance: Number(r.current_balance),
-      }));
-      const totalShares = round2(holders.reduce((a, h) => a + h.shareBalance, 0));
-      if (holders.length === 0 || totalShares <= 0) {
-        throw new BadRequestException('No members hold share capital — nothing to distribute');
+      // Member -> share -> savings locks match existing share/payroll writers.
+      // Capture eligibility first; a newly created holder belongs to a later snapshot.
+      const eligible = await c.query(
+        `SELECT m.id FROM members m WHERE m.organization_id=$1 AND EXISTS
+          (SELECT 1 FROM member_share_accounts sa WHERE sa.member_id=m.id AND sa.status='ACTIVE' AND sa.current_balance>0)
+         ORDER BY m.id FOR NO KEY UPDATE OF m`, [orgId]);
+      const {rows} = await c.query(
+        `SELECT sa.member_id, m.member_no, (m.first_name || ' ' || m.last_name) AS member_name, sa.current_balance
+           FROM member_share_accounts sa JOIN members m ON m.id=sa.member_id
+          WHERE sa.organization_id=$1 AND sa.member_id=ANY($2::uuid[]) AND sa.status='ACTIVE' AND sa.current_balance>0
+          ORDER BY m.member_no, sa.member_id FOR UPDATE OF sa`, [orgId, eligible.rows.map(r=>r.id)]);
+      const result = allocateDividends(amount, rows.map(r=>String(r.current_balance)));
+      const alloc = rows.map((r,index)=>({memberId:r.member_id as string,
+        shareBalance:moneyKobo(String(r.current_balance)), amount:result.amounts[index]!}));
+      const total = result.total;
+      // Lock every existing target account before acquiring the organization counter.
+      const accounts = await c.query(
+        `SELECT id,member_id,current_balance,opened_at FROM member_savings_accounts
+          WHERE organization_id=$1 AND member_id=ANY($2::uuid[]) AND status='ACTIVE'
+          ORDER BY id FOR UPDATE`, [orgId,alloc.filter(a=>a.amount>0n).map(a=>a.memberId)]);
+      const targets = new Map<string,{id:string;current_balance:string}>();
+      for (const row of [...accounts.rows].sort((a,b)=>new Date(a.opened_at).getTime()-new Date(b.opened_at).getTime() || String(a.id).localeCompare(String(b.id)))) {
+        if (!targets.has(row.member_id)) targets.set(row.member_id,row);
       }
-      const alloc = holders.map((h) => ({
-        ...h,
-        amount: round2((amount * h.shareBalance) / totalShares),
-      }));
-      const drift = round2(amount - alloc.reduce((a, x) => a + x.amount, 0));
-      if (drift !== 0) {
-        let biggest = 0;
-        for (let i = 1; i < alloc.length; i += 1) {
-          const cur = alloc[i];
-          const top = alloc[biggest];
-          if (cur && top && cur.shareBalance > top.shareBalance) biggest = i;
-        }
-        const target = alloc[biggest];
-        if (target) target.amount = round2(target.amount + drift);
-      }
-      total = round2(alloc.reduce((a, x) => a + x.amount, 0));
-
       const periodRow = await c.query(
         `SELECT id FROM ledger_periods
           WHERE organization_id = $1 AND status = 'OPEN' ORDER BY start_date DESC LIMIT 1`,
@@ -216,7 +187,7 @@ export class DividendsService {
       await c.query(
         `INSERT INTO dividend_runs (id, organization_id, period_label, distributable_amount, status, journal_entry_id, member_count, created_by)
          VALUES ($1, $2, $3, $4, 'POSTED', $5, 0, $6)`,
-        [runId, orgId, period, String(total), entryId, actorUserId],
+        [runId, orgId, period, moneyDecimal(total), entryId, actorUserId],
       );
 
       // Dr 3100 total + Cr 2000 per member, all in one statement
@@ -229,9 +200,9 @@ export class DividendsService {
         );
         params.push(orgId, entryId, accountId, debit, credit, memberId);
       };
-      pushLine(equityId, String(total), '0', null);
+      pushLine(equityId, moneyDecimal(total), '0', null);
       for (const a of alloc) {
-        if (a.amount > 0) pushLine(cashId, '0', String(a.amount), a.memberId);
+        if (a.amount > 0n) pushLine(cashId, '0', moneyDecimal(a.amount), a.memberId);
       }
       await c.query(
         `INSERT INTO journal_lines (organization_id, journal_entry_id, account_id, debit, credit, member_id)
@@ -250,57 +221,38 @@ export class DividendsService {
       const productId = (productRow.rows[0] as { id: string } | undefined)?.id;
       let credited = 0;
       for (const a of alloc) {
-        if (a.amount <= 0) continue;
-        const acc = await c.query(
-          `SELECT id FROM member_savings_accounts
-            WHERE organization_id = $1 AND member_id = $2 AND status = 'ACTIVE'
-            ORDER BY opened_at LIMIT 1`,
-          [orgId, a.memberId],
-        );
-        let accountId = (acc.rows[0] as { id: string } | undefined)?.id;
-        if (!accountId) {
+        if (a.amount <= 0n) continue;
+        let target = targets.get(a.memberId);
+        if (!target) {
           if (!productId) throw new BadRequestException('No active savings product to credit');
-          accountId = randomUUID();
-          const seqNo = await c.query(
-            `UPDATE org_counters SET savings_seq = savings_seq + 1, updated_at = now()
-              WHERE organization_id = $1 RETURNING savings_seq`,
-            [orgId],
-          );
-          const accountNo = Number((seqNo.rows[0] as { savings_seq: string | number }).savings_seq);
-          await c.query(
-            `INSERT INTO member_savings_accounts (id, organization_id, member_id, product_id, account_no, status)
-             VALUES ($1, $2, $3, $4, $5, 'ACTIVE')`,
-            [accountId, orgId, a.memberId, productId, accountNo],
-          );
+          const existing = await c.query('SELECT id FROM member_savings_accounts WHERE organization_id=$1 AND member_id=$2 AND product_id=$3',[orgId,a.memberId,productId]);
+          if (existing.rowCount) throw new ConflictException('The target savings account is not ACTIVE');
+          const seqNo = await c.query(`UPDATE org_counters SET savings_seq=savings_seq+1,updated_at=now() WHERE organization_id=$1 RETURNING savings_seq`,[orgId]);
+          const accountId = randomUUID();
+          await c.query(`INSERT INTO member_savings_accounts (id,organization_id,member_id,product_id,account_no,status) VALUES ($1,$2,$3,$4,$5,'ACTIVE')`,[accountId,orgId,a.memberId,productId,seqNo.rows[0].savings_seq]);
+          target={id:accountId,current_balance:'0.00'};targets.set(a.memberId,target);
         }
-        const bal = await c.query(
-          `SELECT current_balance FROM member_savings_accounts WHERE id = $1`,
-          [accountId],
-        );
-        const before = Number((bal.rows[0] as { current_balance: string }).current_balance);
-        const after = round2(before + a.amount);
-        await c.query(`UPDATE member_savings_accounts SET current_balance = $1 WHERE id = $2`, [
-          String(after),
-          accountId,
-        ]);
+        const accountId=target.id;
+        const after = moneyKobo(target.current_balance) + a.amount;
+        await c.query(`UPDATE member_savings_accounts SET current_balance=$1 WHERE organization_id=$2 AND id=$3`,[moneyDecimal(after),orgId,accountId]);
         await c.query(
           `INSERT INTO savings_transactions (organization_id, account_id, journal_entry_id, type, signed_amount, running_balance)
            VALUES ($1, $2, $3, 'DIVIDEND', $4, $5)`,
-          [orgId, accountId, entryId, String(a.amount), String(after)],
+          [orgId, accountId, entryId, moneyDecimal(a.amount), moneyDecimal(after)],
         );
         await enqueueNotification(c, {
           organizationId: orgId,
           memberId: a.memberId,
           type: 'DIVIDEND_PAID',
           title: `Dividend credited (${period})`,
-          body: `Your ${period} dividend of ${a.amount.toFixed(2)} has been credited to your savings.`,
+          body: `Your ${period} dividend of ${moneyDecimal(a.amount)} has been credited to your savings.`,
           channels: outboundChannels(),
-          metadata: { period, amount: a.amount },
+          metadata: { period, amount: moneyDecimal(a.amount) },
         });
         await c.query(
           `INSERT INTO dividend_allocations (id, organization_id, run_id, member_id, share_balance, amount)
            VALUES ($1, $2, $3, $4, $5, $6)`,
-          [randomUUID(), orgId, runId, a.memberId, String(a.shareBalance), String(a.amount)],
+          [randomUUID(), orgId, runId, a.memberId, moneyDecimal(a.shareBalance), moneyDecimal(a.amount)],
         );
         credited += 1;
       }
@@ -310,11 +262,10 @@ export class DividendsService {
       await c.query(
         `INSERT INTO audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
          VALUES ($1, $2, 'dividend.posted', 'dividend_run', $3, $4)`,
-        [orgId, actorUserId, runId, JSON.stringify({ period, total, members: credited })],
+        [orgId, actorUserId, runId, JSON.stringify({ period, total: moneyDecimal(total), members: credited })],
       );
+      return { runId, periodLabel: period, total: Number(moneyDecimal(total)), members, entryNo };
     });
-
-    return { runId, periodLabel: period, total, members, entryNo };
   }
 
   /** Posted dividend runs, newest first. */

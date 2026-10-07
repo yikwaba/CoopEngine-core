@@ -89,7 +89,7 @@ export class SavingsService {
     const orgId = this.requireOrg(organizationId);
     return withTenant(this.pool, orgId, async (c) => {
       const member = await c.query(
-        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2`,
+        `SELECT id, status FROM members WHERE organization_id = $1 AND id = $2 FOR NO KEY UPDATE`,
         [orgId, memberId],
       );
       if (!member.rows[0]) throw new NotFoundException('Member not found');
