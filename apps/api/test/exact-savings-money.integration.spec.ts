@@ -28,7 +28,7 @@ describe('exact savings postings, balances and interest (PostgreSQL)',()=>{
   const tenant=<T>(fn:Parameters<typeof withTenant<T>>[2])=>withTenant(pool,org,fn);
   const deposit=(amount:number,key?:string)=>request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(auth).send({amount,idempotencyKey:key??randomUUID()});
   const withdraw=(amount:number)=>request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/withdrawals`).set(auth).send({ idempotencyKey: randomUUID(),amount});
-  const interest=()=>request(app.getHttpServer()).post('/api/v1/savings/interest/post').set(auth).send({});
+  const interest=()=>request(app.getHttpServer()).post('/api/v1/savings/interest/post').set(auth).send({period:new Date().toISOString().slice(0,7)});
   async function proof(){return tenant(async c=>(await c.query(`SELECT a.current_balance,
    (SELECT sum(signed_amount)::text FROM savings_transactions WHERE account_id=a.id) AS movements,
    (SELECT count(*)::int FROM savings_transactions WHERE account_id=a.id) AS transactions,
@@ -75,7 +75,7 @@ describe('exact savings postings, balances and interest (PostgreSQL)',()=>{
   const preview=await request(app.getHttpServer()).get('/api/v1/savings/interest/preview').set(f.auth).expect(200);expect(preview.body.total).toBe(Number(oracle.amount));
   await f.interest().expect(200);const p=await f.proof();expect(p.current_balance).toBe(oracle.balance);expect(p.movements).toBe(oracle.amount);expect(p.debit).toBe(oracle.amount);expect(p.credit).toBe(oracle.amount);expect(p.liability).toBe(oracle.amount);
   const posting=await f.tenant(async c=>(await c.query('SELECT total_amount FROM savings_interest_postings')).rows[0]);expect(posting.total_amount).toBe(oracle.amount);
-  await f.interest().expect(409);expect(await f.proof()).toEqual(p);
+  await f.interest().expect(200);expect(await f.proof()).toEqual(p);
  });
  it('conserves a concurrent deposit and monthly interest posting',async()=>{
   const f=await fixture();await f.deposit(1).expect(201);await f.tenant(c=>c.query('UPDATE savings_products SET interest_rate_pa=6'));

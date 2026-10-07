@@ -175,7 +175,7 @@ export async function apiFetch<T>(path:string,token?:string,init?:RequestInit):P
 }
 function isFinancialPath(path:string):boolean {
  return /^\/savings\/accounts\/[^/]+\/(deposits|withdrawals)$/.test(path) ||
-  /^\/loans\/[^/]+\/repayments$/.test(path) || /^\/shares\/member\/[^/]+\/(purchases|redemptions)$/.test(path) || path==='/member/withdrawals/request' ||
+  /^\/loans\/[^/]+\/repayments$/.test(path) || /^\/shares\/member\/[^/]+\/(purchases|redemptions)$/.test(path) || path==='/member/withdrawals/request' || path==='/savings/interest/post' ||
   /^\/savings\/withdrawals\/[^/]+\/(approve|reject)$/.test(path) || /^\/approvals\/requests\/[^/]+\/decisions$/.test(path) ||
   /^\/loans\/[^/]+\/(approve|reject|disburse)$/.test(path) || /^\/payroll\/batches\/[^/]+\/(approve|reject|reverse)$/.test(path) ||
   /^\/approvals\/payroll\/[^/]+\/(approve|reject)$/.test(path) || /^\/ledger\/journals\/[^/]+\/(approve-post|reverse)$/.test(path) || /^\/approvals\/journals\/[^/]+\/approve$/.test(path);
@@ -231,7 +231,7 @@ export async function prepareFinancialWrite(path:string,init?:RequestInit):Promi
    /^\/loans\/[^/]+\/repayments$/.test(path) ||
    /^\/shares\/member\/[^/]+\/(purchases|redemptions)$/.test(path) || path==='/member/withdrawals/request';
  const stepped=/^\/savings\/withdrawals\/[^/]+\/(approve|reject)$/.test(path) || /^\/approvals\/requests\/[^/]+\/decisions$/.test(path);
- const natural=stepped || /^\/loans\/[^/]+\/(approve|reject|disburse)$/.test(path) ||
+ const natural=path==='/savings/interest/post' || stepped || /^\/loans\/[^/]+\/(approve|reject|disburse)$/.test(path) ||
    /^\/payroll\/batches\/[^/]+\/(approve|reject|reverse)$/.test(path) ||
    /^\/approvals\/payroll\/[^/]+\/(approve|reject)$/.test(path) ||
    /^\/ledger\/journals\/[^/]+\/(approve-post|reverse)$/.test(path) || /^\/approvals\/journals\/[^/]+\/approve$/.test(path);

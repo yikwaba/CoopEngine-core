@@ -154,3 +154,24 @@ for(const [name,api,path] of [['staff',staff,'/savings/accounts/synthetic/deposi
   setFetch(async(_url,options)=>{assert.equal(JSON.parse(options.body).idempotencyKey,'stable-migrated-key-123456789');return Response.json({recorded:5});});await api.recoverFinancialWrite(pending[0].storageKey);assert.equal(api.pendingFinancialWrites().length,0);
  });
 }
+const interestPath='/savings/interest/post',interestInit={method:'POST',body:'{"period":"2026-10"}'};
+test('interest: response loss retains the original month and refuses a changed month',async()=>{
+ const bodies=[];setFetch(async(_url,options)=>{bodies.push(JSON.parse(options.body));if(bodies.length===1)throw new TypeError('lost response');return Response.json({period:'2026-10',total:0.01});});
+ await assert.rejects(staff.apiFetch(interestPath,undefined,interestInit));await assert.rejects(staff.apiFetch(interestPath,undefined,{...interestInit,body:'{"period":"2026-11"}'}),/uncertain result/);
+ await staff.recoverFinancialWrite(staff.pendingFinancialWrites()[0].storageKey);assert.deepEqual(bodies,[{period:'2026-10'},{period:'2026-10'}]);assert.equal(staff.pendingFinancialWrites().length,0);
+});
+test('interest: empty success retains an explicit natural period without adding an arbitrary body key',async()=>{
+ setFetch(async(_url,options)=>{assert.deepEqual(JSON.parse(options.body),{period:'2026-10'});return new Response('',{status:200});});await assert.rejects(staff.apiFetch(interestPath,undefined,interestInit),/empty/);assert.equal(staff.pendingFinancialWrites()[0].payload,interestInit.body);
+});
+test('interest: account change refuses original-month recovery before a write',async()=>{
+ let calls=0;setFetch(async()=>{calls++;throw new TypeError('lost');});await assert.rejects(staff.apiFetch(interestPath,undefined,interestInit));scope='another-org:another-actor';await assert.rejects(staff.recoverFinancialWrite(staff.pendingFinancialWrites()[0].storageKey),/another account/);assert.equal(calls,1);
+});
+test('interest: a browser restart retains the original month for authorized recovery',async()=>{
+ setFetch(async()=>{throw new TypeError('lost');});await assert.rejects(staff.apiFetch(interestPath,undefined,interestInit));const old=staff.pendingFinancialWrites()[0];globalThis.sessionStorage=memory();setFetch(async(_url,options)=>{assert.equal(options.body,interestInit.body);return Response.json({total:0.01});});await staff.recoverFinancialWrite(old.storageKey);assert.equal(staff.pendingFinancialWrites().length,0);
+});
+test('interest: overlap is refused without queuing a second period',async()=>{
+ let release;const gate=new Promise(resolve=>release=resolve);let sends=0;setFetch(async()=>{sends++;await gate;return Response.json({total:0.01});});const first=staff.apiFetch(interestPath,undefined,interestInit);await assert.rejects(staff.apiFetch(interestPath,undefined,interestInit),/another tab/);release();await first;assert.equal(sends,1);
+});
+test('interest: initial validation refusal permits correcting the explicit period',async()=>{
+ let sends=0;setFetch(async()=>++sends===1?Response.json({message:'Invalid period'},{status:400}):Response.json({total:0.01}));await assert.rejects(staff.apiFetch(interestPath,undefined,{method:'POST',body:'{"period":"bad"}'}),/Invalid/);await staff.apiFetch(interestPath,undefined,interestInit);assert.equal(sends,2);
+});

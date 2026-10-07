@@ -513,7 +513,7 @@ export class SavingsService {
 
   private validPeriodCode(periodCode?: string): string {
     const code = periodCode ?? this.currentPeriodCode();
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(code)) {
+    if (code.length !== 7 || !/^\d{4}-(0[1-9]|1[0-2])$/.test(code)) {
       throw new BadRequestException('period must be in YYYY-MM format');
     }
     return code;
@@ -578,7 +578,7 @@ export class SavingsService {
   async postInterest(
     organizationId: string | null,
     actorUserId: string,
-    periodCode?: string,
+    periodCode: string,
   ): Promise<{
     period: string;
     total: number;
@@ -586,12 +586,14 @@ export class SavingsService {
     entryNo: number;
   }> {
     const orgId = this.requireOrg(organizationId);
+    if (!periodCode) throw new BadRequestException('An explicit YYYY-MM period is required for interest posting');
     const period = this.validPeriodCode(periodCode);
-    const postId = randomUUID();
-    let entryNo = 0;
-    let total = 0n;
-    let accounts = 0;
-    await withTenant(this.pool, orgId, async (c) => {
+    return financialIntent(this.pool, orgId, 'savings.interest.post', `interest-period:${period}`,
+      {actorUserId, period}, async (c) => {
+      const postId = randomUUID();
+      let entryNo = 0;
+      let total = 0n;
+      let accounts = 0;
       const already = await c.query(
         `SELECT 1 FROM savings_interest_postings
           WHERE organization_id = $1 AND period_code = $2`,
@@ -711,7 +713,7 @@ export class SavingsService {
         ],
       );
       accounts = accruals.length;
+      return { period, total: Number(moneyDecimal(total)), accounts, entryNo };
     });
-    return { period, total: Number(moneyDecimal(total)), accounts, entryNo };
   }
 }
