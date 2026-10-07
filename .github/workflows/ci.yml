@@ -109,5 +109,5 @@ jobs:
       - name: API integration tests (auth · ledger · savings · loans · payroll)
         working-directory: apps/api
         # Individual tests already have a 30s limit; cap a hung runner/teardown
-        # too, so a concurrency defect cannot leave verification silently stuck.
-        run: timeout --signal=TERM --kill-after=15s 600s pnpm test:integration
+        # too (15 minutes for the growing regression suite), so a concurrency defect cannot leave verification silently stuck.
+        run: timeout --signal=TERM --kill-after=15s 900s pnpm test:integration

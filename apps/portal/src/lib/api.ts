@@ -178,7 +178,7 @@ function isFinancialPath(path:string):boolean {
   /^\/loans\/[^/]+\/repayments$/.test(path) || /^\/shares\/member\/[^/]+\/(purchases|redemptions)$/.test(path) || path==='/member/withdrawals/request' || path==='/savings/interest/post' || path==='/dividends/post' ||
   /^\/savings\/withdrawals\/[^/]+\/(approve|reject)$/.test(path) || /^\/approvals\/requests\/[^/]+\/decisions$/.test(path) ||
   /^\/loans\/[^/]+\/(approve|reject|disburse)$/.test(path) || /^\/payroll\/batches\/[^/]+\/(approve|reject|reverse)$/.test(path) ||
-  /^\/approvals\/payroll\/[^/]+\/(approve|reject)$/.test(path) || /^\/ledger\/journals\/[^/]+\/(approve-post|reverse)$/.test(path) || /^\/approvals\/journals\/[^/]+\/approve$/.test(path);
+  /^\/approvals\/payroll\/[^/]+\/(approve|reject)$/.test(path) || /^\/ledger\/journals\/[^/]+\/(submit|approve-post|reverse)$/.test(path) || /^\/approvals\/journals\/[^/]+\/approve$/.test(path);
 }
 /** Display fields never define the durable account namespace. Server scope still authorizes replay. */
 function financialBrowserIdentity(raw:string|null):string|null {
@@ -234,7 +234,7 @@ export async function prepareFinancialWrite(path:string,init?:RequestInit):Promi
  const natural=path==='/payroll/import/commit' || path==='/savings/interest/post' || path==='/dividends/post' || stepped || /^\/loans\/[^/]+\/(approve|reject|disburse)$/.test(path) ||
    /^\/payroll\/batches\/[^/]+\/(approve|reject|reverse)$/.test(path) ||
    /^\/approvals\/payroll\/[^/]+\/(approve|reject)$/.test(path) ||
-   /^\/ledger\/journals\/[^/]+\/(approve-post|reverse)$/.test(path) || /^\/approvals\/journals\/[^/]+\/approve$/.test(path);
+   /^\/ledger\/journals\/[^/]+\/(submit|approve-post|reverse)$/.test(path) || /^\/approvals\/journals\/[^/]+\/approve$/.test(path);
  if (typeof window==='undefined' || init?.method?.toUpperCase()!=='POST' || !(keyed || natural)) return null;
  if (typeof init.body!=='string') throw new Error('Payment details must be JSON.');
  const details=JSON.parse(init.body) as Record<string,unknown>;

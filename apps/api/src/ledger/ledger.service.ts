@@ -346,18 +346,24 @@ export class LedgerService {
   /** DRAFT -> SUBMITTED (maker submits for checking). */
   async submit(
     organizationId: string | null,
-    _actorUserId: string,
+    actorUserId: string,
     journalId: string,
   ): Promise<JournalEntryRow> {
     const orgId = this.requireOrg(organizationId);
-    await withTenant(this.pool, orgId, async (c) => {
+    return financialIntent(this.pool, orgId, 'ledger.submit', `entity:${journalId}`,
+      {actorUserId, journalId}, async (c) => {
       await this.requireState(c, orgId, journalId, 'DRAFT');
       await c.query(
         `UPDATE journal_entries SET status = 'SUBMITTED' WHERE id = $1`,
         [journalId],
       );
+      await c.query(
+        `INSERT INTO audit_logs (organization_id,actor_user_id,action,entity_type,entity_id,metadata)
+         VALUES ($1,$2,'journal.submitted','journal_entry',$3,'{}'::jsonb)`,
+        [orgId,actorUserId,journalId],
+      );
+      return (await this.getJournalTx(c,orgId,journalId)).entry;
     });
-    return (await this.getJournal(orgId, journalId)).entry;
   }
 
   /** SUBMITTED -> POSTED (checker); allocates the sequential entry number. */
