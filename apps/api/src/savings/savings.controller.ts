@@ -14,7 +14,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsDefined, IsLength, Matches, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateIf } from 'class-validator';
+import { IsDefined, MinLength, Matches, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 import { SavingsService } from './savings.service';
 import { SavingsWithdrawalsService } from './savings-withdrawals.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -59,7 +59,8 @@ export class InterestPeriodDto {
   @IsDefined()
   @IsString()
   @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
-  @IsLength(7,7)
+  @MinLength(7)
+  @MaxLength(7)
   period!: string;
 }
 
