@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {readFile,mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {createRequire} from 'node:module';
+assert.equal(process.env.COOPENGINE_BROWSER_TEST,'isolated-staging');
+assert.ok(process.env.BROWSER_TEST_MODULE_ROOT);
+const require=createRequire(resolve(process.env.BROWSER_TEST_MODULE_ROOT,'browser-test.cjs'));
+const {chromium}=require('playwright');
+const password=(await readFile('.staging/compose.env','utf8')).match(/^STAGING_LOGIN_PASSWORD=(.+)$/m)?.[1].trim();assert.ok(password&&password.length>=24);
+const api='http://localhost:4399/api/v1',portal='http://localhost:4310';
+async function call(path,{token,body,method=body?'POST':'GET',status=200}={}){const r=await fetch(api+path,{method,signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},...(body?{body:JSON.stringify(body)}:{})});assert.equal(r.status,status,`${method} ${path}`);return status===204?null:r.json();}
+const profile=await mkdtemp(join(tmpdir(),'coopengine-multi-savings-'));let context,staff,checker;
+const platform=await call('/auth/login',{body:{email:'platform@recovery.invalid',password}});
+try{
+ const slug=`multi-savings-${Date.now().toString(36)}`,email=`${slug}@recovery.invalid`;
+ await call('/organizations',{token:platform.tokens.accessToken,status:201,body:{name:`SYNTHETIC ${slug}`,slug,adminEmail:email,adminPassword:password}});
+ staff=await call('/auth/login',{body:{email,password,organizationSlug:slug}});const token=staff.tokens.accessToken;
+ const member=await call('/members',{token,status:201,body:{firstName:'Multi',lastName:'Synthetic'}});await call(`/members/${member.id}/approve`,{token,method:'POST'});
+ const first=await call(`/savings/member/${member.id}/account`,{token,status:201,body:{}});
+ const products=await call('/products/savings',{token}),regular=(products.items??products).find(x=>x.code==='REGULAR-SAVINGS');assert.ok(regular);
+ await call(`/products/savings/${regular.id}`,{token,method:'PATCH',body:{code:regular.code,name:regular.name,interestRatePa:12,minDeposit:0,allowWithdrawal:true}});
+ const product=await call('/products/savings',{token,status:201,body:{code:'EXTRA-SAVINGS',name:'Extra savings',interestRatePa:12,minDeposit:0,allowWithdrawal:true}});
+ const second=await call(`/savings/member/${member.id}/account`,{token,status:201,body:{productId:product.id}});
+ for(const [account,amount] of [[first,1.15],[second,2.30]])await call(`/savings/accounts/${account.id}/deposits`,{token,status:201,body:{idempotencyKey:randomUUID(),amount}});
+ await call('/savings/interest/post',{token,body:{period:new Date().toISOString().slice(0,7)}});
+ const withdrawal=await call(`/savings/accounts/${second.id}/withdrawals`,{token,body:{idempotencyKey:randomUUID(),amount:0.01}});assert.equal(withdrawal.kind,'POSTED');
+ let r=await call('/reports/savings-reconciliation',{token});assert.equal(r.balanced,true);assert.equal(r.matched,2);assert.equal(r.totals.ledgerDecimal,'3.47');assert.equal(r.rows.find(x=>x.accountId===first.id).ledgerDecimal,'1.16');assert.equal(r.rows.find(x=>x.accountId===second.id).ledgerDecimal,'2.31');
+ context=await chromium.launchPersistentContext(join(profile,'browser'),{headless:true});await context.route('**/*',route=>[portal,'http://localhost:4399'].includes(new URL(route.request().url()).origin)?route.continue():route.abort());
+ const page=context.pages()[0]??await context.newPage(),errors=[];page.setDefaultTimeout(20000);page.on('pageerror',e=>errors.push(e.name));
+ await page.goto(portal+'/login');await page.getByLabel('Email',{exact:true}).fill(email);await page.getByLabel('Password',{exact:true}).fill(password);await page.getByLabel(/^Cooperative /).fill(slug);await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.getByRole('heading',{name:'Dashboard',exact:true}).waitFor();
+ await page.goto(portal+'/analytics');const section=page.getByRole('region',{name:'Savings reconciliation'});
+ await section.getByText('Savings reconciled',{exact:true}).waitFor();const extra=section.getByRole('row').filter({hasText:'EXTRA-SAVINGS'});assert.ok((await extra.textContent()).includes('₦2.31'));assert.ok((await extra.textContent()).includes('Journal-checked transactions'));
+ const invited=await call('/users',{token,status:201,body:{email:`checker-${slug}@recovery.invalid`,roleCodes:['COOP_ADMIN']}});checker=await call('/auth/login',{body:{email:invited.email,password:invited.tempPassword}});
+ const journal=await call('/ledger/journals',{token,status:201,body:{idempotencyKey:randomUUID(),entryDate:new Date().toISOString().slice(0,10),description:'SYNTHETIC unallocated member savings',lines:[{accountCode:'1000',debit:'0.01',memberId:member.id},{accountCode:'2000',credit:'0.01',memberId:member.id}]}});
+ await call(`/ledger/journals/${journal.id}/submit`,{token,body:{}});await call(`/ledger/journals/${journal.id}/approve-post`,{token:checker.tokens.accessToken,body:{}});
+ r=await call('/reports/savings-reconciliation',{token});assert.equal(r.balanced,false);assert.equal(r.matched,0);assert.equal(r.unresolvedAccounts,2);assert.equal(r.totals.unallocatedLedgerDecimal,'0.01');assert.equal(r.unresolved[0].reason,'MEMBER_LIABILITY_WITHOUT_ACCOUNT_ALLOCATION');
+ const response=page.waitForResponse(x=>x.url()===api+'/reports/savings-reconciliation'&&x.status()===200);await section.getByRole('button',{name:'Refresh reconciliation',exact:true}).click();await response;
+ await section.getByText('Savings review required',{exact:true}).waitFor();assert.ok((await section.textContent()).includes('2 unresolved accounts'));assert.ok((await section.textContent()).includes('does not identify which savings account'));
+ await page.setViewportSize({width:375,height:812});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'Mobile analytics fits with the reconciliation table');assert.deepEqual(errors,[]);
+ console.log('PASS: real multi-product deposits, shared interest and withdrawal reconcile per account; Analytics shows exact balances and attribution; a posted member-only journal is unresolved instead of spread across products; refresh and mobile width pass. Synthetic isolated staging only, no provider or production access.');
+}finally{await context?.close();await rm(profile,{recursive:true,force:true});for(const login of [checker,staff,platform])if(login)await call('/auth/logout',{token:login.tokens.accessToken,method:'POST',status:204});}

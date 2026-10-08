@@ -88,5 +88,66 @@ describe('exact financial reports (PostgreSQL)',()=>{
    expect(await f.snapshot()).toEqual(before);
   }finally{spy.mockRestore();}
  });
+ async function secondAccount(f:Awaited<ReturnType<typeof fixture>>,amount=2.30){
+  const product=(await f.send('/products/savings',{code:'EXTRA-SAVINGS',name:'Extra savings',interestRatePa:12,minDeposit:0,allowWithdrawal:true}).expect(201)).body;
+  const id=(await f.send(`/savings/member/${f.members[0]!.id}/account`,{productId:product.id}).expect(201)).body.id as string;
+  await f.send(`/savings/accounts/${id}/deposits`,{idempotencyKey:randomUUID(),amount}).expect(201);
+  return id;
+ }
+ async function interestBoth(f:Awaited<ReturnType<typeof fixture>>){
+  await f.tenant(c=>c.query('UPDATE savings_products SET interest_rate_pa=12 WHERE organization_id=$1',[f.org]));
+  await f.send('/savings/interest/post',{period:new Date().toISOString().slice(0,7)}).expect(200);
+ }
+ it('reconciles independent products, shared interest and a withdrawal without changing financial records',async()=>{
+  const f=await fixture(),other=await secondAccount(f);await interestBoth(f);
+  const withdrawal=await f.send(`/savings/accounts/${other}/withdrawals`,{idempotencyKey:randomUUID(),amount:0.01}).expect(200);expect(withdrawal.body.kind).toBe('POSTED');
+  const before=await f.snapshot(),r=(await get(f,'/reports/savings-reconciliation').expect(200)).body;
+  expect(r).toMatchObject({checked:2,matched:2,balanced:true,unresolvedEntries:0,mismatches:[]});
+  expect(r.rows.find((x:{accountId:string})=>x.accountId===f.account)).toMatchObject({ledgerDecimal:'1.16',projectedDecimal:'1.16',status:'MATCHED'});
+  expect(r.rows.find((x:{accountId:string})=>x.accountId===other)).toMatchObject({ledgerDecimal:'2.31',projectedDecimal:'2.31',status:'MATCHED'});
+  expect(r.totals).toMatchObject({ledgerDecimal:'3.47',projectedDecimal:'3.47',unallocatedLedgerDecimal:'0.00'});expect(await f.snapshot()).toEqual(before);
+ });
+ it('detects opposite one-kobo product differences even when the member total agrees',async()=>{
+  const f=await fixture(),other=await secondAccount(f);
+  // Synthetic projection drift, never a history repair or a production write.
+  await f.tenant(async c=>{await c.query('UPDATE member_savings_accounts SET current_balance=current_balance+0.01 WHERE id=$1',[f.account]);await c.query('UPDATE member_savings_accounts SET current_balance=current_balance-0.01 WHERE id=$1',[other]);});
+  const before=await f.snapshot(),r=(await get(f,'/reports/savings-reconciliation').expect(200)).body;
+  expect(r.balanced).toBe(false);expect(r.totals.diffDecimal).toBe('0.00');expect(r.mismatches.map((x:{diffDecimal:string})=>x.diffDecimal).sort()).toEqual(['-0.01','0.01']);expect(await f.snapshot()).toEqual(before);
+ });
+ it('reports unallocated member liability rather than certifying a matching combined projection',async()=>{
+  const f=await fixture();await secondAccount(f);const body={...f.journalBody,idempotencyKey:randomUUID(),lines:[{accountCode:'1000',debit:'1.00',memberId:f.members[0]!.id},{accountCode:'2000',credit:'1.00',memberId:f.members[0]!.id}]};const id=(await f.send('/ledger/journals',body).expect(201)).body.id;
+  await f.submit(id).expect(200);await f.send(`/ledger/journals/${id}/approve-post`,{},f.checker).expect(200);
+  await f.tenant(c=>c.query('UPDATE member_savings_accounts SET current_balance=current_balance+1 WHERE id=$1',[f.account]));
+  const before=await f.snapshot(),r=(await get(f,'/reports/savings-reconciliation').expect(200)).body;
+  expect(r).toMatchObject({balanced:false,matched:0,unresolvedAccounts:2});expect(r.totals).toMatchObject({diffDecimal:'0.00',unallocatedLedgerDecimal:'1.00'});expect(r.unresolved[0].reason).toBe('MEMBER_LIABILITY_WITHOUT_ACCOUNT_ALLOCATION');expect(r.rows.every((x:{ledgerDecimal:string|null})=>x.ledgerDecimal===null)).toBe(true);expect(await f.snapshot()).toEqual(before);
+ });
+ it('flags shared-batch transaction drift instead of inferring an allocation',async()=>{
+  const f=await fixture(),other=await secondAccount(f);await interestBoth(f);
+  await f.tenant(c=>c.query("UPDATE savings_transactions SET signed_amount=signed_amount-0.01 WHERE organization_id=$1 AND account_id=$2 AND type='INTEREST'",[f.org,other]));
+  const before=await f.snapshot(),r=(await get(f,'/reports/savings-reconciliation').expect(200)).body;
+  expect(r.balanced).toBe(false);expect(r.unresolvedAccounts).toBe(2);expect(r.unresolved.some((x:{reason:string})=>x.reason==='MOVEMENT_LEDGER_DISAGREEMENT')).toBe(true);expect(await f.snapshot()).toEqual(before);
+ });
+ it('includes reversed originals and counter-entries and reveals a missing account projection',async()=>{
+  const f=await fixture();await secondAccount(f);
+  const id=(await f.tenant(c=>c.query("SELECT id FROM journal_entries WHERE source_type='savings_account' AND source_id=$1",[f.account]))).rows[0].id;
+  await f.send(`/ledger/journals/${id}/reverse`,{reason:'Synthetic savings journal reversal'}).expect(200);
+  const before=await f.snapshot(),r=(await get(f,'/reports/savings-reconciliation').expect(200)).body;
+  expect(r.unresolvedEntries).toBe(0);expect(r.balanced).toBe(false);expect(r.totals.ledgerDecimal).toBe('2.30');expect(r.mismatches[0]).toMatchObject({accountId:f.account,ledgerDecimal:'0.00',diffDecimal:'1.15'});expect(await f.snapshot()).toEqual(before);
+ });
+ it('reconciles a payroll posting and atomic reversal when the member has two products',async()=>{
+  const f=await fixture();await secondAccount(f);
+  const preview=(await f.send('/payroll/import/preview',{idempotencyKey:randomUUID(),filename:'multi-product.csv',csv:`memberNo,amount\n${f.members[0]!.memberNo},0.01`}).expect(201)).body;
+  await f.send('/payroll/import/commit',{batchId:preview.batchId}).expect(200);await f.send(`/payroll/batches/${preview.batchId}/approve`,{},f.checker).expect(200);
+  expect((await get(f,'/reports/savings-reconciliation').expect(200)).body.balanced).toBe(true);
+  await f.send(`/payroll/batches/${preview.batchId}/reverse`,{reason:'Synthetic multi-product payroll correction'}).expect(200);
+  const before=await f.snapshot(),r=(await get(f,'/reports/savings-reconciliation').expect(200)).body;
+  expect(r).toMatchObject({checked:2,matched:2,balanced:true,unresolvedEntries:0});expect(r.totals.ledgerDecimal).toBe('3.45');expect(await f.snapshot()).toEqual(before);
+ });
+ it('keeps multi-product reconciliation isolated to the authenticated tenant',async()=>{
+  const f=await fixture(),g=await fixture();await secondAccount(f);await secondAccount(g,0.23);
+  const a=(await get(f,'/reports/savings-reconciliation').expect(200)).body,b=(await get(g,'/reports/savings-reconciliation').expect(200)).body;
+  expect(a.totals.ledgerDecimal).toBe('3.45');expect(b.totals.ledgerDecimal).toBe('1.38');expect(a.balanced&&b.balanced).toBe(true);
+  expect(JSON.stringify(a)).not.toContain(g.account);expect(JSON.stringify(b)).not.toContain(f.account);
+ });
  it('retains statement and export tenant isolation',async()=>{const f=await fixture(),g=await fixture();await get(g,`/reports/member/${f.members[0]!.id}/360`).expect(404);await get(g,`/reports/export/member-statement?memberId=${f.members[0]!.id}`).expect(404);const pack=(await get(g,'/reports/board-pack').expect(200)).body;expect(pack.savings.totalBalanceDecimal).toBe('1.15');});
 });

@@ -32,7 +32,7 @@ describe('reports consume exact SQL money',()=>{
  it('sums portfolio totals and retains month decimals',async()=>{
   const month=new Date().toISOString().slice(0,7),rows=[{outstanding:max,par30:max,par90:max},{outstanding:max,par30:max,par90:max}];const r=await service([[{month,total:huge}],[{month,total:huge}],rows]).portfolioAnalytics('org',1);expect(r.months[0]?.disbursedDecimal).toBe(huge);expect(r.months[0]?.collectedDecimal).toBe(huge);expect(r.totals.par90Decimal).toBe('199999999999999999.98');
  });
- it('detects one-kobo reconciliation differences',async()=>{const r=await service([[{projected:huge,ledger:'90071992547409.90',member_no:1}]]).savingsReconciliation('org');expect(r.mismatches[0]?.diffDecimal).toBe('0.01');expect(r.matched).toBe(0);});
+ it('detects one-kobo reconciliation differences',async()=>{const r=await service([[{accounts:[{id:'a',member_id:'m',member_no:1,account_no:1,product_code:'REGULAR',projected:huge}],liability:[{entry_id:'j',member_id:'m',amount:'90071992547409.90',status:'POSTED'}],movements:[]}]]).savingsReconciliation('org');expect(r.mismatches[0]?.diffDecimal).toBe('0.01');expect(r.matched).toBe(0);});
 });
 describe('other financial report aggregates',()=>{
  it('preserves arrears buckets and total as decimal strings',async()=>{
