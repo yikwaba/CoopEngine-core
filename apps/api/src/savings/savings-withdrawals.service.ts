@@ -117,8 +117,17 @@ export class SavingsWithdrawalsService {
     const result = await c.query('SELECT withdrawal_approval_threshold FROM organizations WHERE id=$1', [orgId]);
     const raw = result.rows[0]?.withdrawal_approval_threshold as string | null | undefined;
     const threshold = raw == null ? null : moneyKobo(raw);
+    // An active stepped policy is authoritative even when the legacy threshold
+    // would otherwise permit immediate staff posting. Reuse this same decision
+    // when creating the linked request so gaps/overlaps roll back atomically.
+    const configured = source === 'STAFF' && actorUserId ? await c.query(
+      `SELECT 1 FROM approval_policies
+        WHERE organization_id=$1 AND kind='WITHDRAWAL' AND is_active=true LIMIT 1`,
+      [orgId],
+    ) : null;
+    const hasPolicy = configured?.rowCount === 1;
     const needsApproval =
-      source === 'MEMBER' || (threshold !== null && (threshold === 0n || value > threshold));
+      hasPolicy || source === 'MEMBER' || (threshold !== null && (threshold === 0n || value > threshold));
 
     if (!needsApproval && actorUserId) {
       const account = await this.savings.withdraw(
@@ -170,18 +179,12 @@ export class SavingsWithdrawalsService {
       // approval request. Member-originated requests remain on the legacy staff
       // approval path until approval_requests can carry member identity (0041).
       if (source === 'STAFF' && actorUserId) {
-        const configured = await c.query(
-          `SELECT 1 FROM approval_policies
-            WHERE organization_id = $1 AND kind = 'WITHDRAWAL' AND is_active = true
-            LIMIT 1`,
-          [orgId],
-        );
-        if (configured.rowCount === 1) {
+        if (hasPolicy) {
           await this.approvals.createRequestInTransaction(c, orgId, actorUserId, {
             kind: 'WITHDRAWAL',
             entityType: 'savings_withdrawal_request',
             entityId: id.id,
-            amount: Number(moneyDecimal(value)),
+            amount: moneyDecimal(value),
             summary: description ?? `Savings withdrawal from account ${accountId}`,
             payload: { accountId, memberId: account.member_id, source },
           });

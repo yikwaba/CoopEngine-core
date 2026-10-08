@@ -101,7 +101,7 @@ export class ApprovalsService {
       kind: 'WITHDRAWAL' | 'PAYROLL' | 'LOAN' | 'JOURNAL' | 'EXPENSE';
       entityType: string;
       entityId: string;
-      amount: number;
+      amount: number | string;
       summary?: string;
       payload?: Record<string, unknown>;
     },
@@ -121,7 +121,7 @@ export class ApprovalsService {
       kind: 'WITHDRAWAL' | 'PAYROLL' | 'LOAN' | 'JOURNAL' | 'EXPENSE';
       entityType: string;
       entityId: string;
-      amount: number;
+      amount: number | string;
       summary?: string;
       payload?: Record<string, unknown>;
     },
