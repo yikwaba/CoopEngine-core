@@ -32,7 +32,7 @@ try {
  await page.goto(portal+'/journal-drafts');await page.getByLabel('Entry date',{exact:true}).fill(new Date().toISOString().slice(0,10));await page.getByLabel('Description',{exact:true}).fill('Exact decimal browser');
  await page.getByLabel('Account',{exact:true}).nth(0).selectOption('5010');await page.getByLabel('Account',{exact:true}).nth(1).selectOption('1000');
  await page.getByLabel('Amount (₦)',{exact:true}).nth(0).fill('90071992547409.91');await page.getByLabel('Amount (₦)',{exact:true}).nth(1).fill('90071992547409.91');
- assert.ok(await page.locator('form').evaluate(form=>form.checkValidity()),'Synthetic form fills all required fields');
+ assert.ok(await page.locator('form').filter({has:page.getByRole('button',{name:'Create journal draft',exact:true})}).evaluate(form=>form.checkValidity()),'Synthetic form fills all required fields');
  const responsePromise=page.waitForResponse(r=>r.url().endsWith('/api/v1/ledger/journals')&&r.request().method()==='POST');
  await page.getByRole('button',{name:'Create journal draft',exact:true}).click();const response=await responsePromise;assert.equal(response.status(),201);const payload=response.request().postDataJSON();assert.equal(payload.lines[0].debit,'90071992547409.91');assert.equal(payload.lines[1].credit,'90071992547409.91');
  const journal=await response.json();const exact=await call('/ledger/journals/'+journal.id,{token:staff.tokens.accessToken});assert.equal(exact.lines.find(l=>l.accountCode==='5010').debitDecimal,'90071992547409.91');
