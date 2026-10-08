@@ -175,7 +175,9 @@ describe('exact financial reports (PostgreSQL)',()=>{
   expect(await f.snapshot()).toEqual(before);
  });
  it('preserves period filtering and tenant isolation after a historical reversal',async()=>{
-  const f=await fixture(),g=await fixture(),id=await postedManual(f,'1.15','2025-02-15');
+  const f=await fixture(),g=await fixture();
+  for(const [tenant,code] of [[f,'2025-02'],[f,'2025-03'],[g,'2025-02']] as const)await tenant.send('/ledger/periods',{code}).expect(201);
+  const id=await postedManual(f,'1.15','2025-02-15');
   await f.send(`/ledger/journals/${id}/reverse`,{reason:'Synthetic historical report reversal'}).expect(200);await postedManual(f,'0.23','2025-03-15');
   await postedManual(g,'9.99','2025-02-15');const before=await f.snapshot();
   const feb=(await get(f,'/ledger/trial-balance?period=2025-02').expect(200)).body,mar=(await get(f,'/ledger/trial-balance?period=2025-03').expect(200)).body;
