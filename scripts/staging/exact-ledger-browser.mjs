@@ -21,7 +21,7 @@ async function call(path,{token,body,method=body?'POST':'GET',status=200}={}) {
 const platform=await call('/auth/login',{body:{email:'platform@recovery.invalid',password}});
 const slug=`exact-ledger-${Date.now().toString(36)}`,email=`${slug}@recovery.invalid`;
 let context,staff;
-const profile=await mkdtemp(join(tmpdir(),'exact-ledger-')); 
+const profile=await mkdtemp(join(tmpdir(),'exact-ledger-'));
 try {
  await call('/organizations',{token:platform.tokens.accessToken,status:201,body:{name:`SYNTHETIC ${slug}`,slug,adminEmail:email,adminPassword:password}});
  staff=await call('/auth/login',{body:{email,password,organizationSlug:slug}});
