@@ -72,7 +72,7 @@ describe('exact financial reports (PostgreSQL)',()=>{
   const result=await get(f,'/reports/board-pack.xlsx').buffer(true).parse((res,cb)=>{const chunks:Buffer[]=[];res.on('data',(c:Buffer)=>chunks.push(c));res.on('end',()=>cb(null,Buffer.concat(chunks)));}).expect(200);const wb=new ExcelJS.Workbook();await wb.xlsx.load(result.body);let expense:unknown,total:unknown;wb.getWorksheet('Trial Balance')!.eachRow(row=>{if(row.getCell(1).value==='5010')expense=row.getCell(4).value;if(row.getCell(2).value==='TOTAL')total=row.getCell(6).value;});expect(expense).toBe('90071992547409.91');expect(total).toBe('0.00');
  });
  it('uses historical boundaries for real dated and empty-period statements without writes',async()=>{
-  const f=await fixture();await f.send(`/savings/accounts/${f.account}/deposits`,{idempotencyKey:randomUUID(),amount:'0.01'}).expect(201);
+  const f=await fixture();await f.send(`/savings/accounts/${f.account}/deposits`,{idempotencyKey:randomUUID(),amount:0.01}).expect(201);
   // Synthetic dates only, constrained to this fixture's account and tenant.
   await f.tenant(c=>c.query(`UPDATE savings_transactions SET created_at=CASE WHEN running_balance=1.15 THEN '2026-01-10T12:00:00Z'::timestamptz ELSE '2026-03-10T12:00:00Z'::timestamptz END WHERE organization_id=$1 AND account_id=$2`,[f.org,f.account]));
   const pdf=app.get(PdfService),original=(pdf as any).doc.bind(pdf),texts:string[]=[];
