@@ -3,16 +3,17 @@ import {
   ArrayMinSize,
   IsArray,
   IsIn,
-  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
   Matches,
   MaxLength,
-  Min,
   MinLength,
   ValidateNested,
+  Validate,
 } from 'class-validator';
+
+import {JournalAmountValidator} from '../ledger-money';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -23,14 +24,12 @@ export class JournalLineDto {
   accountCode!: string;
 
   @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0.01)
-  debit?: number;
+  @Validate(JournalAmountValidator)
+  debit?: number | string;
 
   @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0.01)
-  credit?: number;
+  @Validate(JournalAmountValidator)
+  credit?: number | string;
 
   @IsOptional()
   @IsString()
