@@ -6,7 +6,8 @@ import { Test } from '@nestjs/testing';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { PdfService } from '../src/pdf/pdf.service';
 import { AppModule } from '../src/app.module';
 import { ADMIN_PASSWORD, TEST_DATABASE_URL, ensureRbacSeeded } from './helpers';
 
@@ -69,6 +70,23 @@ describe('exact financial reports (PostgreSQL)',()=>{
  it('keeps posted spreadsheet sums exact and excludes an additional large draft',async()=>{
   const f=await fixture();const body={...f.journalBody,idempotencyKey:randomUUID(),lines:[{accountCode:'5010',debit:'90071992547409.91'},{accountCode:'1000',credit:'90071992547409.91'}]};const id=(await f.send('/ledger/journals',body).expect(201)).body.id;await f.submit(id).expect(200);await f.send(`/ledger/journals/${id}/approve-post`,{},f.checker).expect(200);await f.send('/ledger/journals',{...body,idempotencyKey:randomUUID()}).expect(201);
   const result=await get(f,'/reports/board-pack.xlsx').buffer(true).parse((res,cb)=>{const chunks:Buffer[]=[];res.on('data',(c:Buffer)=>chunks.push(c));res.on('end',()=>cb(null,Buffer.concat(chunks)));}).expect(200);const wb=new ExcelJS.Workbook();await wb.xlsx.load(result.body);let expense:unknown,total:unknown;wb.getWorksheet('Trial Balance')!.eachRow(row=>{if(row.getCell(1).value==='5010')expense=row.getCell(4).value;if(row.getCell(2).value==='TOTAL')total=row.getCell(6).value;});expect(expense).toBe('90071992547409.91');expect(total).toBe('0.00');
+ });
+ it('uses historical boundaries for real dated and empty-period statements without writes',async()=>{
+  const f=await fixture();await f.send(`/savings/accounts/${f.account}/deposits`,{idempotencyKey:randomUUID(),amount:0.01}).expect(201);
+  // Synthetic dates only, constrained to this fixture's account and tenant.
+  await f.tenant(c=>c.query(`UPDATE savings_transactions SET created_at=CASE WHEN running_balance=1.15 THEN '2026-01-10T12:00:00Z'::timestamptz ELSE '2026-03-10T12:00:00Z'::timestamptz END WHERE organization_id=$1 AND account_id=$2`,[f.org,f.account]));
+  const pdf=app.get(PdfService),original=(pdf as any).doc.bind(pdf),texts:string[]=[];
+  const spy=vi.spyOn(pdf as any,'doc').mockImplementation(()=>{const doc=original(),text=doc.text;doc.text=function(value:string,...args:unknown[]){texts.push(String(value));return text.call(this,value,...args);};return doc;});
+  try{
+   const before=await f.snapshot();
+   for(const [from,to,opening,closing] of [
+    ['2026-01-01','2026-01-31','0.00','1.15'],
+    ['2026-02-01','2026-02-28','1.15','1.15'],
+    [undefined,'2025-12-31','0.00','0.00'],
+    ['2027-01-01',undefined,'1.16','1.16'],
+   ]){texts.length=0;const result=await pdf.memberStatement(f.org,f.members[0]!.id,from,to);expect(result.buffer.subarray(0,5).toString()).toBe('%PDF-');expect(texts).toContain(`Opening balance: NGN ${opening}`);expect(texts).toContain(`Closing balance: NGN ${closing}`);}
+   expect(await f.snapshot()).toEqual(before);
+  }finally{spy.mockRestore();}
  });
  it('retains statement and export tenant isolation',async()=>{const f=await fixture(),g=await fixture();await get(g,`/reports/member/${f.members[0]!.id}/360`).expect(404);await get(g,`/reports/export/member-statement?memberId=${f.members[0]!.id}`).expect(404);const pack=(await get(g,'/reports/board-pack').expect(200)).body;expect(pack.savings.totalBalanceDecimal).toBe('1.15');});
 });

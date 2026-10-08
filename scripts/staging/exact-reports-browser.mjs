@@ -40,7 +40,22 @@ try{
  const xlsxPath=await file.path();const xml=execFileSync('unzip',['-p',xlsxPath,'xl/sharedStrings.xml'],{encoding:'utf8'});assert.ok(xml.includes('90071992547409.92'),'Spreadsheet shared strings retain exact amount');
  download=page.waitForEvent('download');await page.getByRole('button',{name:'Board pack (PDF)',exact:true}).click();file=await download;const pdfPath=await file.path();const text=execFileSync('pdftotext',['-layout',pdfPath,'-'],{encoding:'utf8'});assert.ok(text.includes('NGN 90,071,992,547,409.92'),'Actual downloaded PDF retains exact digits');assert.ok(text.includes('Balanced: yes'));
  const pdf=await fetch(api+`/pdf/members/${member.id}/statement.pdf`,{headers:{Authorization:`Bearer ${token}`}});assert.equal(pdf.status,200);const statement=join(profile,'statement.pdf');await writeFile(statement,Buffer.from(await pdf.arrayBuffer()));const statementText=execFileSync('pdftotext',['-layout',statement,'-'],{encoding:'utf8'});assert.ok(statementText.includes('Opening balance: NGN 90,071,992,547,409.91'));assert.ok(statementText.includes('Closing balance: NGN 90,071,992,547,409.92'));
- seed('90071992547409.93');const mismatch=await call('/reports/savings-reconciliation',{token});assert.equal(mismatch.mismatches[0].diffDecimal,'0.01','One-kobo discrepancy survives unsafe-number boundary');
+ // Add later activity, then place both synthetic transactions on fixed dates.
+ await call(`/savings/accounts/${account.id}/deposits`,{token,status:201,body:{idempotencyKey:randomUUID(),amount:0.01}});
+ execFileSync('docker',[...compose,'exec','-T','postgres','psql','-U','staging_admin','-d','coopengine_staging','-v','ON_ERROR_STOP=1','-c',`BEGIN; SELECT set_config('app.tenant_id','${org}',true); UPDATE savings_transactions SET created_at=CASE WHEN running_balance=90071992547409.92 THEN '2026-01-10T12:00:00Z'::timestamptz ELSE '2026-03-10T12:00:00Z'::timestamptz END WHERE organization_id='${org}' AND account_id='${account.id}'; COMMIT;`],{stdio:'pipe',timeout:20000});
+ for(const [range,opening,closing] of [
+  ['from=2026-01-01&to=2026-01-31','91','92'],
+  ['from=2026-02-01&to=2026-02-28','92','92'],
+  ['to=2025-12-31','91','91'],
+  ['from=2027-01-01','93','93'],
+ ]){
+  const response=await fetch(api+`/pdf/members/${member.id}/statement.pdf?${range}`,{headers:{Authorization:`Bearer ${token}`}});assert.equal(response.status,200);
+  await writeFile(statement,Buffer.from(await response.arrayBuffer()));const contents=execFileSync('pdftotext',['-layout',statement,'-'],{encoding:'utf8'});
+  assert.ok(contents.includes(`Opening balance: NGN 90,071,992,547,409.${opening}`),range+' opening');
+  assert.ok(contents.includes(`Closing balance: NGN 90,071,992,547,409.${closing}`),range+' closing');
+ }
+ console.log('PASS: historical member PDF closing, empty intervening period, before-first and after-last periods preserve exact balances despite later activity.');
+ seed('90071992547409.94');const mismatch=await call('/reports/savings-reconciliation',{token});assert.equal(mismatch.mismatches[0].diffDecimal,'0.01','One-kobo discrepancy survives unsafe-number boundary');
  await page.setViewportSize({width:375,height:812});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'Mobile analytics fits');assert.deepEqual(errors,[]);
  console.log('PASS: synthetic large balances match exact ledger; actual dashboard/member/analytics display and browser CSV/XLSX/PDF downloads preserve every kobo; member PDF opening/closing subtraction exact; one-kobo reconciliation discrepancy detected; mobile fits. Boundary fixture only, no production/provider access or historical reconciliation claim.');
 }finally{await context?.close();await rm(profile,{recursive:true,force:true});for(const login of [checker,staff,platform])if(login)await call('/auth/logout',{token:login.tokens.accessToken,method:'POST',status:204});}

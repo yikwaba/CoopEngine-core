@@ -159,11 +159,37 @@ export class PdfService {
               WHERE t.account_id = $1
                 AND ($2::date IS NULL OR t.created_at::date >= $2::date)
                 AND ($3::date IS NULL OR t.created_at::date <= $3::date)
-              ORDER BY t.created_at`,
+              ORDER BY t.created_at, t.id`,
             [accountRow.id, from ?? null, to ?? null],
           )
         : { rows: [] };
+      // An empty historical period still needs its historical balance, rather
+      // than the account's present-day projection. If it predates all activity,
+      // recover the opening balance from the first transaction.
+      let emptyPeriodBalance = accountRow?.current_balance ?? '0.00';
+      let historyUnavailable = false;
+      if (accountRow && !txns.rows.length && (from || to)) {
+        const boundary = await c.query(
+          `SELECT running_balance, signed_amount,
+                  ($2::date IS NULL OR created_at::date <= $2::date) AS before_end
+             FROM savings_transactions WHERE account_id = $1
+             ORDER BY ($2::date IS NULL OR created_at::date <= $2::date) DESC,
+                      CASE WHEN $2::date IS NULL OR created_at::date <= $2::date
+                           THEN created_at END DESC,
+                      created_at ASC,
+                      CASE WHEN $2::date IS NULL OR created_at::date <= $2::date
+                           THEN id END DESC, id ASC LIMIT 1`,
+          [accountRow.id, to ?? null],
+        );
+        const anchor = boundary.rows[0];
+        historyUnavailable = !anchor;
+        if (anchor) emptyPeriodBalance = anchor.before_end
+          ? anchor.running_balance
+          : ledgerDecimal(ledgerKobo(anchor.running_balance) - ledgerKobo(anchor.signed_amount));
+      }
       return {
+        emptyPeriodBalance,
+        historyUnavailable,
         member: member.rows[0] as {
           member_no: number;
           first_name: string;
@@ -200,11 +226,13 @@ export class PdfService {
     const first = data.txns[0];
     const opening = first
       ? ledgerDecimal(ledgerKobo(first.running_balance)-ledgerKobo(first.signed_amount))
-      : data.account?.current_balance ?? '0.00';
+      : data.emptyPeriodBalance;
+    const closing = data.txns.at(-1)?.running_balance ?? data.emptyPeriodBalance;
 
     doc.fontSize(9.5);
-    doc.text(`Opening balance: ${pdfMoney(opening)}`);
-    doc.text(`Closing balance: ${pdfMoney(data.account?.current_balance ?? 0)}`);
+    doc.text(`Opening balance: ${data.historyUnavailable ? 'Unavailable (no transaction history)' : pdfMoney(opening)}`);
+    doc.text(`Closing balance: ${data.historyUnavailable ? 'Unavailable (no transaction history)' : pdfMoney(closing)}`);
+    if (data.historyUnavailable) doc.text(`Current projected balance: ${pdfMoney(data.account?.current_balance)}`);
     doc.moveDown(0.6);
 
     this.table(
@@ -297,13 +325,17 @@ export class PdfService {
       paid_principal: string;
       paid_interest: string;
     }[]).map((r) => {
-      const paid = ledgerKobo(r.paid_principal) + ledgerKobo(r.paid_interest) > 0n;
+      const paidPrincipal = ledgerKobo(r.paid_principal);
+      const paidInterest = ledgerKobo(r.paid_interest);
+      const fullyPaid = paidPrincipal >= ledgerKobo(r.principal_due)
+        && paidInterest >= ledgerKobo(r.interest_due);
+      const partlyPaid = paidPrincipal + paidInterest > 0n;
       const due = new Date(r.due_date).toISOString().slice(0, 10);
-      const status = paid
+      const status = fullyPaid
         ? 'PAID'
         : due < today
           ? 'OVERDUE'
-          : 'PENDING';
+          : partlyPaid ? 'PARTIAL' : 'PENDING';
       return [
         r.seq,
         due,
