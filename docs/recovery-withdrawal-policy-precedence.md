@@ -24,6 +24,9 @@ committed pre-fix receipt returns its historical result; this change does not un
 or repost history. No new migrations or production merge/deployment. Approval-only staff can read
 the threshold setting required by the withdrawal screen; this adds savings.approve
 to the read endpoint, with no change to existing setting-write permissions.
+The dashboard retains a valid session when a view is denied, loads permitted
+views independently, and marks unavailable data without inventing zero balances.
+The API transport still clears sessions and redirects for 401 responses.
 
 PostgreSQL regressions cover null/high/equal legacy thresholds, inclusive upper
 policy bound, gap/overlap/no steps rollback, inactive/no-policy compatibility,

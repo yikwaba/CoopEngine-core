@@ -5,7 +5,6 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   apiFetch,
-  clearSession,
   logoutSession,
   readToken,
   API_BASE,
@@ -50,23 +49,29 @@ export default function DashboardPage() {
     let cancelled = false;
     (async () => {
       try {
-        const [memberList, savingsBook, loanBook] = await Promise.all([
+        const [memberList, savingsBook, loanBook] = await Promise.allSettled([
           apiFetch<MemberRow[]>('/members', token),
           apiFetch<SavingsBook>('/reports/savings-book', token),
           apiFetch<LoanBook>('/reports/loan-book', token),
         ]);
-        if (cancelled) return;
-        setMembers(memberList.slice(0, 8));
-        setMemberCount(memberList.length);
-        setSavings(savingsBook);
-        setLoans(loanBook);
+        if (cancelled || !readToken()) return;
+        if (memberList.status === 'fulfilled') {
+          setMembers(memberList.value.slice(0, 8));
+          setMemberCount(memberList.value.length);
+        }
+        if (savingsBook.status === 'fulfilled') setSavings(savingsBook.value);
+        if (loanBook.status === 'fulfilled') setLoans(loanBook.value);
+        if ([memberList, savingsBook, loanBook].some(result => result.status === 'rejected')) {
+          setError('Some dashboard information could not be loaded. You can continue using the available workflows.');
+        }
         setReady(true);
-      } catch (err) {
+      } catch {
         if (cancelled) return;
-        // Token likely expired/revoked -> back to login
-        clearSession();
-        setError(err instanceof Error ? err.message : 'Failed to load dashboard');
-        router.replace('/login');
+        // apiResponse already revokes the local marker and redirects on 401.
+        // A permission refusal or service error must not erase a valid session.
+        if (!readToken()) return;
+        setError('Dashboard information could not be loaded. You can continue using the available workflows.');
+        setReady(true);
       }
     })();
     return () => {
@@ -82,16 +87,6 @@ export default function DashboardPage() {
     }
   }
 
-  if (error) {
-    return (
-      <main style={{ padding: 40 }}>
-        <p>{error}</p>
-        <button className="btn secondary" onClick={() => void signOut()}>
-          Back to sign in
-        </button>
-      </main>
-    );
-  }
 
   return (
     <main style={{ maxWidth: 1000, margin: '0 auto', padding: 28 }}>
@@ -115,33 +110,34 @@ export default function DashboardPage() {
       </header>
       <Nav />
       <TodayStrip />
+      {error && <p role="alert">{error}</p>}
 
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14 }}>
         <div className="card">
           <p className="stat-label">Members</p>
-          <p className="stat-value">{ready && memberCount !== null ? memberCount : '…'}</p>
+          <p className="stat-value">{ready && memberCount !== null ? memberCount : ready ? '—' : '…'}</p>
         </div>
         <div className="card">
           <p className="stat-label">Member savings (₦)</p>
           <p className="stat-value">
-            {ready && savings ? reportMoney(savings.totalBalanceDecimal ?? savings.totalBalance).replace('₦','') : '…'}
+            {ready && savings ? reportMoney(savings.totalBalanceDecimal ?? savings.totalBalance).replace('₦','') : ready ? '—' : '…'}
           </p>
         </div>
         <div className="card">
           <p className="stat-label">Outstanding loans (₦)</p>
           <p className="stat-value">
-            {ready && loans ? reportMoney(loans.outstandingTotalDecimal ?? loans.outstandingTotal).replace('₦','') : '…'}
+            {ready && loans ? reportMoney(loans.outstandingTotalDecimal ?? loans.outstandingTotal).replace('₦','') : ready ? '—' : '…'}
           </p>
         </div>
         <div className="card">
           <p className="stat-label">Active loans</p>
-          <p className="stat-value">{ready && loans ? loans.disbursedCount : '…'}</p>
+          <p className="stat-value">{ready && loans ? loans.disbursedCount : ready ? '—' : '…'}</p>
         </div>
       </section>
 
       <section className="card" style={{ marginTop: 20 }}>
         <h2 style={{ margin: '0 0 10px', fontSize: 17 }}>Recent members</h2>
-        {ready ? (
+        {ready && memberCount !== null ? (
           <table className="data">
             <thead>
               <tr>
@@ -173,7 +169,7 @@ export default function DashboardPage() {
             </tbody>
           </table>
         ) : (
-          <p style={{ color: '#5b6772' }}>Loading…</p>
+          <p style={{ color: '#5b6772' }}>{ready ? 'Member information is unavailable.' : 'Loading…'}</p>
         )}
       </section>
     </main>
