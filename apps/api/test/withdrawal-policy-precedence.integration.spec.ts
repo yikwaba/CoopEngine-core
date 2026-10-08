@@ -52,7 +52,9 @@ describe('withdrawal policy precedence (PostgreSQL)',()=>{
  const withdrawal=(f:Awaited<ReturnType<typeof fixture>>,key=randomUUID(),amount=0.01)=>f.send(`/savings/accounts/${f.account}/withdrawals`,{idempotencyKey:key,amount,description:'Policy precedence regression'});
  const decision=(f:Awaited<ReturnType<typeof fixture>>,id:string,headers=f.checker,step=1,action='approve')=>f.send(`/savings/withdrawals/${id}/${action}`,{expectedStepNo:step},headers);
  it('null legacy threshold cannot bypass active policy, ordered maker/checker steps or retry protection',async()=>{
-  const f=await fixture(),final=await chair(f);await policy(f);const key=randomUUID();
+  const f=await fixture(),final=await chair(f);await policy(f);
+  for(const headers of [f.checker,final])await request(app.getHttpServer()).get('/api/v1/savings/settings/withdrawal-approval').set(headers).expect(200);
+  const key=randomUUID();
   const [a,b]=await Promise.all([withdrawal(f,key).expect(200),withdrawal(f,key).expect(200)]);expect(a.body).toEqual(b.body);expect(a.body.kind).toBe('PENDING');const id=a.body.requestId;
   expect(await balance(f)).toBe('1.15');await withdrawal(f,key,0.02).expect(409);
   await decision(f,id,f.auth).expect(409);await decision(f,id,final).expect(403);expect(await balance(f)).toBe('1.15');

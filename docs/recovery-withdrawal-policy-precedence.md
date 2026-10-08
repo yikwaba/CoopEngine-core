@@ -21,7 +21,9 @@ policy fixtures are seeded only in disposable tenant-scoped tests/staging.
 Existing maker-checker, ordered role steps, final-step-only payout, atomic posting,
 request/decision receipts and expected-step checks remain. Retry of an already
 committed pre-fix receipt returns its historical result; this change does not undo
-or repost history. No new migrations or production merge/deployment.
+or repost history. No new migrations or production merge/deployment. Approval-only staff can read
+the threshold setting required by the withdrawal screen; this adds savings.approve
+to the read endpoint, with no change to existing setting-write permissions.
 
 PostgreSQL regressions cover null/high/equal legacy thresholds, inclusive upper
 policy bound, gap/overlap/no steps rollback, inactive/no-policy compatibility,
