@@ -1,3 +1,5 @@
+import {reportDecimal,reportSum} from './report-money';
+import {ledgerKobo,ledgerDecimal} from '../ledger/ledger-money';
 import {
   BadRequestException,
   ForbiddenException,
@@ -23,19 +25,19 @@ export interface Member360 {
     accountId: string;
     accountNo: number;
     productCode: string;
-    balance: number;
+    balance: number; balanceDecimal: string;
     status: string;
   }[];
-  savingsTotal: number;
-  shareBalance: number;
+  savingsTotal: number; savingsTotalDecimal: string;
+  shareBalance: number; shareBalanceDecimal: string;
   loans: {
     id: string;
     productCode: string;
-    principal: number;
-    outstandingPrincipal: number;
+    principal: number; principalDecimal: string;
+    outstandingPrincipal: number; outstandingPrincipalDecimal: string;
     status: string;
   }[];
-  loansOutstandingTotal: number;
+  loansOutstandingTotal: number; loansOutstandingTotalDecimal: string;
 }
 
 export interface SavingsBookRow {
@@ -44,7 +46,7 @@ export interface SavingsBookRow {
   memberName: string;
   accountNo: number;
   productCode: string;
-  balance: number;
+  balance: number; balanceDecimal: string;
   status: string;
 }
 
@@ -54,8 +56,8 @@ export interface LoanBookRow {
   memberNo: number;
   memberName: string;
   productCode: string;
-  principal: number;
-  outstandingPrincipal: number;
+  principal: number; principalDecimal: string;
+  outstandingPrincipal: number; outstandingPrincipalDecimal: string;
   interestRatePa: number;
   status: string;
   disbursedAt: Date | null;
@@ -109,7 +111,7 @@ export class ReportsService {
         accountId: r.account_id as string,
         accountNo: Number(r.account_no),
         productCode: r.product_code as string,
-        balance: Number(r.current_balance),
+        balance: Number(r.current_balance), balanceDecimal: reportDecimal(r.current_balance),
         status: r.status as string,
       }));
 
@@ -135,8 +137,8 @@ export class ReportsService {
       const loanRows = loans.rows.map((r: Record<string, unknown>) => ({
         id: r.id as string,
         productCode: r.product_code as string,
-        principal: Number(r.principal),
-        outstandingPrincipal: Number(r.outstanding_principal),
+        principal: Number(r.principal), principalDecimal: reportDecimal(r.principal),
+        outstandingPrincipal: Number(r.outstanding_principal), outstandingPrincipalDecimal: reportDecimal(r.outstanding_principal),
         status: r.status as string,
       }));
 
@@ -151,20 +153,18 @@ export class ReportsService {
           joinedAt: (m.joined_at as Date | null) ?? null,
         },
         savings: savingsRows,
-        savingsTotal: savingsRows.reduce((a, r) => a + r.balance, 0),
+        savingsTotal: Number(reportSum(savingsRows,'balanceDecimal')), savingsTotalDecimal: reportSum(savingsRows,'balanceDecimal'),
         shareBalance,
+        shareBalanceDecimal: reportDecimal(shares.rows[0]?.current_balance),
         loans: loanRows,
-        loansOutstandingTotal: loanRows.reduce(
-          (a, r) => a + r.outstandingPrincipal,
-          0,
-        ),
+        loansOutstandingTotal: Number(reportSum(loanRows,'outstandingPrincipalDecimal')), loansOutstandingTotalDecimal: reportSum(loanRows,'outstandingPrincipalDecimal'),
       };
     });
   }
 
   async savingsBook(organizationId: string | null): Promise<{
     totalMembers: number;
-    totalBalance: number;
+    totalBalance: number; totalBalanceDecimal: string;
     rows: SavingsBookRow[];
   }> {
     const orgId = this.requireOrg(organizationId);
@@ -186,19 +186,19 @@ export class ReportsService {
         memberName: r.member_name as string,
         accountNo: Number(r.account_no),
         productCode: r.product_code as string,
-        balance: Number(r.current_balance),
+        balance: Number(r.current_balance), balanceDecimal: reportDecimal(r.current_balance),
         status: r.status as string,
       }));
       return {
         totalMembers: new Set(out.map((r) => r.memberId)).size,
-        totalBalance: Math.round(out.reduce((a, r) => a + r.balance, 0) * 100) / 100,
+        totalBalance: Number(reportSum(out,'balanceDecimal')), totalBalanceDecimal: reportSum(out,'balanceDecimal'),
         rows: out,
       };
     });
   }
 
   async loanBook(organizationId: string | null): Promise<{
-    outstandingTotal: number;
+    outstandingTotal: number; outstandingTotalDecimal: string;
     disbursedCount: number;
     rows: LoanBookRow[];
   }> {
@@ -223,15 +223,14 @@ export class ReportsService {
         memberNo: Number(r.member_no),
         memberName: r.member_name as string,
         productCode: r.product_code as string,
-        principal: Number(r.principal),
-        outstandingPrincipal: Number(r.outstanding_principal),
+        principal: Number(r.principal), principalDecimal: reportDecimal(r.principal),
+        outstandingPrincipal: Number(r.outstanding_principal), outstandingPrincipalDecimal: reportDecimal(r.outstanding_principal),
         interestRatePa: Number(r.interest_rate_pa),
         status: r.status as string,
         disbursedAt: (r.disbursed_at as Date | null) ?? null,
       }));
       return {
-        outstandingTotal:
-          Math.round(out.reduce((a, r) => a + r.outstandingPrincipal, 0) * 100) / 100,
+        outstandingTotal: Number(reportSum(out,'outstandingPrincipalDecimal')), outstandingTotalDecimal: reportSum(out,'outstandingPrincipalDecimal'),
         disbursedCount: out.filter((r) => r.status === 'DISBURSED').length,
         rows: out,
       };
@@ -248,9 +247,9 @@ export class ReportsService {
     mismatches: {
       accountId: string;
       memberNo: number;
-      projected: number;
-      ledger: number;
-      diff: number;
+      projected: number; projectedDecimal: string;
+      ledger: number; ledgerDecimal: string;
+      diff: number; diffDecimal: string;
     }[];
   }> {
     const orgId = this.requireOrg(organizationId);
@@ -277,9 +276,9 @@ export class ReportsService {
       const mismatches: {
         accountId: string;
         memberNo: number;
-        projected: number;
-        ledger: number;
-        diff: number;
+        projected: number; projectedDecimal: string;
+        ledger: number; ledgerDecimal: string;
+        diff: number; diffDecimal: string;
       }[] = [];
       for (const r of rows as {
         account_id: string;
@@ -287,15 +286,15 @@ export class ReportsService {
         projected: string;
         ledger: string;
       }[]) {
-        const projected = Number(r.projected);
-        const ledger = Number(r.ledger);
-        if (Math.abs(projected - ledger) > 0.004) {
+        const projected = ledgerKobo(r.projected);
+        const ledger = ledgerKobo(r.ledger);
+        if (projected !== ledger) {
           mismatches.push({
             accountId: r.account_id,
             memberNo: Number(r.member_no),
-            projected,
-            ledger,
-            diff: Math.round((projected - ledger) * 100) / 100,
+            projected: Number(ledgerDecimal(projected)), projectedDecimal: ledgerDecimal(projected),
+            ledger: Number(ledgerDecimal(ledger)), ledgerDecimal: ledgerDecimal(ledger),
+            diff: Number(ledgerDecimal(projected-ledger)), diffDecimal: ledgerDecimal(projected-ledger),
           });
         }
       }
@@ -317,8 +316,8 @@ export class ReportsService {
   ): Promise<{
     periodFrom: string;
     periodTo: string;
-    totalContributed: number;
-    rows: { memberNo: number; member: string; period: string; contributed: number }[];
+    totalContributed: number; totalContributedDecimal: string;
+    rows: { memberNo: number; member: string; period: string; contributed: number; contributedDecimal: string }[];
   }> {
     const orgId = this.requireOrg(organizationId);
     const n = Math.min(Math.max(months, 1), 24);
@@ -342,12 +341,12 @@ export class ReportsService {
         memberNo: Number(r.member_no),
         member: r.member as string,
         period: r.period as string,
-        contributed: Number(r.contributed),
+        contributed: Number(r.contributed), contributedDecimal: reportDecimal(r.contributed),
       }));
       return {
         periodFrom: `${data.at(-1)?.period ?? '—'}`,
         periodTo: `${data[0]?.period ?? '—'}`,
-        totalContributed: Math.round(data.reduce((a, d) => a + d.contributed, 0) * 100) / 100,
+        totalContributed: Number(reportSum(data,'contributedDecimal')), totalContributedDecimal: reportSum(data,'contributedDecimal'),
         rows: data,
       };
     });
@@ -358,12 +357,12 @@ export class ReportsService {
    * installment (days past due; <= 0 days = CURRENT).
    */
   async loansAging(organizationId: string | null): Promise<{
-    buckets: { bucket: string; count: number; outstanding: number }[];
+    buckets: { bucket: string; count: number; outstanding: number; outstandingDecimal: string }[];
     rows: {
       loanId: string;
       memberNo: number;
       member: string;
-      outstanding: number;
+      outstanding: number; outstandingDecimal: string;
       daysPastDue: number;
       bucket: string;
       nextDueDate: string | null;
@@ -403,7 +402,7 @@ export class ReportsService {
           loanId: r.loan_id as string,
           memberNo: Number(r.member_no),
           member: r.member as string,
-          outstanding: Number(r.outstanding),
+          outstanding: Number(r.outstanding), outstandingDecimal: reportDecimal(r.outstanding),
           daysPastDue,
           bucket: bucketFor(daysPastDue),
           nextDueDate: r.next_due
@@ -416,9 +415,7 @@ export class ReportsService {
         return {
           bucket,
           count: inBucket.length,
-          outstanding: Math.round(
-            inBucket.reduce((a, d) => a + d.outstanding, 0) * 100,
-          ) / 100,
+          outstanding: Number(reportSum(inBucket,'outstandingDecimal')), outstandingDecimal: reportSum(inBucket,'outstandingDecimal'),
         };
       }).filter((b) => b.count > 0 || b.bucket === 'CURRENT');
       return { buckets, rows: data };
@@ -428,13 +425,13 @@ export class ReportsService {
   /** Members who exited, with payout metadata from the audit trail. */
   async exitedMembers(organizationId: string | null): Promise<{
     count: number;
-    totalPaidOut: number;
+    totalPaidOut: number; totalPaidOutDecimal: string;
     rows: {
       memberId: string;
       memberNo: number;
       member: string;
       exitedAt: Date;
-      payout: number;
+      payout: number; payoutDecimal: string;
       closedAccounts: number;
       actor: string | null;
     }[];
@@ -461,14 +458,13 @@ export class ReportsService {
         memberNo: Number(r.member_no),
         member: r.member as string,
         exitedAt: r.exited_at as Date,
-        payout: Number(r.payout),
+        payout: Number(r.payout), payoutDecimal: reportDecimal(r.payout),
         closedAccounts: Number(r.closed_accounts),
         actor: (r.actor as string | null) ?? null,
       }));
       return {
         count: data.length,
-        totalPaidOut:
-          Math.round(data.reduce((a, d) => a + d.payout, 0) * 100) / 100,
+        totalPaidOut: Number(reportSum(data,'payoutDecimal')), totalPaidOutDecimal: reportSum(data,'payoutDecimal'),
         rows: data,
       };
     });
@@ -485,11 +481,11 @@ export class ReportsService {
       productCode: string;
       productName: string;
       ratePa: number;
-      balance: number;
-      monthlyEstimate: number;
+      balance: number; balanceDecimal: string;
+      monthlyEstimate: number; monthlyEstimateDecimal: string;
     }[];
-    totalBalance: number;
-    totalMonthlyEstimate: number;
+    totalBalance: number; totalBalanceDecimal: string;
+    totalMonthlyEstimate: number; totalMonthlyEstimateDecimal: string;
   }> {
     const orgId = this.requireOrg(organizationId);
     return withTenant(this.pool, orgId, async (c) => {
@@ -512,14 +508,13 @@ export class ReportsService {
         productCode: r.product_code as string,
         productName: r.product_name as string,
         ratePa: Number(r.rate_pa),
-        balance: Number(r.balance),
-        monthlyEstimate: Number(r.monthly_estimate),
+        balance: Number(r.balance), balanceDecimal: reportDecimal(r.balance),
+        monthlyEstimate: Number(r.monthly_estimate), monthlyEstimateDecimal: reportDecimal(r.monthly_estimate),
       }));
       return {
         rows: data,
-        totalBalance: Math.round(data.reduce((a, d) => a + d.balance, 0) * 100) / 100,
-        totalMonthlyEstimate:
-          Math.round(data.reduce((a, d) => a + d.monthlyEstimate, 0) * 100) / 100,
+        totalBalance: Number(reportSum(data,'balanceDecimal')), totalBalanceDecimal: reportSum(data,'balanceDecimal'),
+        totalMonthlyEstimate: Number(reportSum(data,'monthlyEstimateDecimal')), totalMonthlyEstimateDecimal: reportSum(data,'monthlyEstimateDecimal'),
       };
     });
   }
@@ -531,16 +526,16 @@ export class ReportsService {
     memberId: string,
   ): Promise<{
     member: { id: string; memberNo: number; name: string };
-    savingsTransactions: { type: string; signedAmount: number; createdAt: Date }[];
-    shareTransactions: { type: string; signedAmount: number; createdAt: Date }[];
+    savingsTransactions: { type: string; signedAmount: number; signedAmountDecimal: string; createdAt: Date }[];
+    shareTransactions: { type: string; signedAmount: number; signedAmountDecimal: string; createdAt: Date }[];
     loanRepayments: {
       loanId: string;
       seq: number;
       dueDate: string;
       status: string;
-      paidAmount: number;
+      paidAmount: number; paidAmountDecimal: string;
     }[];
-    dividends: { periodLabel: string; amount: number }[];
+    dividends: { periodLabel: string; amount: number; amountDecimal: string }[];
   }> {
     const orgId = this.requireOrg(organizationId);
     return withTenant(this.pool, orgId, async (c) => {
@@ -590,12 +585,12 @@ export class ReportsService {
         member: { id: m.id, memberNo: Number(m.member_no), name: m.name },
         savingsTransactions: savings.rows.map((r) => ({
           type: r.type as string,
-          signedAmount: Number(r.signed_amount),
+          signedAmount: Number(r.signed_amount), signedAmountDecimal: reportDecimal(r.signed_amount),
           createdAt: r.created_at as Date,
         })),
         shareTransactions: shares.rows.map((r) => ({
           type: r.type as string,
-          signedAmount: Number(r.signed_amount),
+          signedAmount: Number(r.signed_amount), signedAmountDecimal: reportDecimal(r.signed_amount),
           createdAt: r.created_at as Date,
         })),
         loanRepayments: repayments.rows.map((r) => ({
@@ -603,11 +598,11 @@ export class ReportsService {
           seq: Number(r.seq),
           dueDate: r.due_date as string,
           status: r.status as string,
-          paidAmount: Number(r.paid_amount),
+          paidAmount: Number(r.paid_amount), paidAmountDecimal: reportDecimal(r.paid_amount),
         })),
         dividends: dividends.rows.map((r) => ({
           periodLabel: r.period_label as string,
-          amount: Number(r.amount),
+          amount: Number(r.amount), amountDecimal: reportDecimal(r.amount),
         })),
       };
     });
@@ -619,12 +614,12 @@ export class ReportsService {
     organizationId: string | null,
   ): Promise<{
     membership: { active: number; pending: number; suspended: number; exited: number };
-    savings: { accounts: number; totalBalance: number };
-    shares: { holders: number; totalBalance: number };
-    loans: { open: number; disbursedTotal: number; outstanding: number };
-    collections: { count: number; total: number };
-    dividends: { runs: number; totalDistributed: number };
-    ledger: { entries: number; net: number };
+    savings: { accounts: number; totalBalance: number; totalBalanceDecimal: string };
+    shares: { holders: number; totalBalance: number; totalBalanceDecimal: string };
+    loans: { open: number; disbursedTotal: number; disbursedTotalDecimal: string; outstanding: number; outstandingDecimal: string };
+    collections: { count: number; total: number; totalDecimal: string };
+    dividends: { runs: number; totalDistributed: number; totalDistributedDecimal: string };
+    ledger: { entries: number; net: number; netDecimal: string };
   }> {
     const orgId = this.requireOrg(organizationId);
     return withTenant(this.pool, orgId, async (c) => {
@@ -660,7 +655,7 @@ export class ReportsService {
       );
       const ledger = await one<{ entries: string; net: string }>(
         `SELECT (SELECT count(*) FROM journal_entries WHERE status = 'POSTED') AS entries,
-                (SELECT coalesce(sum(debit - credit), 0) FROM journal_lines) AS net`,
+                (SELECT coalesce(sum(jl.debit - jl.credit), 0) FROM journal_lines jl JOIN journal_entries je ON je.id=jl.journal_entry_id WHERE je.status='POSTED') AS net`,
       );
 
       return {
@@ -670,16 +665,16 @@ export class ReportsService {
           suspended: Number(members.suspended),
           exited: Number(members.exited),
         },
-        savings: { accounts: Number(savings.accounts), totalBalance: Number(savings.total) },
-        shares: { holders: Number(shares.holders), totalBalance: Number(shares.total) },
+        savings: { accounts: Number(savings.accounts), totalBalance: Number(savings.total), totalBalanceDecimal: reportDecimal(savings.total) },
+        shares: { holders: Number(shares.holders), totalBalance: Number(shares.total), totalBalanceDecimal: reportDecimal(shares.total) },
         loans: {
           open: Number(loans.open),
-          disbursedTotal: Number(loans.disbursed),
-          outstanding: Number(loans.outstanding),
+          disbursedTotal: Number(loans.disbursed), disbursedTotalDecimal: reportDecimal(loans.disbursed),
+          outstanding: Number(loans.outstanding), outstandingDecimal: reportDecimal(loans.outstanding),
         },
-        collections: { count: Number(collections.count), total: Number(collections.total) },
-        dividends: { runs: Number(dividends.runs), totalDistributed: Number(dividends.total) },
-        ledger: { entries: Number(ledger.entries), net: Number(ledger.net) },
+        collections: { count: Number(collections.count), total: Number(collections.total), totalDecimal: reportDecimal(collections.total) },
+        dividends: { runs: Number(dividends.runs), totalDistributed: Number(dividends.total), totalDistributedDecimal: reportDecimal(dividends.total) },
+        ledger: { entries: Number(ledger.entries), net: Number(ledger.net), netDecimal: reportDecimal(ledger.net) },
       };
     });
   }
@@ -689,16 +684,16 @@ export class ReportsService {
     organizationId: string | null,
     months = 6,
   ): Promise<{
-    months: { month: string; disbursed: number; collected: number }[];
+    months: { month: string; disbursed: number; disbursedDecimal: string; collected: number; collectedDecimal: string }[];
     parByProduct: {
       productCode: string;
       productName: string;
       loans: number;
-      outstanding: number;
-      par30: number;
-      par90: number;
+      outstanding: number; outstandingDecimal: string;
+      par30: number; par30Decimal: string;
+      par90: number; par90Decimal: string;
     }[];
-    totals: { outstanding: number; par30: number; par90: number };
+    totals: { outstanding: number; outstandingDecimal: string; par30: number; par30Decimal: string; par90: number; par90Decimal: string };
   }> {
     const orgId = this.requireOrg(organizationId);
     const span = Math.min(Math.max(Math.trunc(months) || 6, 1), 24);
@@ -722,13 +717,13 @@ export class ReportsService {
           GROUP BY 1 ORDER BY 1`,
         [span],
       );
-      const disbMap = new Map<string, number>();
+      const disbMap = new Map<string, string>();
       for (const r of disb.rows as { month: string; total: string }[]) {
-        disbMap.set(r.month, Number(r.total));
+        disbMap.set(r.month, reportDecimal(r.total));
       }
-      const collMap = new Map<string, number>();
+      const collMap = new Map<string, string>();
       for (const r of coll.rows as { month: string; total: string }[]) {
-        collMap.set(r.month, Number(r.total));
+        collMap.set(r.month, reportDecimal(r.total));
       }
       const monthKeys: string[] = [];
       const now = new Date();
@@ -756,21 +751,21 @@ export class ReportsService {
         productCode: r.code as string,
         productName: r.name as string,
         loans: Number(r.loans),
-        outstanding: Number(r.outstanding),
-        par30: Number(r.par30),
-        par90: Number(r.par90),
+        outstanding: Number(r.outstanding), outstandingDecimal: reportDecimal(r.outstanding),
+        par30: Number(r.par30), par30Decimal: reportDecimal(r.par30),
+        par90: Number(r.par90), par90Decimal: reportDecimal(r.par90),
       }));
       return {
         months: monthKeys.map((m) => ({
           month: m,
-          disbursed: disbMap.get(m) ?? 0,
-          collected: collMap.get(m) ?? 0,
+          disbursed: Number(disbMap.get(m) ?? '0.00'), disbursedDecimal: disbMap.get(m) ?? '0.00',
+          collected: Number(collMap.get(m) ?? '0.00'), collectedDecimal: collMap.get(m) ?? '0.00',
         })),
         parByProduct,
         totals: {
-          outstanding: parByProduct.reduce((a, x) => a + x.outstanding, 0),
-          par30: parByProduct.reduce((a, x) => a + x.par30, 0),
-          par90: parByProduct.reduce((a, x) => a + x.par90, 0),
+          outstanding: Number(reportSum(parByProduct,'outstandingDecimal')), outstandingDecimal: reportSum(parByProduct,'outstandingDecimal'),
+          par30: Number(reportSum(parByProduct,'par30Decimal')), par30Decimal: reportSum(parByProduct,'par30Decimal'),
+          par90: Number(reportSum(parByProduct,'par90Decimal')), par90Decimal: reportSum(parByProduct,'par90Decimal'),
         },
       };
     });
@@ -808,18 +803,18 @@ export class ReportsService {
         ['membership', 'suspended', pack.membership.suspended],
         ['membership', 'exited', pack.membership.exited],
         ['savings', 'accounts', pack.savings.accounts],
-        ['savings', 'totalBalance', pack.savings.totalBalance.toFixed(2)],
+        ['savings', 'totalBalance', pack.savings.totalBalanceDecimal],
         ['shares', 'holders', pack.shares.holders],
-        ['shares', 'totalBalance', pack.shares.totalBalance.toFixed(2)],
+        ['shares', 'totalBalance', pack.shares.totalBalanceDecimal],
         ['loans', 'open', pack.loans.open],
-        ['loans', 'disbursedTotal', pack.loans.disbursedTotal.toFixed(2)],
-        ['loans', 'outstanding', pack.loans.outstanding.toFixed(2)],
+        ['loans', 'disbursedTotal', pack.loans.disbursedTotalDecimal],
+        ['loans', 'outstanding', pack.loans.outstandingDecimal],
         ['collections', 'count', pack.collections.count],
-        ['collections', 'total', pack.collections.total.toFixed(2)],
+        ['collections', 'total', pack.collections.totalDecimal],
         ['dividends', 'runs', pack.dividends.runs],
-        ['dividends', 'totalDistributed', pack.dividends.totalDistributed.toFixed(2)],
+        ['dividends', 'totalDistributed', pack.dividends.totalDistributedDecimal],
         ['ledger', 'entries', pack.ledger.entries],
-        ['ledger', 'net', pack.ledger.net.toFixed(2)],
+        ['ledger', 'net', pack.ledger.netDecimal],
       ];
       return csv(rows);
     }
@@ -833,25 +828,25 @@ export class ReportsService {
           'savings',
           new Date(t.createdAt).toISOString().slice(0, 10),
           t.type,
-          t.signedAmount.toFixed(2),
+          t.signedAmountDecimal,
         ]),
         ...statement.shareTransactions.map((t) => [
           'shares',
           new Date(t.createdAt).toISOString().slice(0, 10),
           t.type,
-          t.signedAmount.toFixed(2),
+          t.signedAmountDecimal,
         ]),
         ...statement.loanRepayments.map((r) => [
           'loan',
           r.dueDate,
           `installment ${r.seq} (${r.status})`,
-          r.paidAmount.toFixed(2),
+          r.paidAmountDecimal,
         ]),
         ...statement.dividends.map((d) => [
           'dividend',
           d.periodLabel,
           'dividend allocation',
-          d.amount.toFixed(2),
+          d.amountDecimal,
         ]),
       ];
       return csv(rows);
@@ -864,7 +859,7 @@ export class ReportsService {
         r.memberName,
         r.accountNo,
         r.productCode,
-        r.balance.toFixed(2),
+        r.balanceDecimal,
         r.status,
       ]);
       return csv([['memberNo', 'memberName', 'accountNo', 'productCode', 'balance', 'status'], ...rows]);
@@ -875,8 +870,8 @@ export class ReportsService {
         r.memberNo,
         r.memberName,
         r.productCode,
-        r.principal.toFixed(2),
-        r.outstandingPrincipal.toFixed(2),
+        r.principalDecimal,
+        r.outstandingPrincipalDecimal,
         r.status,
         r.disbursedAt ? new Date(r.disbursedAt).toISOString().slice(0, 10) : '',
       ]);
@@ -884,7 +879,7 @@ export class ReportsService {
     }
     if (kind === 'contribution-schedule') {
       const data = await this.contributionSchedule(orgId);
-      const rows = data.rows.map((r) => [r.memberNo, r.member, r.period, r.contributed.toFixed(2)]);
+      const rows = data.rows.map((r) => [r.memberNo, r.member, r.period, r.contributedDecimal]);
       return csv([['memberNo', 'member', 'period', 'contributed'], ...rows]);
     }
     const data = await this.auditLogs(orgId, 500);

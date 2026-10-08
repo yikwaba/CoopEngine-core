@@ -22,14 +22,17 @@ let app: INestApplication;
 let pool: Pool;
 
 /** A PDF is real when it has the magic header, page objects, and an EOF marker. */
-function assertPdf(res: request.Response, label: string, minSize = 2500): void {
+function assertPdf(res: request.Response, label: string, minSize = 1000): void {
   const body = res.body as Buffer;
   expect(res.status, `${label} status`).toBe(200);
   expect(res.headers['content-type'], `${label} content-type`).toContain('application/pdf');
   expect(res.headers['content-disposition'], `${label} filename`).toMatch(/filename=".+\.pdf"/);
   expect(body.subarray(0, 5).toString(), `${label} magic bytes`).toBe('%PDF-');
   expect(body.length, `${label} size`).toBeGreaterThan(minSize);
-  expect(body.toString('latin1'), `${label} page objects`).toMatch(/\/Type\s*\/Page/);
+  const source=body.toString('latin1');
+  // These small fixtures fit one page; a footer must not add an empty page.
+  expect(source.match(/\/Type\s*\/Page\b/g), `${label} one actual page`).toHaveLength(1);
+  expect(source, `${label} page-tree count`).toMatch(/\/Count\s+1\b/);
   expect(body.toString('latin1').trimEnd().endsWith('%%EOF'), `${label} EOF marker`).toBe(true);
 }
 

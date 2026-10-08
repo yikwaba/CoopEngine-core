@@ -1,4 +1,5 @@
 'use client';
+import {reportMoney} from '../lib/report-money';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -23,11 +24,11 @@ interface MemberRow {
 
 interface SavingsBook {
   totalMembers: number;
-  totalBalance: number;
+  totalBalance: number; totalBalanceDecimal?: string;
 }
 
 interface LoanBook {
-  outstandingTotal: number;
+  outstandingTotal: number; outstandingTotalDecimal?: string;
   disbursedCount: number;
 }
 
@@ -123,13 +124,13 @@ export default function DashboardPage() {
         <div className="card">
           <p className="stat-label">Member savings (₦)</p>
           <p className="stat-value">
-            {ready && savings ? savings.totalBalance.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '…'}
+            {ready && savings ? reportMoney(savings.totalBalanceDecimal ?? savings.totalBalance).replace('₦','') : '…'}
           </p>
         </div>
         <div className="card">
           <p className="stat-label">Outstanding loans (₦)</p>
           <p className="stat-value">
-            {ready && loans ? loans.outstandingTotal.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '…'}
+            {ready && loans ? reportMoney(loans.outstandingTotalDecimal ?? loans.outstandingTotal).replace('₦','') : '…'}
           </p>
         </div>
         <div className="card">

@@ -1,3 +1,5 @@
+import {reportDecimal,reportSum} from './report-money';
+import {ledgerKobo,ledgerDecimal} from '../ledger/ledger-money';
 import { Inject, Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
 import ExcelJS from 'exceljs';
@@ -54,8 +56,8 @@ export class BoardPackXlsxService {
       ).catch(() => ({ rows: [] as Record<string, unknown>[] }));
       const trial = await c.query(
         `SELECT a.code, a.name, a.type,
-                coalesce(sum(jl.debit), 0) AS debit,
-                coalesce(sum(jl.credit), 0) AS credit
+                coalesce(sum(jl.debit) FILTER (WHERE je.id IS NOT NULL), 0) AS debit,
+                coalesce(sum(jl.credit) FILTER (WHERE je.id IS NOT NULL), 0) AS credit
            FROM chart_of_accounts a
            LEFT JOIN journal_lines jl ON jl.account_id = a.id
            LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND je.status = 'POSTED'
@@ -77,12 +79,10 @@ export class BoardPackXlsxService {
       { header: 'Item', key: 'item', width: 34 },
       { header: 'Value', key: 'value', width: 20 },
     ];
-    const totalSavings = n(data.savings.rows[0]?.total);
-    const totalShares = n(data.shares.rows[0]?.total);
-    const totalLoans = data.loans.rows
-      .filter((r) => ['DISBURSED', 'APPROVED', 'DEFAULTED'].includes(String(r.status)))
-      .reduce((acc, r) => acc + n(r.outstanding), 0);
-    const arrearsTotal = data.arrears.rows.reduce((acc, r) => acc + n(r.amount), 0);
+    const totalSavings = reportDecimal(data.savings.rows[0]?.total);
+    const totalShares = reportDecimal(data.shares.rows[0]?.total);
+    const totalLoans = reportSum(data.loans.rows.filter((r) => ['DISBURSED', 'APPROVED', 'DEFAULTED'].includes(String(r.status))),'outstanding');
+    const arrearsTotal = reportSum(data.arrears.rows,'amount');
     summary.addRows([
       { item: 'Cooperative', value: orgName },
       { item: 'Period', value: periodCode },
@@ -133,7 +133,7 @@ export class BoardPackXlsxService {
       { header: 'Outstanding', key: 'outstanding', width: 18 },
     ];
     data.loans.rows.forEach((r) =>
-      loanSheet.addRow({ status: r.status, count: n(r.count), outstanding: n(r.outstanding) }),
+      loanSheet.addRow({ status: r.status, count: n(r.count), outstanding: reportDecimal(r.outstanding) }),
     );
 
     // ---- Arrears -------------------------------------------------------------
@@ -144,7 +144,7 @@ export class BoardPackXlsxService {
       { header: 'Amount overdue', key: 'amount', width: 18 },
     ];
     data.arrears.rows.forEach((r) =>
-      arr.addRow({ bucket: r.bucket, instalments: n(r.instalments), amount: n(r.amount) }),
+      arr.addRow({ bucket: r.bucket, instalments: n(r.instalments), amount: reportDecimal(r.amount) }),
     );
 
     // ---- Dividends -----------------------------------------------------------
@@ -153,7 +153,7 @@ export class BoardPackXlsxService {
       { header: 'Period', key: 'period', width: 18 },
       { header: 'Distributable', key: 'total', width: 18 },
     ];
-    data.dividends.rows.forEach((r) => div.addRow({ period: r.period_label, total: n(r.total) }));
+    data.dividends.rows.forEach((r) => div.addRow({ period: r.period_label, total: reportDecimal(r.total) }));
 
     // ---- Trial balance -------------------------------------------------------
     const tb = wb.addWorksheet('Trial Balance');
@@ -165,26 +165,27 @@ export class BoardPackXlsxService {
       { header: 'Credit', key: 'credit', width: 18 },
       { header: 'Net', key: 'net', width: 18 },
     ];
-    let dr = 0;
-    let cr = 0;
+    let dr = 0n;
+    let cr = 0n;
     data.trial.rows.forEach((r) => {
-      const debit = n(r.debit);
-      const credit = n(r.credit);
+      const debit = ledgerKobo(reportDecimal(r.debit));
+      const credit = ledgerKobo(reportDecimal(r.credit));
       dr += debit;
       cr += credit;
       tb.addRow({
         code: r.code,
         name: r.name,
         type: r.type,
-        debit,
-        credit,
-        net: Number((debit - credit).toFixed(2)),
+        debit: ledgerDecimal(debit),
+        credit: ledgerDecimal(credit),
+        net: ledgerDecimal(debit-credit),
       });
     });
     tb.addRow({});
-    tb.addRow({ name: 'TOTAL', debit: Number(dr.toFixed(2)), credit: Number(cr.toFixed(2)), net: Number((dr - cr).toFixed(2)) });
+    tb.addRow({ name: 'TOTAL', debit: ledgerDecimal(dr), credit: ledgerDecimal(cr), net: ledgerDecimal(dr-cr) });
 
-    // Money columns read as figures, not text.
+    // Monetary cells are exact decimal text: Excel numeric cells have limited precision.
+    summary.addRow({item:'Money format',value:'Exact decimal text (NGN); convert to numbers only within your spreadsheet precision limits.'});
     for (const sheet of [summary, sav, shr, loanSheet, arr, div, tb]) {
       sheet.eachRow((row: ExcelJS.Row, idx: number) => {
         if (idx === 1) row.font = { bold: true };

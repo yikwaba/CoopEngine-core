@@ -1,4 +1,5 @@
 'use client';
+import {reportMoney} from '../../../lib/report-money';
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch, readToken } from '../../../lib/api';
@@ -38,8 +39,7 @@ interface Overview {
   plans: number;
 }
 
-const money = (value: string | number) =>
-  `N${Number(value ?? 0).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = reportMoney;
 
 /**
  * The platform operator's console: every cooperative, what it holds, and which plan it is on.

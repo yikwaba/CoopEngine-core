@@ -1,3 +1,4 @@
+import {ledgerKobo,ledgerDecimal} from '../ledger/ledger-money';
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
@@ -260,13 +261,13 @@ export class AdminService {
     const plans = await this.plans.list();
 
     let members = 0;
-    let savingsBalance = 0;
-    let loansOutstanding = 0;
+    let savingsBalance = 0n;
+    let loansOutstanding = 0n;
     for (const org of orgs) {
       const s = await this.stats(org.id);
       members += s.members;
-      savingsBalance += Number(s.savingsBalance);
-      loansOutstanding += Number(s.loansOutstanding);
+      savingsBalance += ledgerKobo(s.savingsBalance);
+      loansOutstanding += ledgerKobo(s.loansOutstanding);
     }
 
     const byStatus = (status: string) => subs.find((s) => s.status === status)?.n ?? 0;
@@ -278,8 +279,8 @@ export class AdminService {
         pending: orgs.filter((o) => o.status === 'PENDING').length,
       },
       members,
-      savingsBalance: savingsBalance.toFixed(2),
-      loansOutstanding: loansOutstanding.toFixed(2),
+      savingsBalance: ledgerDecimal(savingsBalance),
+      loansOutstanding: ledgerDecimal(loansOutstanding),
       subscriptions: {
         active: byStatus('ACTIVE') + byStatus('TRIAL'),
         trial: byStatus('TRIAL'),
