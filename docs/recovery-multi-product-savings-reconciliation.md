@@ -27,8 +27,9 @@ journal details and exact organisation totals are additive.
 The ledger basis includes POSTED originals, REVERSED originals, and their
 posted counter-entries. The app marks the original REVERSED and creates an
 opposite journal: excluding the original counts only the negative reversal.
-Both legs now cancel exactly in this reconciliation. Other ledger/trial-balance
-reports still use their existing basis and require a separate recovery slice.
+Both legs now cancel exactly in this reconciliation. The subsequent reversal
+report slice aligns trial balance and board-pack reports with this basis; see
+recovery-reversal-report-basis.md.
 
 One SQL statement reads all datasets from one MVCC snapshot under existing
 withTenant/RLS isolation. Monetary SUM results are cast to text before JSON

@@ -229,7 +229,7 @@ export default function AnalyticsPage() {
           <div style={card}>
             <p style={{ margin: 0, color: '#5b6772', fontSize: 13 }}>Trial balance</p>
             <strong style={{ fontSize: 18 }}>{money(pack.ledger.netDecimal ?? pack.ledger.net)}</strong>
-            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#5b6772' }}>{pack.ledger.entries} posted entries</p>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#5b6772' }}>{pack.ledger.entries} ledger entries</p>
           </div>
         </section>
       )}

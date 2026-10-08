@@ -631,8 +631,8 @@ export class ReportsService {
         `SELECT count(*) AS runs, coalesce(sum(distributable_amount), 0) AS total FROM dividend_runs`,
       );
       const ledger = await one<{ entries: string; net: string }>(
-        `SELECT (SELECT count(*) FROM journal_entries WHERE status = 'POSTED') AS entries,
-                (SELECT coalesce(sum(jl.debit - jl.credit), 0) FROM journal_lines jl JOIN journal_entries je ON je.id=jl.journal_entry_id WHERE je.status='POSTED') AS net`,
+        `SELECT (SELECT count(*) FROM journal_entries WHERE status IN ('POSTED','REVERSED')) AS entries,
+                (SELECT coalesce(sum(jl.debit - jl.credit), 0) FROM journal_lines jl JOIN journal_entries je ON je.id=jl.journal_entry_id WHERE je.status IN ('POSTED','REVERSED')) AS net`,
       );
 
       return {

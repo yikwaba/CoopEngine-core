@@ -149,5 +149,58 @@ describe('exact financial reports (PostgreSQL)',()=>{
   expect(a.totals.ledgerDecimal).toBe('3.45');expect(b.totals.ledgerDecimal).toBe('1.38');expect(a.balanced&&b.balanced).toBe(true);
   expect(JSON.stringify(a)).not.toContain(g.account);expect(JSON.stringify(b)).not.toContain(f.account);
  });
+ async function postedManual(f:Awaited<ReturnType<typeof fixture>>,amount:string,date=new Date().toISOString().slice(0,10)){
+  const id=(await f.send('/ledger/journals',{...f.journalBody,idempotencyKey:randomUUID(),entryDate:date,lines:[{accountCode:'5010',debit:amount},{accountCode:'1000',credit:amount}]}).expect(201)).body.id as string;
+  await f.submit(id).expect(200);await f.send(`/ledger/journals/${id}/approve-post`,{},f.checker).expect(200);return id;
+ }
+ async function workbook(f:Awaited<ReturnType<typeof fixture>>){
+  const result=await get(f,'/reports/board-pack.xlsx').buffer(true).parse((res,cb)=>{const chunks:Buffer[]=[];res.on('data',(c:Buffer)=>chunks.push(c));res.on('end',()=>cb(null,Buffer.concat(chunks)));}).expect(200);
+  const wb=new ExcelJS.Workbook();await wb.xlsx.load(result.body);return wb;
+ }
+ it('retains both reversed journal legs, exact gross turnover and a one-kobo correction in reports',async()=>{
+  const f=await fixture(),id=await postedManual(f,'90071992547409.91');
+  await f.send(`/ledger/journals/${id}/reverse`,{reason:'Synthetic exact report reversal'}).expect(200);
+  await postedManual(f,'0.01');
+  // A submitted journal and the fixture draft must not contribute.
+  await f.submit().expect(200);
+  const before=await f.snapshot(),trial=(await get(f,'/ledger/trial-balance').expect(200)).body;
+  expect(trial.rows.find((x:{code:string})=>x.code==='5010').balanceDecimal).toBe('0.01');
+  expect(trial.rows.find((x:{code:string})=>x.code==='1000').balanceDecimal).toBe('1.14');expect(trial.netDecimal).toBe('0.00');
+  const wb=await workbook(f);let expense:unknown[]=[];
+  wb.getWorksheet('Trial Balance')!.eachRow(row=>{if(row.getCell(1).value==='5010')expense=[row.getCell(4).value,row.getCell(5).value,row.getCell(6).value];});
+  expect(expense).toEqual(['90071992547409.92','90071992547409.91','0.01']);
+  const pack=(await get(f,'/reports/board-pack').expect(200)).body;expect(pack.ledger).toMatchObject({entries:4,netDecimal:'0.00'});
+  expect((await get(f,'/reports/export/board-pack').expect(200)).text).toContain('ledger,entries,4');
+  expect((await get(f,'/ledger/month-end-checklist?period='+new Date().toISOString().slice(0,7)).expect(200)).body.checks.find((x:{key:string})=>x.key==='balanced').status).toBe('ok');
+  expect(await f.snapshot()).toEqual(before);
+ });
+ it('preserves period filtering and tenant isolation after a historical reversal',async()=>{
+  const f=await fixture(),g=await fixture();
+  for(const [tenant,code] of [[f,'2025-02'],[f,'2025-03'],[g,'2025-02']] as const)await tenant.send('/ledger/periods',{code}).expect(201);
+  const id=await postedManual(f,'1.15','2025-02-15');
+  await f.send(`/ledger/journals/${id}/reverse`,{reason:'Synthetic historical report reversal'}).expect(200);await postedManual(f,'0.23','2025-03-15');
+  await postedManual(g,'9.99','2025-02-15');const before=await f.snapshot();
+  const feb=(await get(f,'/ledger/trial-balance?period=2025-02').expect(200)).body,mar=(await get(f,'/ledger/trial-balance?period=2025-03').expect(200)).body;
+  expect(feb.rows.find((x:{code:string})=>x.code==='5010').balanceDecimal).toBe('0.00');expect(feb.netDecimal).toBe('0.00');
+  expect(mar.rows.find((x:{code:string})=>x.code==='5010').balanceDecimal).toBe('0.23');
+  expect((await get(f,'/ledger/trial-balance?period=2025-04').expect(200)).body.rows).toEqual([]);
+  const other=(await get(g,'/ledger/trial-balance?period=2025-02').expect(200)).body;expect(other.rows.find((x:{code:string})=>x.code==='5010').balanceDecimal).toBe('9.99');expect(await f.snapshot()).toEqual(before);
+ });
+ it('counts each leg once when a reversal journal is itself reversed',async()=>{
+  const f=await fixture(),id=await postedManual(f,'1.15');const reversal=(await f.send(`/ledger/journals/${id}/reverse`,{reason:'Synthetic first correction'}).expect(200)).body.reversal.id;
+  await f.send(`/ledger/journals/${reversal}/reverse`,{reason:'Synthetic correction of reversal'}).expect(200);
+  const before=await f.snapshot(),trial=(await get(f,'/ledger/trial-balance').expect(200)).body;
+  expect(trial.rows.find((x:{code:string})=>x.code==='5010').balanceDecimal).toBe('1.15');expect(trial.netDecimal).toBe('0.00');
+  expect((await get(f,'/reports/board-pack').expect(200)).body.ledger.entries).toBe(4);
+  const pdf=app.get(PdfService),result=await pdf.boardPack(f.org,new Date().toISOString().slice(0,7));expect(result.buffer.subarray(0,5).toString()).toBe('%PDF-');expect(await f.snapshot()).toEqual(before);
+ });
+ it('keeps payroll reversal, liability trial balance and savings reconciliation aligned',async()=>{
+  const f=await fixture();const preview=(await f.send('/payroll/import/preview',{idempotencyKey:randomUUID(),filename:'reversal-report.csv',csv:`memberNo,amount\n${f.members[0]!.memberNo},0.01`}).expect(201)).body;
+  await f.send('/payroll/import/commit',{batchId:preview.batchId}).expect(200);await f.send(`/payroll/batches/${preview.batchId}/approve`,{},f.checker).expect(200);
+  await f.send(`/payroll/batches/${preview.batchId}/reverse`,{reason:'Synthetic payroll report correction'}).expect(200);
+  const before=await f.snapshot(),trial=(await get(f,'/ledger/trial-balance').expect(200)).body;
+  expect(trial.rows.find((x:{code:string})=>x.code==='2000').balanceDecimal).toBe('-1.15');expect(trial.rows.find((x:{code:string})=>x.code==='1000').balanceDecimal).toBe('1.15');
+  expect((await get(f,'/reports/savings-reconciliation').expect(200)).body).toMatchObject({balanced:true,totals:{ledgerDecimal:'1.15'}});expect(await f.snapshot()).toEqual(before);
+ });
  it('retains statement and export tenant isolation',async()=>{const f=await fixture(),g=await fixture();await get(g,`/reports/member/${f.members[0]!.id}/360`).expect(404);await get(g,`/reports/export/member-statement?memberId=${f.members[0]!.id}`).expect(404);const pack=(await get(g,'/reports/board-pack').expect(200)).body;expect(pack.savings.totalBalanceDecimal).toBe('1.15');});
 });
