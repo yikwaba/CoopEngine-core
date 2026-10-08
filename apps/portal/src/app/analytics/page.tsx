@@ -30,6 +30,27 @@ interface Analytics {
   totals: { outstanding: number; outstandingDecimal?: string; par30: number; par30Decimal?: string; par90: number; par90Decimal?: string };
 }
 
+interface SavingsReconciliation {
+  checked: number; matched: number; balanced: boolean;
+  unresolvedAccounts: number; unresolvedEntries: number;
+  mismatches: unknown[];
+  totals: {projectedDecimal: string; ledgerDecimal: string; diffDecimal: string; unallocatedLedgerDecimal: string};
+  rows: {accountId: string; accountNo: number; memberNo: number; productCode: string;
+    projectedDecimal: string; ledgerDecimal: string | null; diffDecimal: string | null; status: string; attribution: string[]}[];
+  unresolved: {entryId: string; entryNo: number | null; memberNo: number | null; reason: string}[];
+}
+const reconciliationBasis: Record<string,string> = {SOURCE_ACCOUNT:'Journal account', LINKED_TRANSACTIONS:'Journal-checked transactions', SINGLE_ACCOUNT_MEMBER:'Member’s only account'};
+const reconciliationReasons: Record<string,string> = {
+  MEMBER_LIABILITY_WITHOUT_ACCOUNT_ALLOCATION: 'The member journal does not identify which savings account received the amount.',
+  MOVEMENT_LEDGER_DISAGREEMENT: 'Savings transactions and the journal amount disagree.',
+  SOURCE_ACCOUNT_CONFLICT: 'The journal account and its savings transactions disagree.',
+  LIABILITY_WITHOUT_MEMBER_ACCOUNT: 'Savings liability is missing a valid member account.',
+  MOVEMENT_WITHOUT_POSTED_LIABILITY: 'A savings transaction has no posted savings liability entry.',
+  MOVEMENT_NOT_POSTED: 'A savings transaction is linked to an unposted journal.',
+  REVERSED_WITHOUT_REVERSAL: 'The reversed journal has no matching counter-entry.',
+  REVERSAL_WITHOUT_ORIGINAL: 'The reversal has no original savings liability entry.',
+};
+
 const money = reportMoney;
 
 async function downloadBoardPack(kind:'csv'|'xlsx'='csv'): Promise<void> {
@@ -52,6 +73,9 @@ export default function AnalyticsPage() {
   const router = useRouter();
   const [pack, setPack] = useState<BoardPack | null>(null);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  const [reconciliation, setReconciliation] = useState<SavingsReconciliation | null>(null);
+  const [reconciliationError, setReconciliationError] = useState<string | null>(null);
+  const [reconciliationBusy, setReconciliationBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -76,9 +100,20 @@ export default function AnalyticsPage() {
     }
   }, [router]);
 
+  const reloadReconciliation = useCallback(async () => {
+    const token = readToken();
+    if (!token) return;
+    setReconciliationBusy(true);
+    setReconciliationError(null);
+    try { setReconciliation(await apiFetch<SavingsReconciliation>('/reports/savings-reconciliation', token)); }
+    catch (e) { setReconciliation(null); setReconciliationError(e instanceof Error ? e.message : 'Could not load savings reconciliation'); }
+    finally { setReconciliationBusy(false); }
+  }, []);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void reloadReconciliation();
+  }, [load, reloadReconciliation]);
 
   const maxFlow = Math.max(
     1,
@@ -112,6 +147,33 @@ export default function AnalyticsPage() {
         Board pack (PDF)
       </button>
 
+
+      <section aria-labelledby="savings-reconciliation-title" style={{marginTop:20, padding:14, border:'1px solid #e2e6eb', borderRadius:12}}>
+        <h2 id="savings-reconciliation-title">Savings reconciliation</h2>
+        <p>Each savings product is checked separately. Posted originals and their reversal entries are both included. Account attribution is shown below; unallocated journals require review.</p>
+        <button type="button" className="btn secondary" disabled={reconciliationBusy} onClick={() => void reloadReconciliation()}>
+          {reconciliationBusy ? 'Checking savings…' : 'Refresh reconciliation'}
+        </button>
+        {reconciliationError && <p role="alert">{reconciliationError}</p>}
+        {reconciliation && <>
+          <p role="status"><strong>{reconciliation.balanced === true ? 'Savings reconciled' : 'Savings review required'}</strong> · Matched {reconciliation.matched} of {reconciliation.checked} accounts · {reconciliation.mismatches.length} balance differences · {reconciliation.unresolvedAccounts} unresolved accounts</p>
+          <p>Projected: {money(reconciliation.totals.projectedDecimal)} · Ledger: {money(reconciliation.totals.ledgerDecimal)} · Difference: {money(reconciliation.totals.diffDecimal)}</p>
+          {reconciliation.unresolvedEntries > 0 && <p>Unresolved journals: {reconciliation.unresolvedEntries}. Unallocated ledger amount: {money(reconciliation.totals.unallocatedLedgerDecimal)}. A matching combined total does not clear an unresolved product allocation.</p>}
+          <div style={{overflowX:'auto',maxWidth:'100%'}}>
+            <table style={{width:'100%',borderCollapse:'collapse'}}>
+              <thead><tr>{['Account / member','Product','Projected','Ledger','Difference','Basis','Result'].map(label=><th key={label} style={cell}>{label}</th>)}</tr></thead>
+              <tbody>{reconciliation.rows.map(row=><tr key={row.accountId}>
+                <td style={cell}>#{row.accountNo} / member {row.memberNo}</td><td style={cell}>{row.productCode}</td>
+                <td style={cell}>{money(row.projectedDecimal)}</td><td style={cell}>{row.ledgerDecimal === null ? 'Unresolved' : money(row.ledgerDecimal)}</td>
+                <td style={cell}>{row.diffDecimal === null ? '—' : money(row.diffDecimal)}</td><td style={cell}>{row.attribution.length ? row.attribution.map(basis=>reconciliationBasis[basis] ?? basis).join(', ') : 'No attributed movements'}</td><td style={cell}>{row.status === 'MATCHED' ? 'Matched' : row.status === 'MISMATCH' ? 'Difference' : 'Unresolved'}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+          {reconciliation.unresolved.length > 0 && <ul>{reconciliation.unresolved.map((issue,index)=><li key={`${issue.entryId}-${index}`}>
+            {issue.entryNo === null ? 'Journal unavailable' : `Journal #${issue.entryNo}`}{issue.memberNo === null ? '' : ` · member ${issue.memberNo}`}: {reconciliationReasons[issue.reason] ?? 'Review this journal’s savings account allocation.'}
+          </li>)}</ul>}
+        </>}
+      </section>
 
       {error && <p style={{ background: '#fdecea', color: '#8a1c1c', padding: 10, borderRadius: 6 }}>{error}</p>}
 

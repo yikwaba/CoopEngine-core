@@ -1,3 +1,4 @@
+import { reconcileSavings, ReconciliationAccount, SavingsLedgerGroup, SavingsMovementGroup } from './savings-reconciliation';
 import {reportDecimal,reportSum} from './report-money';
 import {ledgerKobo,ledgerDecimal} from '../ledger/ledger-money';
 import {
@@ -241,68 +242,44 @@ export class ReportsService {
    * Savings reconciliation: projection (member_savings_accounts.current_balance)
    * vs the ledger truth (sum of 2000-side lines of POSTED savings entries).
    */
-  async savingsReconciliation(organizationId: string | null): Promise<{
-    checked: number;
-    matched: number;
-    mismatches: {
-      accountId: string;
-      memberNo: number;
-      projected: number; projectedDecimal: string;
-      ledger: number; ledgerDecimal: string;
-      diff: number; diffDecimal: string;
-    }[];
-  }> {
+  async savingsReconciliation(organizationId: string | null) {
     const orgId = this.requireOrg(organizationId);
-    return withTenant(this.pool, orgId, async (c) => {
-      const { rows } = await c.query(
-        `SELECT a.id AS account_id, m.member_no, a.current_balance AS projected,
-                COALESCE((
-                  SELECT SUM(CASE WHEN jl.credit > 0 THEN jl.credit ELSE -jl.debit END)
-                    FROM journal_lines jl
-                    JOIN journal_entries je ON je.id = jl.journal_entry_id
-                   WHERE je.organization_id = a.organization_id
-                     AND je.status = 'POSTED'
-                     AND jl.member_id = a.member_id
-                     AND jl.account_id = (
-                       SELECT id FROM chart_of_accounts ca
-                        WHERE ca.organization_id = a.organization_id AND ca.code = '2000'
-                     )
-                ), 0) AS ledger
-           FROM member_savings_accounts a
-           JOIN members m ON m.id = a.member_id
-          WHERE a.organization_id = $1`,
+    return withTenant(this.pool, orgId, async c => {
+      // A single statement supplies one MVCC snapshot for all three datasets.
+      // Money is explicitly text before json_agg to preserve NUMERIC precision.
+      const result = await c.query(
+        `WITH accounts AS (
+           SELECT a.id, a.member_id, m.member_no, a.account_no,
+                  p.code AS product_code, a.current_balance::text AS projected
+             FROM member_savings_accounts a
+             JOIN members m ON m.id=a.member_id AND m.organization_id=a.organization_id
+             JOIN savings_products p ON p.id=a.product_id AND p.organization_id=a.organization_id
+            WHERE a.organization_id=$1 ORDER BY a.account_no, a.id
+         ), liability AS (
+           SELECT je.id AS entry_id, je.entry_no, jl.member_id,
+                  sum(jl.credit-jl.debit)::text AS amount,
+                  je.source_type, je.source_id, je.status, je.reversal_of_entry_id
+             FROM journal_lines jl
+             JOIN journal_entries je ON je.id=jl.journal_entry_id AND je.organization_id=jl.organization_id
+             JOIN chart_of_accounts ca ON ca.id=jl.account_id AND ca.organization_id=jl.organization_id
+            WHERE jl.organization_id=$1 AND ca.code='2000'
+              AND je.status IN ('POSTED','REVERSED')
+            GROUP BY je.id, jl.member_id ORDER BY je.id, jl.member_id
+         ), movements AS (
+           SELECT t.journal_entry_id AS entry_id, t.account_id,
+                  sum(t.signed_amount)::text AS amount, je.status
+             FROM savings_transactions t
+             LEFT JOIN journal_entries je ON je.id=t.journal_entry_id AND je.organization_id=t.organization_id
+            WHERE t.organization_id=$1
+            GROUP BY t.journal_entry_id, t.account_id, je.status ORDER BY t.journal_entry_id, t.account_id
+         )
+         SELECT coalesce((SELECT json_agg(a) FROM accounts a),'[]'::json) AS accounts,
+                coalesce((SELECT json_agg(l) FROM liability l),'[]'::json) AS liability,
+                coalesce((SELECT json_agg(t) FROM movements t),'[]'::json) AS movements`,
         [orgId],
       );
-      const mismatches: {
-        accountId: string;
-        memberNo: number;
-        projected: number; projectedDecimal: string;
-        ledger: number; ledgerDecimal: string;
-        diff: number; diffDecimal: string;
-      }[] = [];
-      for (const r of rows as {
-        account_id: string;
-        member_no: number;
-        projected: string;
-        ledger: string;
-      }[]) {
-        const projected = ledgerKobo(r.projected);
-        const ledger = ledgerKobo(r.ledger);
-        if (projected !== ledger) {
-          mismatches.push({
-            accountId: r.account_id,
-            memberNo: Number(r.member_no),
-            projected: Number(ledgerDecimal(projected)), projectedDecimal: ledgerDecimal(projected),
-            ledger: Number(ledgerDecimal(ledger)), ledgerDecimal: ledgerDecimal(ledger),
-            diff: Number(ledgerDecimal(projected-ledger)), diffDecimal: ledgerDecimal(projected-ledger),
-          });
-        }
-      }
-      return {
-        checked: rows.length,
-        matched: rows.length - mismatches.length,
-        mismatches,
-      };
+      const data = result.rows[0] as {accounts: ReconciliationAccount[]; liability: SavingsLedgerGroup[]; movements: SavingsMovementGroup[]};
+      return reconcileSavings(data.accounts, data.liability, data.movements);
     });
   }
 

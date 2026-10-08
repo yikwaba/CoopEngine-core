@@ -34,7 +34,7 @@ try{
  const page=context.pages()[0]??await context.newPage(),errors=[];page.setDefaultTimeout(20000);page.on('pageerror',e=>errors.push(e.name));
  await page.goto(portal+'/login');await page.getByLabel('Email',{exact:true}).fill(email);await page.getByLabel('Password',{exact:true}).fill(password);await page.getByLabel(/^Cooperative /).fill(slug);await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.getByRole('heading',{name:'Dashboard',exact:true}).waitFor();await page.getByText('90,071,992,547,409.92',{exact:true}).waitFor();
  await page.goto(portal+`/members/${member.id}`);await page.getByText('₦90,071,992,547,409.92',{exact:true}).first().waitFor();
- await page.goto(portal+'/analytics');await page.getByRole('heading',{name:'Analytics & board pack',exact:true}).waitFor();await page.getByText('₦90,071,992,547,409.92',{exact:true}).waitFor();
+ await page.goto(portal+'/analytics');await page.getByRole('heading',{name:'Analytics & board pack',exact:true}).waitFor();await page.getByText('₦90,071,992,547,409.92',{exact:true}).first().waitFor();
  let download=page.waitForEvent('download');await page.getByRole('button',{name:'Download board pack (CSV)',exact:true}).click();let file=await download;const csv=await readFile(await file.path(),'utf8');assert.ok(csv.includes('savings,totalBalance,90071992547409.92'));
  download=page.waitForEvent('download');await page.getByRole('button',{name:'Download board pack (Excel)',exact:true}).click();file=await download;
  const xlsxPath=await file.path();const xml=execFileSync('unzip',['-p',xlsxPath,'xl/sharedStrings.xml'],{encoding:'utf8'});assert.ok(xml.includes('90071992547409.92'),'Spreadsheet shared strings retain exact amount');

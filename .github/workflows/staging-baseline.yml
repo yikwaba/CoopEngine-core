@@ -129,6 +129,11 @@ jobs:
           COOPENGINE_BROWSER_TEST: isolated-staging
         run: |
           BROWSER_TEST_MODULE_ROOT="$RUNNER_TEMP/coopengine-browser/node_modules" node scripts/staging/exact-reports-browser.mjs
+      - name: Reconcile multiple savings products and expose unresolved journal allocations
+        env:
+          COOPENGINE_BROWSER_TEST: isolated-staging
+        run: |
+          BROWSER_TEST_MODULE_ROOT="$RUNNER_TEMP/coopengine-browser/node_modules" node scripts/staging/multi-product-savings-browser.mjs
       - name: Inspect failed synthetic startup
         if: failure()
         run: docker compose --project-name coopengine-recovery-staging --env-file .staging/compose.env -f staging/compose.yml logs --no-color migrate api fixtures gateway
