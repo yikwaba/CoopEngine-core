@@ -64,7 +64,7 @@ try{
  const expense=await manual('90071992547409.91');await call(`/ledger/journals/${expense.id}/reverse`,{token,body:{reason:'SYNTHETIC exact report correction'}});await manual('0.01');
  const trial=await call('/ledger/trial-balance',{token});assert.equal(trial.rows.find(x=>x.code==='5010').balanceDecimal,'0.01');assert.equal(trial.netDecimal,'0.00');
  const board=await call('/reports/board-pack',{token});assert.equal(board.ledger.entries,6,'Original, reversal and correction are counted once; drafts excluded');
- await page.reload();await page.getByRole('heading',{name:'Analytics & board pack',exact:true}).waitFor();
+ await page.reload();await page.getByRole('heading',{name:'Analytics & board pack',exact:true}).waitFor();await page.getByText('6 ledger entries',{exact:true}).waitFor();
  download=page.waitForEvent('download');await page.getByRole('button',{name:'Download board pack (CSV)',exact:true}).click();file=await download;assert.ok((await readFile(await file.path(),'utf8')).includes('ledger,entries,6'));
  download=page.waitForEvent('download');await page.getByRole('button',{name:'Download board pack (Excel)',exact:true}).click();file=await download;
  const parseTrial=`import json,sys,zipfile,xml.etree.ElementTree as E
