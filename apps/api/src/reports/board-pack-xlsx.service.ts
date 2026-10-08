@@ -60,7 +60,7 @@ export class BoardPackXlsxService {
                 coalesce(sum(jl.credit) FILTER (WHERE je.id IS NOT NULL), 0) AS credit
            FROM chart_of_accounts a
            LEFT JOIN journal_lines jl ON jl.account_id = a.id
-           LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND je.status = 'POSTED'
+           LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND je.status IN ('POSTED','REVERSED')
           GROUP BY a.code, a.name, a.type
           ORDER BY a.code`,
       );

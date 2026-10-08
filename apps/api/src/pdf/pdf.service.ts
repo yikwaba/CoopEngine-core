@@ -405,7 +405,7 @@ export class PdfService {
       const tb = await c.query(
         `SELECT coalesce(sum(jl.debit - jl.credit), 0) AS net
            FROM journal_lines jl JOIN journal_entries je ON je.id = jl.journal_entry_id
-          WHERE je.status = 'POSTED'`,
+          WHERE je.status IN ('POSTED','REVERSED')`,
       );
       const period = await c.query(
         `SELECT status FROM ledger_periods WHERE code = $1`,

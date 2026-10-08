@@ -56,6 +56,33 @@ try{
  }
  console.log('PASS: historical member PDF closing, empty intervening period, before-first and after-last periods preserve exact balances despite later activity.');
  seed('90071992547409.94');const mismatch=await call('/reports/savings-reconciliation',{token});assert.equal(mismatch.mismatches[0].diffDecimal,'0.01','One-kobo discrepancy survives unsafe-number boundary');
+ // Append-only reversal basis: inspect actual downloaded turnover as well as net.
+ const manual=async amount=>{
+  const j=await call('/ledger/journals',{token,status:201,body:{idempotencyKey:randomUUID(),entryDate:new Date().toISOString().slice(0,10),description:'SYNTHETIC reversal report',lines:[{accountCode:'5010',debit:amount},{accountCode:'1000',credit:amount}]}});
+  await call(`/ledger/journals/${j.id}/submit`,{token,body:{}});await call(`/ledger/journals/${j.id}/approve-post`,{token:checker.tokens.accessToken,body:{}});return j;
+ };
+ const expense=await manual('90071992547409.91');await call(`/ledger/journals/${expense.id}/reverse`,{token,body:{reason:'SYNTHETIC exact report correction'}});await manual('0.01');
+ const trial=await call('/ledger/trial-balance',{token});assert.equal(trial.rows.find(x=>x.code==='5010').balanceDecimal,'0.01');assert.equal(trial.netDecimal,'0.00');
+ const board=await call('/reports/board-pack',{token});assert.equal(board.ledger.entries,6,'Original, reversal and correction are counted once; drafts excluded');
+ await page.reload();await page.getByRole('heading',{name:'Analytics & board pack',exact:true}).waitFor();
+ download=page.waitForEvent('download');await page.getByRole('button',{name:'Download board pack (CSV)',exact:true}).click();file=await download;assert.ok((await readFile(await file.path(),'utf8')).includes('ledger,entries,6'));
+ download=page.waitForEvent('download');await page.getByRole('button',{name:'Download board pack (Excel)',exact:true}).click();file=await download;
+ const parseTrial=`import json,sys,zipfile,xml.etree.ElementTree as E
+z=zipfile.ZipFile(sys.argv[1]);n={'m':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+strings=[''.join(e.itertext()) for e in E.fromstring(z.read('xl/sharedStrings.xml')).findall('m:si',n)]
+wb=E.fromstring(z.read('xl/workbook.xml'));sid=next(s.attrib['{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'] for s in wb.findall('m:sheets/m:sheet',n) if s.attrib['name']=='Trial Balance')
+rels=E.fromstring(z.read('xl/_rels/workbook.xml.rels'));target=next(x.attrib['Target'] for x in rels if x.attrib['Id']==sid)
+rows=[]
+for row in E.fromstring(z.read('xl/'+target)).findall('m:sheetData/m:row',n):
+ values={}
+ for c in row.findall('m:c',n):
+  v=c.find('m:v',n)
+  if v is not None: values[c.attrib['r'].rstrip('0123456789')]=strings[int(v.text)] if c.attrib.get('t')=='s' else v.text
+ rows.append(values)
+print(json.dumps(rows))`;
+ const trialRows=JSON.parse(execFileSync('python3',['-c',parseTrial,await file.path()],{encoding:'utf8'})),expenseRow=trialRows.find(r=>r.A==='5010');assert.equal(expenseRow.D,'90071992547409.92');assert.equal(expenseRow.E,'90071992547409.91');assert.equal(expenseRow.F,'0.01');
+ download=page.waitForEvent('download');await page.getByRole('button',{name:'Board pack (PDF)',exact:true}).click();file=await download;assert.ok(execFileSync('pdftotext',['-layout',await file.path(),'-'],{encoding:'utf8'}).includes('Balanced: yes'));
+ console.log('PASS: actual post-reversal board CSV counts both legs; XLSX retains exact original/reversal turnover and one-kobo net; trial-balance API and downloaded PDF agree. Synthetic isolated staging only.');
  await page.setViewportSize({width:375,height:812});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'Mobile analytics fits');assert.deepEqual(errors,[]);
  console.log('PASS: synthetic large balances match exact ledger; actual dashboard/member/analytics display and browser CSV/XLSX/PDF downloads preserve every kobo; member PDF opening/closing subtraction exact; one-kobo reconciliation discrepancy detected; mobile fits. Boundary fixture only, no production/provider access or historical reconciliation claim.');
 }finally{await context?.close();await rm(profile,{recursive:true,force:true});for(const login of [checker,staff,platform])if(login)await call('/auth/logout',{token:login.tokens.accessToken,method:'POST',status:204});}

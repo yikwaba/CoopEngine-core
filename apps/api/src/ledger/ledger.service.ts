@@ -228,6 +228,7 @@ export class LedgerService {
         params.push(periodCode);
         periodFilter = `AND lp.code = $${params.length}`;
       }
+      // Reversal is append-only: the REVERSED original still contributes alongside its counter-entry.
       const { rows } = await c.query(
         `SELECT a.code, a.name, a.type,
                 COALESCE(SUM(jl.debit - jl.credit), 0) AS balance
@@ -235,7 +236,7 @@ export class LedgerService {
            JOIN journal_entries je ON je.id = jl.journal_entry_id
            JOIN ledger_periods lp ON lp.id = je.period_id
            JOIN chart_of_accounts a ON a.id = jl.account_id
-          WHERE je.organization_id = $1 AND je.status = 'POSTED' ${periodFilter}
+          WHERE je.organization_id = $1 AND je.status IN ('POSTED','REVERSED') ${periodFilter}
           GROUP BY a.code, a.name, a.type
           ORDER BY a.code`,
         params,
@@ -658,7 +659,7 @@ export class LedgerService {
           `SELECT coalesce(sum(jl.debit - jl.credit), 0) AS net
              FROM journal_lines jl
              JOIN journal_entries je ON je.id = jl.journal_entry_id
-            WHERE je.organization_id = $1 AND je.period_id = $2 AND je.status = 'POSTED'`,
+            WHERE je.organization_id = $1 AND je.period_id = $2 AND je.status IN ('POSTED','REVERSED')`,
           [orgId, periodId],
         );
         const net = ledgerKobo((tb.rows[0] as {net:string}).net);
@@ -730,7 +731,7 @@ export class LedgerService {
         `SELECT coalesce(sum(jl.debit - jl.credit), 0) AS net
            FROM journal_lines jl
            JOIN journal_entries je ON je.id = jl.journal_entry_id
-          WHERE je.organization_id = $1 AND je.period_id = $2 AND je.status = 'POSTED'`,
+          WHERE je.organization_id = $1 AND je.period_id = $2 AND je.status IN ('POSTED','REVERSED')`,
         [orgId, period.id],
       );
       const netValue = ledgerKobo((net.rows[0] as {net:string}).net);
