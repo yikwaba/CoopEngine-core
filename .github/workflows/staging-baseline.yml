@@ -117,6 +117,11 @@ jobs:
           COOPENGINE_BROWSER_TEST: isolated-staging
         run: |
           BROWSER_TEST_MODULE_ROOT="$RUNNER_TEMP/coopengine-browser/node_modules" node scripts/staging/journal-submission-recovery-browser.mjs
+      - name: Preserve exact decimal journal amounts in the actual browser form
+        env:
+          COOPENGINE_BROWSER_TEST: isolated-staging
+        run: |
+          BROWSER_TEST_MODULE_ROOT="$RUNNER_TEMP/coopengine-browser/node_modules" node scripts/staging/exact-ledger-browser.mjs
       - name: Inspect failed synthetic startup
         if: failure()
         run: docker compose --project-name coopengine-recovery-staging --env-file .staging/compose.env -f staging/compose.yml logs --no-color migrate api fixtures gateway

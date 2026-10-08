@@ -1,3 +1,5 @@
+import {moneyKobo,moneyDecimal} from '../common/money';
+import {ledgerKobo,ledgerDecimal} from './ledger-money';
 import { financialIntent } from '../common/financial-intent';
 import {
   BadRequestException,
@@ -35,6 +37,8 @@ export interface JournalLineRow {
   accountType: string;
   debit: number;
   credit: number;
+  debitDecimal: string;
+  creditDecimal: string;
   memo: string | null;
   memberId: string | null;
 }
@@ -54,6 +58,7 @@ export interface TrialBalanceRow {
   name: string;
   type: string;
   balance: number;
+  balanceDecimal: string;
 }
 
 export interface PeriodRow {
@@ -63,9 +68,6 @@ export interface PeriodRow {
   endDate: string;
   status: string;
 }
-
-/** Money rounding for the ledger (2dp, half away from zero). */
-const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
 const isPgError = (e: unknown, code: string): boolean =>
   typeof e === 'object' && e !== null && (e as { code?: string }).code === code;
@@ -206,6 +208,8 @@ export class LedgerService {
           accountType: l.account_type as string,
           debit: Number(l.debit),
           credit: Number(l.credit),
+          debitDecimal: moneyDecimal(moneyKobo(l.debit as string)),
+          creditDecimal: moneyDecimal(moneyKobo(l.credit as string)),
           memo: (l.memo as string | null) ?? null,
           memberId: (l.member_id as string | null) ?? null,
         })),
@@ -215,7 +219,7 @@ export class LedgerService {
   async trialBalance(
     organizationId: string | null,
     periodCode?: string,
-  ): Promise<{ period: string; net: number; rows: TrialBalanceRow[] }> {
+  ): Promise<{ period: string; net: number; netDecimal: string; rows: TrialBalanceRow[] }> {
     const orgId = this.requireOrg(organizationId);
     return withTenant(this.pool, orgId, async (c) => {
       const params: unknown[] = [orgId];
@@ -241,10 +245,12 @@ export class LedgerService {
         name: r.name as string,
         type: r.type as string,
         balance: Number(r.balance),
+        balanceDecimal: ledgerDecimal(ledgerKobo(r.balance as string)),
       }));
       return {
         period: periodCode ?? 'all',
-        net: round2(rowsOut.reduce((acc, r) => acc + r.balance, 0)),
+        net: Number(ledgerDecimal(rows.reduce((acc,r) => acc+ledgerKobo(r.balance as string),0n))),
+        netDecimal: ledgerDecimal(rows.reduce((acc,r) => acc+ledgerKobo(r.balance as string),0n)),
         rows: rowsOut,
       };
     });
@@ -265,7 +271,7 @@ export class LedgerService {
         { actorUserId, entryDate: dto.entryDate, description: dto.description,
           lines: dto.lines.map(line => ({ accountCode: line.accountCode, debit: line.debit ?? 0,
             credit: line.credit ?? 0, memo: line.memo ?? null, memberId: line.memberId ?? null })) }, async (c, journalKey) => {
-        this.validateLines(dto.lines);
+        const amounts = this.validateLines(dto.lines);
         const entryId = randomUUID();
         // entryDate must fall inside an existing OPEN period (FR-052)
         const period = await c.query(
@@ -308,7 +314,7 @@ export class LedgerService {
         // all lines of an entry must land in ONE statement.
         const values: string[] = [];
         const params: unknown[] = [];
-        dto.lines.forEach((line) => {
+        dto.lines.forEach((line,index) => {
           const base = params.length;
           values.push(
             `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`,
@@ -317,8 +323,8 @@ export class LedgerService {
             orgId,
             entryId,
             accountIds.get(line.accountCode),
-            line.debit ? String(round2(line.debit)) : '0',
-            line.credit ? String(round2(line.credit)) : '0',
+            moneyDecimal(amounts[index]!.debit),
+            moneyDecimal(amounts[index]!.credit),
             line.memo ?? null,
             line.memberId ?? null,
           );
@@ -504,30 +510,19 @@ export class LedgerService {
 
   // -------------------------------------------------------------- helpers
 
-  private validateLines(lines: JournalLineDto[]): void {
-    for (const line of lines) {
-      const hasDebit = typeof line.debit === 'number';
-      const hasCredit = typeof line.credit === 'number';
-      if (hasDebit === hasCredit) {
-        throw new BadRequestException(
-          `Each line needs exactly one side: debit XOR credit (account ${line.accountCode})`,
-        );
-      }
-    }
-    const totalDebit = round2(
-      lines.reduce((acc, l) => acc + (l.debit ?? 0), 0),
-    );
-    const totalCredit = round2(
-      lines.reduce((acc, l) => acc + (l.credit ?? 0), 0),
-    );
-    if (totalDebit !== totalCredit) {
-      throw new BadRequestException(
-        `Unbalanced journal: debits ${totalDebit} != credits ${totalCredit}`,
-      );
-    }
-    if (totalDebit <= 0) {
-      throw new BadRequestException('Journal total must be greater than zero');
-    }
+  private validateLines(lines: JournalLineDto[]): {debit:bigint;credit:bigint}[] {
+    const amounts=lines.map(line=>{
+      const hasDebit=typeof line.debit==='number'||typeof line.debit==='string';
+      const hasCredit=typeof line.credit==='number'||typeof line.credit==='string';
+      if(hasDebit===hasCredit) throw new BadRequestException(`Each line needs exactly one side: debit XOR credit (account ${line.accountCode})`);
+      const debit=hasDebit?moneyKobo(line.debit!):0n,credit=hasCredit?moneyKobo(line.credit!):0n;
+      if((hasDebit?debit:credit)<=0n) throw new BadRequestException('Journal line amount must be positive');
+      return {debit,credit};
+    });
+    const totalDebit=amounts.reduce((sum,line)=>sum+line.debit,0n),totalCredit=amounts.reduce((sum,line)=>sum+line.credit,0n);
+    if(totalDebit!==totalCredit) throw new BadRequestException(`Unbalanced journal: debits ${ledgerDecimal(totalDebit)} != credits ${ledgerDecimal(totalCredit)}`);
+    if(totalDebit<=0n) throw new BadRequestException('Journal total must be greater than zero');
+    return amounts;
   }
 
   private async resolveAccounts(
@@ -666,9 +661,9 @@ export class LedgerService {
             WHERE je.organization_id = $1 AND je.period_id = $2 AND je.status = 'POSTED'`,
           [orgId, periodId],
         );
-        const net = Number((tb.rows[0] as { net: string | number }).net);
-        if (Math.abs(net) > 0.005) {
-          throw new ConflictException(`Cannot lock: the period does not balance (net ${net.toFixed(2)})`);
+        const net = ledgerKobo((tb.rows[0] as {net:string}).net);
+        if (net !== 0n) {
+          throw new ConflictException(`Cannot lock: the period does not balance (net ${ledgerDecimal(net)})`);
         }
       }
 
@@ -738,15 +733,15 @@ export class LedgerService {
           WHERE je.organization_id = $1 AND je.period_id = $2 AND je.status = 'POSTED'`,
         [orgId, period.id],
       );
-      const netValue = Number((net.rows[0] as { net: string | number }).net);
+      const netValue = ledgerKobo((net.rows[0] as {net:string}).net);
       checks.push({
         key: 'balanced',
         label: 'Books balance for the month',
-        status: Math.abs(netValue) < 0.005 ? 'ok' : 'fail',
+        status: netValue === 0n ? 'ok' : 'fail',
         detail:
-          Math.abs(netValue) < 0.005
+          netValue === 0n
             ? 'debits equal credits'
-            : `out by ${netValue.toFixed(2)} — investigate before closing`,
+            : `out by ${ledgerDecimal(netValue)} — investigate before closing`,
       });
 
       const unposted = await c.query(
