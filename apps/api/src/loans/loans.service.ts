@@ -1,3 +1,4 @@
+import {reportDecimal,reportSum} from '../reports/report-money';
 import { financialIntent } from '../common/financial-intent';
 import { flatLoanInstallments, loanCeiling, moneyDecimal, moneyKobo } from '../common/money';
 import {
@@ -59,7 +60,6 @@ export interface GuarantorRow {
 }
 
 const MIN_GUARANTORS = 2;
-const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
 const ALLOWED_TRANSITIONS: Partial<Record<LoanStatus, LoanStatus[]>> = {
   PENDING: ['APPROVED', 'REJECTED'],
@@ -562,7 +562,7 @@ export class LoansService {
   async arrears(
     organizationId: string | null,
   ): Promise<{
-    buckets: { bucket: string; count: number; amount: number }[];
+    buckets: { bucket: string; count: number; amount: number; amountDecimal: string }[];
     rows: {
       loanId: string;
       memberNo: number;
@@ -571,10 +571,10 @@ export class LoansService {
       seq: number;
       dueDate: string;
       daysLate: number;
-      amount: number;
+      amount: number; amountDecimal: string;
       loanStatus: string;
     }[];
-    total: number;
+    total: number; totalDecimal: string;
   }> {
     const orgId = this.requireOrg(organizationId);
     return withTenant(this.pool, orgId, async (c) => {
@@ -598,7 +598,7 @@ export class LoansService {
         seq: Number(r.seq),
         dueDate: r.due_date as string,
         daysLate: Number(r.days_late),
-        amount: Number(r.amount),
+        amount: Number(r.amount), amountDecimal: reportDecimal(r.amount),
         loanStatus: r.loan_status as string,
       }));
       const mk = (label: string, min: number, max: number | null) => {
@@ -608,7 +608,7 @@ export class LoansService {
         return {
           bucket: label,
           count: sel.length,
-          amount: round2(sel.reduce((a, x) => a + x.amount, 0)),
+          amount: Number(reportSum(sel,'amountDecimal')), amountDecimal: reportSum(sel,'amountDecimal'),
         };
       };
       return {
@@ -619,7 +619,7 @@ export class LoansService {
           mk('90+', 90, null),
         ],
         rows: list,
-        total: round2(list.reduce((a, x) => a + x.amount, 0)),
+        total: Number(reportSum(list,'amountDecimal')), totalDecimal: reportSum(list,'amountDecimal'),
       };
     });
   }

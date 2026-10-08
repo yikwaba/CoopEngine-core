@@ -75,6 +75,8 @@ jobs:
           & "$source/scripts/staging/install-recovery.ps1" -SourcePath $source -ProjectPath $PWD.Path -SourceSha $sha
       - name: Install isolated browser test tooling
         run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils unzip
           npm install --prefix "$RUNNER_TEMP/coopengine-browser" --no-package-lock --ignore-scripts playwright@1.63.0 otplib@13.5.0
           node "$RUNNER_TEMP/coopengine-browser/node_modules/playwright/cli.js" install --with-deps chromium
       - name: Exercise MFA enrollment, sign-in and recovery in Chromium
@@ -122,6 +124,11 @@ jobs:
           COOPENGINE_BROWSER_TEST: isolated-staging
         run: |
           BROWSER_TEST_MODULE_ROOT="$RUNNER_TEMP/coopengine-browser/node_modules" node scripts/staging/exact-ledger-browser.mjs
+      - name: Preserve exact report displays and downloaded financial exports
+        env:
+          COOPENGINE_BROWSER_TEST: isolated-staging
+        run: |
+          BROWSER_TEST_MODULE_ROOT="$RUNNER_TEMP/coopengine-browser/node_modules" node scripts/staging/exact-reports-browser.mjs
       - name: Inspect failed synthetic startup
         if: failure()
         run: docker compose --project-name coopengine-recovery-staging --env-file .staging/compose.env -f staging/compose.yml logs --no-color migrate api fixtures gateway

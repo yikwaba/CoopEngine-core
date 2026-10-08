@@ -1,4 +1,5 @@
 'use client';
+import {reportMoney} from '../../../lib/report-money';
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -7,14 +8,14 @@ import { apiFetch, apiResponse, readToken } from '../../../lib/api';
 
 interface Member360 {
   member: { id: string; memberNo: number; firstName: string; lastName: string; email: string | null; status: string };
-  savings: { accountId: string; accountNo: number; productCode: string; balance: number; status: string }[];
-  savingsTotal: number;
-  shareBalance: number;
-  loans: { id: string; productCode: string; principal: number; outstandingPrincipal: number; status: string }[];
-  loansOutstandingTotal: number;
+  savings: { accountId: string; accountNo: number; productCode: string; balance: number; balanceDecimal?: string; status: string }[];
+  savingsTotal: number; savingsTotalDecimal?: string;
+  shareBalance: number; shareBalanceDecimal?: string;
+  loans: { id: string; productCode: string; principal: number; principalDecimal?: string; outstandingPrincipal: number; outstandingPrincipalDecimal?: string; status: string }[];
+  loansOutstandingTotal: number; loansOutstandingTotalDecimal?: string;
 }
 
-const naira = (n: number): string => `₦${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const naira = reportMoney;
 
 async function downloadStatement(memberId: string, memberNo: number): Promise<void> {
   const token = readToken();
@@ -149,15 +150,15 @@ export default function MemberDetailPage() {
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginTop: 18 }}>
         <div className="card">
           <p className="stat-label">Savings</p>
-          <p className="stat-value">{naira(data.savingsTotal)}</p>
+          <p className="stat-value">{naira(data.savingsTotalDecimal ?? data.savingsTotal)}</p>
         </div>
         <div className="card">
           <p className="stat-label">Shares</p>
-          <p className="stat-value">{naira(data.shareBalance)}</p>
+          <p className="stat-value">{naira(data.shareBalanceDecimal ?? data.shareBalance)}</p>
         </div>
         <div className="card">
           <p className="stat-label">Loan outstanding</p>
-          <p className="stat-value">{naira(data.loansOutstandingTotal)}</p>
+          <p className="stat-value">{naira(data.loansOutstandingTotalDecimal ?? data.loansOutstandingTotal)}</p>
         </div>
       </section>
 
@@ -180,7 +181,7 @@ export default function MemberDetailPage() {
               {data.savings.map((a) => (
                 <tr key={a.accountId}>
                   <td>#{a.accountNo}</td>
-                  <td>{naira(a.balance)}</td>
+                  <td>{naira(a.balanceDecimal ?? a.balance)}</td>
                   <td>{a.status}</td>
                   <td style={{ width: 140 }}>
                     <input
@@ -242,8 +243,8 @@ export default function MemberDetailPage() {
               {data.loans.map((l) => (
                 <tr key={l.id}>
                   <td>{l.productCode}</td>
-                  <td>{naira(l.principal)}</td>
-                  <td>{naira(l.outstandingPrincipal)}</td>
+                  <td>{naira(l.principalDecimal ?? l.principal)}</td>
+                  <td>{naira(l.outstandingPrincipalDecimal ?? l.outstandingPrincipal)}</td>
                   <td>{l.status}</td>
                 </tr>
               ))}

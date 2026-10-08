@@ -1,4 +1,5 @@
 'use client';
+import {reportMoney} from '../../lib/report-money';
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -8,40 +9,39 @@ import Nav from '../components/Nav';
 
 interface BoardPack {
   membership: { active: number; pending: number; suspended: number; exited: number };
-  savings: { accounts: number; totalBalance: number };
-  shares: { holders: number; totalBalance: number };
-  loans: { open: number; disbursedTotal: number; outstanding: number };
-  collections: { count: number; total: number };
-  dividends: { runs: number; totalDistributed: number };
-  ledger: { entries: number; net: number };
+  savings: { accounts: number; totalBalance: number; totalBalanceDecimal?: string };
+  shares: { holders: number; totalBalance: number; totalBalanceDecimal?: string };
+  loans: { open: number; disbursedTotal: number; disbursedTotalDecimal?: string; outstanding: number; outstandingDecimal?: string };
+  collections: { count: number; total: number; totalDecimal?: string };
+  dividends: { runs: number; totalDistributed: number; totalDistributedDecimal?: string };
+  ledger: { entries: number; net: number; netDecimal?: string };
 }
 
 interface Analytics {
-  months: { month: string; disbursed: number; collected: number }[];
+  months: { month: string; disbursed: number; disbursedDecimal?: string; collected: number; collectedDecimal?: string }[];
   parByProduct: {
     productCode: string;
     productName: string;
     loans: number;
-    outstanding: number;
-    par30: number;
-    par90: number;
+    outstanding: number; outstandingDecimal?: string;
+    par30: number; par30Decimal?: string;
+    par90: number; par90Decimal?: string;
   }[];
-  totals: { outstanding: number; par30: number; par90: number };
+  totals: { outstanding: number; outstandingDecimal?: string; par30: number; par30Decimal?: string; par90: number; par90Decimal?: string };
 }
 
-const money = (n: number) =>
-  `₦${n.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = reportMoney;
 
-async function downloadBoardPack(): Promise<void> {
+async function downloadBoardPack(kind:'csv'|'xlsx'='csv'): Promise<void> {
   const token = readToken();
   if (!token) return;
-  const res = await apiResponse(`/reports/export/board-pack`);
+  const res = await apiResponse(kind==='xlsx'?'/reports/board-pack.xlsx':'/reports/export/board-pack');
   if (!res.ok) throw new Error(`Board pack download failed (${res.status})`);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `board-pack-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `board-pack-${new Date().toISOString().slice(0, 10)}.${kind}`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -93,7 +93,7 @@ export default function AnalyticsPage() {
   const cell: React.CSSProperties = { padding: '6px 10px', borderBottom: '1px solid #e6e9ee', fontSize: 14 };
 
   return (
-    <main style={{ maxWidth: 1040, margin: '0 auto', padding: 20 }}>
+    <main style={{ maxWidth: 1040, margin: '0 auto', padding: 20, overflowWrap:'anywhere' }}>
       <h1 style={{ marginBottom: 4 }}>Analytics & board pack</h1>
       <p style={{ color: '#5b6772', marginTop: 0 }}>Portfolio health at a glance, ready for the board.</p>
       <Nav />
@@ -125,6 +125,7 @@ export default function AnalyticsPage() {
         >
           Download board pack (CSV)
         </button>
+        <button onClick={()=>void downloadBoardPack('xlsx').catch(e=>setError(e instanceof Error?e.message:'Download failed'))}>Download board pack (Excel)</button><p style={{fontSize:12}}>Excel monetary values use exact decimal text to preserve every kobo.</p>
       </div>
 
       {pack && (
@@ -138,34 +139,34 @@ export default function AnalyticsPage() {
           </div>
           <div style={card}>
             <p style={{ margin: 0, color: '#5b6772', fontSize: 13 }}>Savings book</p>
-            <strong style={{ fontSize: 18 }}>{money(pack.savings.totalBalance)}</strong>
+            <strong style={{ fontSize: 18 }}>{money(pack.savings.totalBalanceDecimal ?? pack.savings.totalBalance)}</strong>
             <p style={{ margin: '4px 0 0', fontSize: 12, color: '#5b6772' }}>{pack.savings.accounts} active accounts</p>
           </div>
           <div style={card}>
             <p style={{ margin: 0, color: '#5b6772', fontSize: 13 }}>Share capital</p>
-            <strong style={{ fontSize: 18 }}>{money(pack.shares.totalBalance)}</strong>
+            <strong style={{ fontSize: 18 }}>{money(pack.shares.totalBalanceDecimal ?? pack.shares.totalBalance)}</strong>
             <p style={{ margin: '4px 0 0', fontSize: 12, color: '#5b6772' }}>{pack.shares.holders} holders</p>
           </div>
           <div style={card}>
             <p style={{ margin: 0, color: '#5b6772', fontSize: 13 }}>Loan portfolio</p>
-            <strong style={{ fontSize: 18 }}>{money(pack.loans.outstanding)}</strong>
+            <strong style={{ fontSize: 18 }}>{money(pack.loans.outstandingDecimal ?? pack.loans.outstanding)}</strong>
             <p style={{ margin: '4px 0 0', fontSize: 12, color: '#5b6772' }}>
-              {pack.loans.open} open · disbursed {money(pack.loans.disbursedTotal)}
+              {pack.loans.open} open · disbursed {money(pack.loans.disbursedTotalDecimal ?? pack.loans.disbursedTotal)}
             </p>
           </div>
           <div style={card}>
             <p style={{ margin: 0, color: '#5b6772', fontSize: 13 }}>Collections</p>
-            <strong style={{ fontSize: 18 }}>{money(pack.collections.total)}</strong>
+            <strong style={{ fontSize: 18 }}>{money(pack.collections.totalDecimal ?? pack.collections.total)}</strong>
             <p style={{ margin: '4px 0 0', fontSize: 12, color: '#5b6772' }}>{pack.collections.count} payments</p>
           </div>
           <div style={card}>
             <p style={{ margin: 0, color: '#5b6772', fontSize: 13 }}>Dividends paid</p>
-            <strong style={{ fontSize: 18 }}>{money(pack.dividends.totalDistributed)}</strong>
+            <strong style={{ fontSize: 18 }}>{money(pack.dividends.totalDistributedDecimal ?? pack.dividends.totalDistributed)}</strong>
             <p style={{ margin: '4px 0 0', fontSize: 12, color: '#5b6772' }}>{pack.dividends.runs} runs</p>
           </div>
           <div style={card}>
             <p style={{ margin: 0, color: '#5b6772', fontSize: 13 }}>Trial balance</p>
-            <strong style={{ fontSize: 18 }}>{money(pack.ledger.net)}</strong>
+            <strong style={{ fontSize: 18 }}>{money(pack.ledger.netDecimal ?? pack.ledger.net)}</strong>
             <p style={{ margin: '4px 0 0', fontSize: 12, color: '#5b6772' }}>{pack.ledger.entries} posted entries</p>
           </div>
         </section>
@@ -198,7 +199,7 @@ export default function AnalyticsPage() {
                   />
                 </div>
                 <span style={{ fontSize: 12, color: '#5b6772', width: 190, textAlign: 'right' }}>
-                  out {money(m.disbursed)} · in {money(m.collected)}
+                  out {money(m.disbursedDecimal ?? m.disbursed)} · in {money(m.collectedDecimal ?? m.collected)}
                 </span>
               </div>
             ))}
@@ -223,16 +224,16 @@ export default function AnalyticsPage() {
                       {p.productCode} — {p.productName}
                     </td>
                     <td style={cell}>{p.loans}</td>
-                    <td style={cell}>{money(p.outstanding)}</td>
-                    <td style={cell}>{money(p.par30)}</td>
-                    <td style={cell}>{money(p.par90)}</td>
+                    <td style={cell}>{money(p.outstandingDecimal ?? p.outstanding)}</td>
+                    <td style={cell}>{money(p.par30Decimal ?? p.par30)}</td>
+                    <td style={cell}>{money(p.par90Decimal ?? p.par90)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <p style={{ fontSize: 13, color: '#5b6772' }}>
-              Portfolio {money(analytics.totals.outstanding)} · PAR30 {money(analytics.totals.par30)} · PAR90{' '}
-              {money(analytics.totals.par90)}
+              Portfolio {money(analytics.totals.outstandingDecimal ?? analytics.totals.outstanding)} · PAR30 {money(analytics.totals.par30Decimal ?? analytics.totals.par30)} · PAR90{' '}
+              {money(analytics.totals.par90Decimal ?? analytics.totals.par90)}
             </p>
           </section>
         </>

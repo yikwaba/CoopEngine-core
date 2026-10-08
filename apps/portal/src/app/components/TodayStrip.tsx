@@ -1,4 +1,5 @@
 'use client';
+import {reportMoney,reportSum} from '../../lib/report-money';
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -14,6 +15,7 @@ interface WithdrawalRow {
 interface ArrearsRow {
   daysLate?: number;
   amount?: string | number;
+  amountDecimal?: string;
   member?: string;
   loanId?: string;
 }
@@ -56,8 +58,7 @@ export default function TodayStrip() {
   }, []);
 
   const overdue = arrears.filter((r) => Number(r.daysLate ?? 0) > 0).length;
-  const money = (v: string | number | undefined): string =>
-    `₦${Number(v ?? 0).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const money = reportMoney;
 
   const tile: React.CSSProperties = {
     flex: '1 1 190px',
@@ -85,7 +86,7 @@ export default function TodayStrip() {
           </div>
           {loaded && pending.length > 0 && (
             <div style={{ fontSize: 12, color: '#666' }}>
-              {money(pending.reduce((a, r) => a + Number(r.amount ?? 0), 0))} in total
+              {money(reportSum(pending.map(r=>r.amount)))} in total
             </div>
           )}
         </Link>
@@ -97,7 +98,7 @@ export default function TodayStrip() {
           </div>
           {loaded && overdue > 0 && (
             <div style={{ fontSize: 12, color: '#666' }}>
-              {money(arrears.reduce((a, r) => a + Number(r.amount ?? 0), 0))} overdue
+              {money(reportSum(arrears.map(r=>r.amountDecimal??r.amount)))} overdue
             </div>
           )}
         </Link>

@@ -1,4 +1,5 @@
 'use client';
+import {reportMoney} from '../../lib/report-money';
 
 import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
@@ -17,7 +18,7 @@ interface MemberRow {
 interface SavingsAccount {
   accountId: string;
   accountNo: string;
-  balance: string | number;
+  balance: string | number; balanceDecimal?: string;
   productCode?: string;
   status?: string;
 }
@@ -25,8 +26,8 @@ interface SavingsAccount {
 interface LoanRow {
   id: string;
   productCode?: string;
-  principal?: string | number;
-  outstandingPrincipal?: string | number;
+  principal?: string | number; principalDecimal?: string;
+  outstandingPrincipal?: string | number; outstandingPrincipalDecimal?: string;
   status?: string;
 }
 
@@ -34,14 +35,11 @@ interface Member360 {
   member: MemberRow;
   savings?: SavingsAccount[];
   loans?: LoanRow[];
+  loansOutstandingTotalDecimal?: string;
+  loansOutstandingTotal?: number;
 }
 
-const naira = (v: string | number | undefined | null): string => {
-  const n = Number(v ?? 0);
-  if (!Number.isFinite(n)) return '₦0.00';
-  const sign = n < 0 ? '-' : '';
-  return `${sign}₦${Math.abs(n).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-};
+const naira = reportMoney;
 
 export default function FrontDeskPage() {
   const [query, setQuery] = useState('');
@@ -268,7 +266,7 @@ export default function FrontDeskPage() {
           <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginTop: 12 }}>
             <div>
               <div style={{ fontSize: 13, color: '#666' }}>Savings balance</div>
-              <div style={{ fontSize: 22, fontWeight: 600 }}>{naira(primaryAccount?.balance)}</div>
+              <div style={{ fontSize: 22, fontWeight: 600 }}>{naira(primaryAccount?.balanceDecimal ?? primaryAccount?.balance)}</div>
               {primaryAccount && (
                 <div style={{ fontSize: 12, color: '#888' }}>account {primaryAccount.accountNo}</div>
               )}
@@ -282,10 +280,7 @@ export default function FrontDeskPage() {
                   {(selected.loans ?? []).length} loan(s) ·{' '}
                   <strong>
                     {naira(
-                      (selected.loans ?? []).reduce(
-                        (acc, l) => acc + Number(l.outstandingPrincipal ?? 0),
-                        0,
-                      ),
+                      selected.loansOutstandingTotalDecimal ?? selected.loansOutstandingTotal ?? 0,
                     )}
                   </strong>{' '}
                   outstanding
@@ -320,7 +315,7 @@ export default function FrontDeskPage() {
               >
                 {(selected.loans ?? []).map((l) => (
                   <option key={l.id} value={l.id}>
-                    Loan {l.productCode ?? 'loan'} · {naira(l.outstandingPrincipal)} outstanding
+                    Loan {l.productCode ?? 'loan'} · {naira(l.outstandingPrincipalDecimal ?? l.outstandingPrincipal)} outstanding
                   </option>
                 ))}
               </select>
