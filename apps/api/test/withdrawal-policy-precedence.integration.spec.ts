@@ -9,6 +9,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { ADMIN_PASSWORD, TEST_DATABASE_URL, ensureRbacSeeded } from './helpers';
 
+// Private fixture domain avoids older suites' broad @coopengine.test user cleanup.
+// These referenced approval identities live only in this disposable test database.
 describe('withdrawal policy precedence (PostgreSQL)',()=>{
  let app:INestApplication,pool:Pool,platform:string;
  beforeAll(async()=>{
@@ -18,11 +20,11 @@ describe('withdrawal policy precedence (PostgreSQL)',()=>{
  });
  afterAll(async()=>{await app?.close();await pool?.end();});
  async function fixture(count=1){
-  const suffix=randomUUID().slice(0,8),email=`exact-reports-${suffix}@coopengine.test`;
+  const suffix=randomUUID().slice(0,8),email=`exact-reports-${suffix}@withdrawal-policy.invalid`;
   const org=(await request(app.getHttpServer()).post('/api/v1/organizations').set('Authorization',`Bearer ${platform}`).send({name:`Journal submit ${suffix}`,slug:`exact-reports-${suffix}`,adminEmail:email,adminPassword:'ExactPayrollPass123!'}).expect(201)).body.id;
   const token=(await request(app.getHttpServer()).post('/api/v1/auth/login').send({email,password:'ExactPayrollPass123!'}).expect(200)).body.tokens.accessToken;
   const auth={Authorization:`Bearer ${token}`};
-  const invited=(await request(app.getHttpServer()).post('/api/v1/users').set(auth).send({email:`checker-${suffix}@coopengine.test`,roleCodes:['TREASURER']}).expect(201)).body;
+  const invited=(await request(app.getHttpServer()).post('/api/v1/users').set(auth).send({email:`checker-${suffix}@withdrawal-policy.invalid`,roleCodes:['TREASURER']}).expect(201)).body;
   const checkerToken=(await request(app.getHttpServer()).post('/api/v1/auth/login').send({email:invited.email,password:invited.tempPassword}).expect(200)).body.tokens.accessToken;
   const checker={Authorization:`Bearer ${checkerToken}`},members:{id:string;memberNo:number}[]=[];
   for(let i=0;i<count;i++){
@@ -48,7 +50,7 @@ describe('withdrawal policy precedence (PostgreSQL)',()=>{
   return f.tenant(async c=>{const id=(await c.query("INSERT INTO approval_policies (organization_id,kind,min_amount,max_amount,version,is_active) VALUES ($1,'WITHDRAWAL',$2,$3,1,$4) RETURNING id",[f.org,min,max,active])).rows[0].id as string;
    if(steps)await c.query("INSERT INTO approval_policy_steps (organization_id,policy_id,step_no,approver_role_code) VALUES ($1,$2,1,'TREASURER'),($1,$2,2,'CHAIRMAN')",[f.org,id]);return id;});
  }
- async function chair(f:Awaited<ReturnType<typeof fixture>>){const u=(await f.send('/users',{email:`chair-${randomUUID()}@coopengine.test`,roleCodes:['CHAIRMAN']}).expect(201)).body;const t=(await request(app.getHttpServer()).post('/api/v1/auth/login').send({email:u.email,password:u.tempPassword}).expect(200)).body.tokens.accessToken;return{Authorization:`Bearer ${t}`};}
+ async function chair(f:Awaited<ReturnType<typeof fixture>>){const u=(await f.send('/users',{email:`chair-${randomUUID()}@withdrawal-policy.invalid`,roleCodes:['CHAIRMAN']}).expect(201)).body;const t=(await request(app.getHttpServer()).post('/api/v1/auth/login').send({email:u.email,password:u.tempPassword}).expect(200)).body.tokens.accessToken;return{Authorization:`Bearer ${t}`};}
  const withdrawal=(f:Awaited<ReturnType<typeof fixture>>,key=randomUUID(),amount=0.01)=>f.send(`/savings/accounts/${f.account}/withdrawals`,{idempotencyKey:key,amount,description:'Policy precedence regression'});
  const decision=(f:Awaited<ReturnType<typeof fixture>>,id:string,headers=f.checker,step=1,action='approve')=>f.send(`/savings/withdrawals/${id}/${action}`,{expectedStepNo:step},headers);
  it('null legacy threshold cannot bypass active policy, ordered maker/checker steps or retry protection',async()=>{
