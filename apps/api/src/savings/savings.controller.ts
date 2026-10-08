@@ -226,7 +226,7 @@ export class SavingsController {
   }
 
   @Get('settings/withdrawal-approval')
-  @RequirePermissions('savings.withdraw', 'settings.manage')
+  @RequirePermissions('savings.withdraw', 'savings.approve', 'settings.manage')
   withdrawalPolicy(@CurrentUser() principal: AuthPrincipal) {
     return this.withdrawals.policy(principal.organizationId);
   }
