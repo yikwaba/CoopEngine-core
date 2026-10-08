@@ -100,7 +100,7 @@ describe('exact financial reports (PostgreSQL)',()=>{
  }
  it('reconciles independent products, shared interest and a withdrawal without changing financial records',async()=>{
   const f=await fixture(),other=await secondAccount(f);await interestBoth(f);
-  await f.send(`/savings/accounts/${other}/withdrawals`,{idempotencyKey:randomUUID(),amount:0.01}).expect(201);
+  const withdrawal=await f.send(`/savings/accounts/${other}/withdrawals`,{idempotencyKey:randomUUID(),amount:0.01}).expect(200);expect(withdrawal.body.kind).toBe('POSTED');
   const before=await f.snapshot(),r=(await get(f,'/reports/savings-reconciliation').expect(200)).body;
   expect(r).toMatchObject({checked:2,matched:2,balanced:true,unresolvedEntries:0,mismatches:[]});
   expect(r.rows.find((x:{accountId:string})=>x.accountId===f.account)).toMatchObject({ledgerDecimal:'1.16',projectedDecimal:'1.16',status:'MATCHED'});

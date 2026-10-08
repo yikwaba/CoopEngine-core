@@ -25,7 +25,7 @@ try{
  const second=await call(`/savings/member/${member.id}/account`,{token,status:201,body:{productId:product.id}});
  for(const [account,amount] of [[first,1.15],[second,2.30]])await call(`/savings/accounts/${account.id}/deposits`,{token,status:201,body:{idempotencyKey:randomUUID(),amount}});
  await call('/savings/interest/post',{token,body:{period:new Date().toISOString().slice(0,7)}});
- await call(`/savings/accounts/${second.id}/withdrawals`,{token,status:201,body:{idempotencyKey:randomUUID(),amount:0.01}});
+ const withdrawal=await call(`/savings/accounts/${second.id}/withdrawals`,{token,body:{idempotencyKey:randomUUID(),amount:0.01}});assert.equal(withdrawal.kind,'POSTED');
  let r=await call('/reports/savings-reconciliation',{token});assert.equal(r.balanced,true);assert.equal(r.matched,2);assert.equal(r.totals.ledgerDecimal,'3.47');assert.equal(r.rows.find(x=>x.accountId===first.id).ledgerDecimal,'1.16');assert.equal(r.rows.find(x=>x.accountId===second.id).ledgerDecimal,'2.31');
  context=await chromium.launchPersistentContext(join(profile,'browser'),{headless:true});await context.route('**/*',route=>[portal,'http://localhost:4399'].includes(new URL(route.request().url()).origin)?route.continue():route.abort());
  const page=context.pages()[0]??await context.newPage(),errors=[];page.setDefaultTimeout(20000);page.on('pageerror',e=>errors.push(e.name));
