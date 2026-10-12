@@ -24,6 +24,7 @@ export interface WithdrawalRequestRow {
   memberNo: number | null;
   memberName: string | null;
   amount: number;
+  amountDecimal: string;
   description: string | null;
   status: string;
   source: string;
@@ -33,6 +34,8 @@ export interface WithdrawalRequestRow {
   decisionNotes: string | null;
   journalEntryId: string | null;
   approvalStep: number | null;
+  approvalTotalSteps: number | null;
+  approvalStatus: string | null;
 }
 
 
@@ -227,12 +230,12 @@ export class SavingsWithdrawalsService {
                 m.first_name || ' ' || m.last_name AS member_name,
                 r.amount, r.description, r.status, r.source,
                 COALESCE(u.email, 'member self-service') AS requested_by,
-                r.created_at, r.decided_at, r.decision_notes, r.journal_entry_id, ar.current_step AS approval_step
+                r.created_at, r.decided_at, r.decision_notes, r.journal_entry_id, ar.current_step AS approval_step, ar.total_steps AS approval_total_steps, ar.status AS approval_status
            FROM savings_withdrawal_requests r
            JOIN members m ON m.id = r.member_id
            LEFT JOIN users u ON u.id = r.requested_by_user_id
            LEFT JOIN LATERAL (
-             SELECT current_step FROM approval_requests WHERE organization_id=r.organization_id
+             SELECT current_step, total_steps, status FROM approval_requests WHERE organization_id=r.organization_id
                AND entity_type='savings_withdrawal_request' AND entity_id=r.id ORDER BY created_at DESC LIMIT 1
            ) ar ON true
           WHERE ${where}
@@ -246,6 +249,7 @@ export class SavingsWithdrawalsService {
         memberNo: r.member_no === null ? null : Number(r.member_no),
         memberName: (r.member_name as string | null) ?? null,
         amount: Number(r.amount),
+        amountDecimal: moneyDecimal(moneyKobo(String(r.amount))),
         description: (r.description as string | null) ?? null,
         status: r.status as string,
         source: r.source as string,
@@ -255,6 +259,8 @@ export class SavingsWithdrawalsService {
         decisionNotes: (r.decision_notes as string | null) ?? null,
         journalEntryId: (r.journal_entry_id as string | null) ?? null,
         approvalStep: r.approval_step == null ? null : Number(r.approval_step),
+        approvalTotalSteps: r.approval_total_steps == null ? null : Number(r.approval_total_steps),
+        approvalStatus: (r.approval_status as string | null) ?? null,
       }));
     });
   }

@@ -102,4 +102,24 @@ describe('member withdrawal approval identity (PostgreSQL)',()=>{
   await expect(f.tenant(c=>c.query('UPDATE approval_actions SET actor_member_id=$1 WHERE request_id=(SELECT id FROM approval_requests WHERE entity_id=$2)',[f.members[1]!.id,r.requestId]))).rejects.toMatchObject({code:'P0001'});
   const origin=await f.tenant(c=>c.query('SELECT requested_by_member_id FROM approval_requests WHERE entity_id=$1',[r.requestId]));expect(origin.rows[0].requested_by_member_id).toBe(f.members[0]!.id);expect(await balance(f)).toBe('1.15');
  });
+ it('member savings and request reads expose exact money and current approval progress only for their owner',async()=>{
+  const f=await fixture(2),member=await memberAuth(f),other=await memberAuth(f,1),final=await chair(f);await policy(f);
+  const ownGet=(path:string,headers=member)=>request(app.getHttpServer()).get('/api/v1'+path).set(headers).expect(200);
+  const savings=(await ownGet('/member/savings')).body;expect(savings.totalBalanceDecimal).toBe('1.15');expect(savings.accounts[0]).toMatchObject({id:f.account,balanceDecimal:'1.15',allowWithdrawal:true});expect(savings.transactions[0]).toMatchObject({amountDecimal:'1.15',runningBalanceDecimal:'1.15'});expect((await ownGet('/member/savings',other)).body.accounts).toEqual([]);
+  const r=(await memberWithdrawal(f,member).expect(201)).body;let rows=(await ownGet('/member/withdrawals')).body;expect(rows).toHaveLength(1);expect(rows[0]).toMatchObject({id:r.requestId,amount:1.01,amountDecimal:'1.01',status:'PENDING',approvalStep:1,approvalTotalSteps:2,approvalStatus:'PENDING'});expect((await ownGet('/member/withdrawals',other)).body).toEqual([]);
+  await decision(f,r.requestId).expect(200);rows=(await ownGet('/member/withdrawals')).body;expect(rows[0]).toMatchObject({status:'PENDING',approvalStep:2,approvalTotalSteps:2});await decision(f,r.requestId,final,2).expect(200);expect((await ownGet('/member/withdrawals')).body[0]).toMatchObject({status:'APPROVED',approvalStatus:'APPROVED'});expect((await ownGet('/member/savings')).body.totalBalanceDecimal).toBe('0.14');
+ });
+ it('member rejection reads retain the cooperative note and exact savings without payout',async()=>{
+  const f=await fixture(),member=await memberAuth(f);await policy(f);const r=(await memberWithdrawal(f,member).expect(201)).body;await f.send(`/savings/withdrawals/${r.requestId}/reject`,{expectedStepNo:1,notes:'Synthetic review note'},f.checker).expect(200);
+  const mine=(await request(app.getHttpServer()).get('/api/v1/member/withdrawals').set(member).expect(200)).body;expect(mine[0]).toMatchObject({status:'REJECTED',approvalStatus:'REJECTED',decisionNotes:'Synthetic review note',amountDecimal:'1.01'});expect(await balance(f)).toBe('1.15');
+ });
+
+ it('member read totals preserve aggregates above a single money column limit',async()=>{
+  const f=await fixture(),member=await memberAuth(f);const product=(await f.send('/products/savings',{code:'LARGE-READ',name:'Synthetic large read',interestRatePa:0,minDeposit:0,allowWithdrawal:true}).expect(201)).body;
+  await f.send(`/savings/member/${f.members[0]!.id}/account`,{productId:product.id}).expect(201);
+  // Synthetic read boundary only; no historical reconciliation or money posting claim.
+  await f.tenant(c=>c.query('UPDATE member_savings_accounts SET current_balance=$1 WHERE member_id=$2',['99999999999999999.99',f.members[0]!.id]));
+  const read=(await request(app.getHttpServer()).get('/api/v1/member/savings').set(member).expect(200)).body;expect(read.totalBalanceDecimal).toBe('199999999999999999.98');expect(read.accounts.every((a:{balanceDecimal:string})=>a.balanceDecimal==='99999999999999999.99')).toBe(true);
+ });
+
 });

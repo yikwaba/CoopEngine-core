@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { SavingsWithdrawalsService } from '../savings/savings-withdrawals.service';
+import { reportDecimal, reportSum } from '../reports/report-money';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
@@ -267,7 +268,7 @@ export class MemberSpaceService {
     return withTenant(this.pool, orgId, async (c) => {
       const accounts = await c.query(
         `SELECT a.id, a.account_no, a.current_balance, a.status,
-                p.code AS product_code, p.name AS product_name
+                p.code AS product_code, p.name AS product_name, p.allow_withdrawal
            FROM member_savings_accounts a
            JOIN savings_products p ON p.id = a.product_id
           WHERE a.organization_id = $1 AND a.member_id = $2
@@ -295,20 +296,26 @@ export class MemberSpaceService {
           id: a.id as string,
           accountNo: a.account_no as string,
           balance: Number(a.current_balance),
+          balanceDecimal: reportDecimal(a.current_balance),
+          allowWithdrawal: Boolean(a.allow_withdrawal),
           status: a.status as string,
           productCode: a.product_code as string,
           productName: a.product_name as string,
         };
       });
+      const totalBalanceDecimal=reportSum(mapped,'balanceDecimal');
       return {
         accounts: mapped,
-        totalBalance: mapped.reduce((sum, a) => sum + a.balance, 0),
+        totalBalance: Number(totalBalanceDecimal),
+        totalBalanceDecimal,
         transactions: movements.map((t) => ({
           id: t.id as string,
           accountId: t.account_id as string,
           type: t.type as string,
           amount: Number(t.signed_amount),
+          amountDecimal: reportDecimal(t.signed_amount),
           runningBalance: Number(t.running_balance),
+          runningBalanceDecimal: reportDecimal(t.running_balance),
           description: (t.description as string | null) ?? null,
           date: t.created_at as string,
         })),
