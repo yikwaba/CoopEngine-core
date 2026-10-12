@@ -316,6 +316,13 @@
       "when": 1791146040000,
       "tag": "0045_financial_write_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1791824400000,
+      "tag": "0046_member_approval_identity",
+      "breakpoints": true
     }
   ]
 }
