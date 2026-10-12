@@ -91,11 +91,15 @@ describe('member withdrawal approval identity (PostgreSQL)',()=>{
  it('without active policies members stay parked and use the existing staff approval path',async()=>{
   const f=await fixture(),member=await memberAuth(f);await policy(f,'0.00',null,true,false);const r=(await memberWithdrawal(f,member).expect(201)).body;expect(r.kind).toBe('PENDING');expect(await balance(f)).toBe('1.15');expect((await f.tenant(c=>c.query('SELECT count(*)::int AS n FROM approval_requests'))).rows[0].n).toBe(0);await f.send(`/savings/withdrawals/${r.requestId}/approve`,{},f.checker).expect(200);expect(await balance(f)).toBe('0.14');
  });
- it('database rejects ambiguous request identity and foreign-tenant member references',async()=>{
-  const f=await fixture(),g=await fixture(),member=await memberAuth(f);await policy(f);const r=(await memberWithdrawal(f,member).expect(201)).body;
-  await expect(f.tenant(c=>c.query('UPDATE approval_requests SET requested_by=$1 WHERE entity_id=$2',[f.actor,r.requestId]))).rejects.toMatchObject({code:'23514'});
-  await expect(f.tenant(c=>c.query('UPDATE approval_requests SET requested_by_member_id=$1 WHERE entity_id=$2',[g.members[0]!.id,r.requestId]))).rejects.toMatchObject({code:'23503'});
-  await expect(f.tenant(c=>c.query('UPDATE approval_requests SET requested_by_member_id=NULL WHERE entity_id=$1',[r.requestId]))).rejects.toMatchObject({code:'23514'});
-  expect(await balance(f)).toBe('1.15');
+ it('database rejects ambiguous/foreign member inserts and freezes request and submission identities',async()=>{
+  const f=await fixture(2),g=await fixture(),member=await memberAuth(f);await policy(f);const r=(await memberWithdrawal(f,member).expect(201)).body;
+  const insert=(user:string|null,memberId:string|null)=>f.tenant(c=>c.query("INSERT INTO approval_requests (organization_id,kind,entity_type,entity_id,requested_by,requested_by_member_id) VALUES ($1,'WITHDRAWAL','savings_withdrawal_request',$2,$3,$4)",[f.org,randomUUID(),user,memberId]));
+  await expect(insert(f.actor,f.members[0]!.id)).rejects.toMatchObject({code:'23514'});
+  await expect(insert(null,null)).rejects.toMatchObject({code:'23514'});
+  await expect(insert(null,g.members[0]!.id)).rejects.toMatchObject({code:'23503'});
+  await expect(f.tenant(c=>c.query('UPDATE approval_requests SET requested_by=$1 WHERE entity_id=$2',[f.actor,r.requestId]))).rejects.toMatchObject({code:'P0001'});
+  await expect(f.tenant(c=>c.query('UPDATE approval_requests SET requested_by_member_id=$1 WHERE entity_id=$2',[f.members[1]!.id,r.requestId]))).rejects.toMatchObject({code:'23514'});
+  await expect(f.tenant(c=>c.query('UPDATE approval_actions SET actor_member_id=$1 WHERE request_id=(SELECT id FROM approval_requests WHERE entity_id=$2)',[f.members[1]!.id,r.requestId]))).rejects.toMatchObject({code:'P0001'});
+  const origin=await f.tenant(c=>c.query('SELECT requested_by_member_id FROM approval_requests WHERE entity_id=$1',[r.requestId]));expect(origin.rows[0].requested_by_member_id).toBe(f.members[0]!.id);expect(await balance(f)).toBe('1.15');
  });
 });

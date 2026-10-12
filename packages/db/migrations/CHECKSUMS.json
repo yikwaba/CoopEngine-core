@@ -49,7 +49,7 @@
     "0043_mfa_enrollment_recovery.sql": "b6d82f4d116e307e3d61c75800ba125044eef7f46a98c14631070f3625f6f398",
     "0044_totp_replay_step_up.sql": "ac4f3154d365cfe0f645c642d77b70c82ceb785b1e1c118eb143ba53e8e41f42",
     "0045_financial_write_receipts.sql": "1e48d184510fffed2fdab80fffd8a35795f63d94165800506976e2e74bd8a7eb",
-    "0046_member_approval_identity.sql": "5be2af41193731bcfc7572286f21ed1d8983e91878df8dbe50b7f80a7bf57db5"
+    "0046_member_approval_identity.sql": "214922dbfddce54020b35f1e7aa4c981cb457f291384e0537793ea9e716c264a"
   },
   "journalTags": [
     "0000_marvelous_blue_shield",
