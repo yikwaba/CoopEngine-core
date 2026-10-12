@@ -19,7 +19,7 @@ export default function FinancialRecovery() {
   return()=>{window.removeEventListener(FINANCIAL_WRITES_EVENT,refresh);window.removeEventListener('focus',refresh);window.removeEventListener('storage',refresh);};
  },[]);
  if (!pending.length && !message) return null;
- return <aside aria-label="Financial request recovery" style={{position:'fixed',bottom:16,right:16,maxWidth:420,maxHeight:'60vh',overflow:'auto',padding:20,background:'#fff',color:'#172b3a',border:'2px solid #b7791f',borderRadius:12,zIndex:40,boxShadow:'0 4px 20px #0002'}}>
+ return <aside aria-label="Financial request recovery" style={{position:'fixed',bottom:16,right:16,maxWidth:420,width:'calc(100vw - 32px)',overflowWrap:'anywhere',maxHeight:'60vh',overflow:'auto',padding:20,background:'#fff',color:'#172b3a',border:'2px solid #b7791f',borderRadius:12,zIndex:40,boxShadow:'0 4px 20px #0002'}}>
   <h2>Financial requests to check</h2>
   {pending.length>0 && <p>These requests have no acknowledged result. They are retained in this browser across tabs and restarts. Sign in to the original account to recover them. Do not clear browser data while a request is unresolved. Recover the original request before submitting another payment. A retry may complete a request that was never posted.</p>}
   <ul>{pending.map(record=><li key={record.storageKey} style={{marginBottom:12}}>
