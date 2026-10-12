@@ -10,6 +10,7 @@ import { PayrollService } from '../payroll/payroll.service';
 interface WithdrawalRow {
   id: string;
   requested_by_user_id: string | null;
+  requested_by_member_id: string | null;
   amount: string;
   created_at: string;
   member_no: string;
@@ -53,6 +54,7 @@ export interface ApprovalItem {
   amount: string | null;
   requestedBy: string | null;
   requestedById: string | null;
+  requestedByMemberId?: string | null;
   ageHours: number;
   /** Where the action lives, for screens that act on it directly. */
   actionBase: string;
@@ -96,12 +98,13 @@ export class ApprovalsService {
    */
   async createRequest(
     organizationId: string | null,
-    requesterUserId: string,
+    requesterUserId: string | null,
     input: {
       kind: 'WITHDRAWAL' | 'PAYROLL' | 'LOAN' | 'JOURNAL' | 'EXPENSE';
       entityType: string;
       entityId: string;
       amount: number | string;
+      requesterMemberId?: string;
       summary?: string;
       payload?: Record<string, unknown>;
     },
@@ -116,16 +119,34 @@ export class ApprovalsService {
   async createRequestInTransaction(
     client: PoolClient,
     orgId: string,
-    requesterUserId: string,
+    requesterUserId: string | null,
     input: {
       kind: 'WITHDRAWAL' | 'PAYROLL' | 'LOAN' | 'JOURNAL' | 'EXPENSE';
       entityType: string;
       entityId: string;
       amount: number | string;
+      requesterMemberId?: string;
       summary?: string;
       payload?: Record<string, unknown>;
     },
   ) {
+      const requesterMemberId = input.requesterMemberId ?? null;
+      if ((requesterUserId === null) === (requesterMemberId === null)) {
+        throw new ConflictException('Exactly one requester identity is required');
+      }
+      if (requesterMemberId) {
+        if (input.kind !== 'WITHDRAWAL' || input.entityType !== 'savings_withdrawal_request') {
+          throw new ConflictException('Member identity is limited to withdrawal requests');
+        }
+        const origin = await client.query(
+          `SELECT 1 FROM savings_withdrawal_requests r JOIN members m
+             ON m.id = r.requested_by_member_id AND m.organization_id = r.organization_id
+            WHERE r.organization_id=$1 AND r.id=$2 AND r.source='MEMBER'
+              AND r.requested_by_member_id=$3 AND r.member_id=$3 AND r.status='PENDING'`,
+          [orgId, input.entityId, requesterMemberId],
+        );
+        if (origin.rowCount !== 1) throw new ConflictException('Member withdrawal requester does not match');
+      }
       const matched = await client.query<{
         id: string;
         version: number;
@@ -173,8 +194,8 @@ export class ApprovalsService {
       }>(
         `INSERT INTO approval_requests
            (organization_id, kind, entity_type, entity_id, amount, summary, payload,
-            requested_by, policy_id, policy_version, total_steps, current_step)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, 1)
+            requested_by, policy_id, policy_version, total_steps, current_step, requested_by_member_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, 1, $12)
          RETURNING id, amount, status, current_step, total_steps`,
         [
           orgId,
@@ -188,6 +209,7 @@ export class ApprovalsService {
           policy.id,
           policy.version,
           policySteps.rowCount,
+          requesterMemberId,
         ],
       );
       const request = inserted.rows[0]!;
@@ -202,9 +224,9 @@ export class ApprovalsService {
       }
       await client.query(
         `INSERT INTO approval_actions
-           (organization_id, request_id, actor_user_id, action)
-         VALUES ($1, $2, $3, 'SUBMIT')`,
-        [orgId, request.id, requesterUserId],
+           (organization_id, request_id, actor_user_id, action, actor_member_id)
+         VALUES ($1, $2, $3, 'SUBMIT', $4)`,
+        [orgId, request.id, requesterUserId, requesterMemberId],
       );
 
       return {
@@ -437,9 +459,9 @@ export class ApprovalsService {
       const collected: ApprovalItem[] = [];
 
       const withdrawals = await c.query(
-        `SELECT r.id, r.amount, r.status, r.created_at, r.requested_by_user_id,
+        `SELECT r.id, r.amount, r.status, r.created_at, r.requested_by_user_id, r.requested_by_member_id,
                 m.member_no, m.first_name || ' ' || m.last_name AS member,
-                u.email AS requested_by
+                COALESCE(u.email, CASE WHEN r.source='MEMBER' THEN 'Member ' || m.member_no || ' · ' || m.first_name || ' ' || m.last_name END) AS requested_by
            FROM savings_withdrawal_requests r
            JOIN members m ON m.id = r.member_id
            LEFT JOIN users u ON u.id = r.requested_by_user_id
@@ -455,6 +477,7 @@ export class ApprovalsService {
           amount: row.amount,
           requestedBy: row.requested_by ?? null,
           requestedById: row.requested_by_user_id ?? null,
+          requestedByMemberId: row.requested_by_member_id ?? null,
           ageHours: this.ageHours(row.created_at),
           actionBase: '/withdrawals',
           canAct: false, // filled in below: the requester may not decide their own

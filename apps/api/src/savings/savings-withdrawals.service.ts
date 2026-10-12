@@ -109,6 +109,9 @@ export class SavingsWithdrawalsService {
     idempotencyKey?: string,
   ): Promise<WithdrawalDecision> {
     const orgId = this.requireOrg(organizationId);
+    if ((source === 'MEMBER' && (!memberId || actorUserId)) || (source === 'STAFF' && !actorUserId)) {
+      throw new BadRequestException('Withdrawal requester identity is required');
+    }
     const value = moneyKobo(amount);
     if (value <= 0n) throw new BadRequestException('Invalid amount');
 
@@ -120,11 +123,11 @@ export class SavingsWithdrawalsService {
     // An active stepped policy is authoritative even when the legacy threshold
     // would otherwise permit immediate staff posting. Reuse this same decision
     // when creating the linked request so gaps/overlaps roll back atomically.
-    const configured = source === 'STAFF' && actorUserId ? await c.query(
+    const configured = await c.query(
       `SELECT 1 FROM approval_policies
         WHERE organization_id=$1 AND kind='WITHDRAWAL' AND is_active=true LIMIT 1`,
       [orgId],
-    ) : null;
+    );
     const hasPolicy = configured?.rowCount === 1;
     const needsApproval =
       hasPolicy || source === 'MEMBER' || (threshold !== null && (threshold === 0n || value > threshold));
@@ -173,22 +176,18 @@ export class SavingsWithdrawalsService {
         )
       ).rows[0] as { id: string };
 
-      // A tenant opts into the engine by defining at least one active withdrawal
-      // policy. From that point the engine is authoritative: a gap or overlap rolls
-      // this transaction back, so a parked withdrawal can never exist without its
-      // approval request. Member-originated requests remain on the legacy staff
-      // approval path until approval_requests can carry member identity (0041).
-      if (source === 'STAFF' && actorUserId) {
-        if (hasPolicy) {
-          await this.approvals.createRequestInTransaction(c, orgId, actorUserId, {
-            kind: 'WITHDRAWAL',
-            entityType: 'savings_withdrawal_request',
-            entityId: id.id,
-            amount: moneyDecimal(value),
-            summary: description ?? `Savings withdrawal from account ${accountId}`,
-            payload: { accountId, memberId: account.member_id, source },
-          });
-        }
+      // Active policies govern both staff and member requests. The authenticated
+      // member identity is recorded separately; never substitute a staff user.
+      if (hasPolicy) {
+        await this.approvals.createRequestInTransaction(c, orgId, actorUserId, {
+          kind: 'WITHDRAWAL',
+          entityType: 'savings_withdrawal_request',
+          entityId: id.id,
+          amount: moneyDecimal(value),
+          ...(source === 'MEMBER' ? { requesterMemberId: memberId! } : {}),
+          summary: description ?? `Savings withdrawal from account ${accountId}`,
+          payload: { accountId, memberId: account.member_id, source },
+        });
       }
 
       await c.query(
@@ -198,7 +197,7 @@ export class SavingsWithdrawalsService {
           orgId,
           actorUserId,
           id.id,
-          JSON.stringify({ accountId, amount: moneyDecimal(value), source, threshold: threshold === null ? null : moneyDecimal(threshold) }),
+          JSON.stringify({ accountId, amount: moneyDecimal(value), source, requesterMemberId: source === 'MEMBER' ? memberId : null, threshold: threshold === null ? null : moneyDecimal(threshold) }),
         ],
       );
 
