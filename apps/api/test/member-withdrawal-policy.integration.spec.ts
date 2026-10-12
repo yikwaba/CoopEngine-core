@@ -61,18 +61,18 @@ describe('member withdrawal approval identity (PostgreSQL)',()=>{
   const login=(await request(app.getHttpServer()).post('/api/v1/auth/member/verify-otp').send({organizationSlug:slug,email,code:otp.devCode}).expect(200)).body;
   return {Authorization:`Bearer ${login.accessToken}`};
  }
- const memberWithdrawal=(f:Awaited<ReturnType<typeof fixture>>,headers:{Authorization:string},key=randomUUID(),amount=0.01)=>f.send('/member/withdrawals/request',{idempotencyKey:key,accountId:f.account,amount,description:'Member policy regression'},headers);
+ const memberWithdrawal=(f:Awaited<ReturnType<typeof fixture>>,headers:{Authorization:string},key=randomUUID(),amount=1.01)=>f.send('/member/withdrawals/request',{idempotencyKey:key,accountId:f.account,amount,description:'Member policy regression'},headers);
  it('records authenticated member origin and submission, enforces ordered staff steps and replays one final debit',async()=>{
   const f=await fixture(),member=await memberAuth(f),final=await chair(f);await policy(f);
   const key=randomUUID(),[a,b]=await Promise.all([memberWithdrawal(f,member,key).expect(201),memberWithdrawal(f,member,key).expect(201)]);expect(a.body).toEqual(b.body);expect(a.body.kind).toBe('PENDING');const id=a.body.requestId;
   const origin=await f.tenant(async c=>({request:(await c.query('SELECT requested_by,requested_by_member_id,amount FROM approval_requests WHERE entity_id=$1',[id])).rows[0],action:(await c.query("SELECT actor_user_id,actor_member_id,action FROM approval_actions WHERE request_id=(SELECT id FROM approval_requests WHERE entity_id=$1)",[id])).rows[0]}));
-  expect(origin).toEqual({request:{requested_by:null,requested_by_member_id:f.members[0]!.id,amount:'0.01'},action:{actor_user_id:null,actor_member_id:f.members[0]!.id,action:'SUBMIT'}});
-  await memberWithdrawal(f,member,key,0.02).expect(409);
+  expect(origin).toEqual({request:{requested_by:null,requested_by_member_id:f.members[0]!.id,amount:'1.01'},action:{actor_user_id:null,actor_member_id:f.members[0]!.id,action:'SUBMIT'}});
+  await memberWithdrawal(f,member,key,1.02).expect(409);
   const memberDecision=await decision(f,id,member);expect([401,403]).toContain(memberDecision.status);
   await decision(f,id,final).expect(403);expect(await balance(f)).toBe('1.15');
   const inbox=(await request(app.getHttpServer()).get('/api/v1/approvals').set(f.checker).expect(200)).body;const item=inbox.items.find((x:{id:string})=>x.id===id);expect(item.requestedByMemberId).toBe(f.members[0]!.id);expect(item.requestedById).toBeNull();expect(item.requestedBy).toContain('Member');
   expect((await decision(f,id).expect(200)).body.approvalStatus).toBe('PENDING');expect(await balance(f)).toBe('1.15');await decision(f,id,final,1).expect(409);
-  const [posted,replayed]=await Promise.all([decision(f,id,final,2).expect(200),decision(f,id,final,2).expect(200)]);expect(posted.body).toEqual(replayed.body);expect(posted.body.approvalStatus).toBe('APPROVED');expect(await balance(f)).toBe('1.14');
+  const [posted,replayed]=await Promise.all([decision(f,id,final,2).expect(200),decision(f,id,final,2).expect(200)]);expect(posted.body).toEqual(replayed.body);expect(posted.body.approvalStatus).toBe('APPROVED');expect(await balance(f)).toBe('0.14');
   expect((await memberWithdrawal(f,member,key).expect(201)).body).toEqual(a.body);
   const proof=await f.tenant(async c=>({requests:(await c.query('SELECT count(*)::int AS n FROM savings_withdrawal_requests')).rows[0].n,chains:(await c.query('SELECT count(*)::int AS n FROM approval_requests')).rows[0].n,journals:(await c.query('SELECT count(*)::int AS n FROM journal_entries WHERE id=$1',[posted.body.journalEntryId])).rows[0].n}));expect(proof).toEqual({requests:1,chains:1,journals:1});
  });
@@ -82,14 +82,14 @@ describe('member withdrawal approval identity (PostgreSQL)',()=>{
   const rows=await f.tenant(c=>c.query('SELECT r.status,a.status AS approval_status FROM savings_withdrawal_requests r JOIN approval_requests a ON a.entity_id=r.id WHERE r.id=$1',[r.requestId]));expect(rows.rows[0]).toEqual({status:'REJECTED',approval_status:'REJECTED'});expect((await memberWithdrawal(f,member,key).expect(201)).body).toEqual(r);
  });
  it('invalid member policy configurations leave no parked request, receipt, submission or financial effect',async()=>{
-  for(const mode of ['gap','overlap','steps']){const f=await fixture(),member=await memberAuth(f);await policy(f,mode==='gap'?'0.02':'0.00',null,mode!=='steps');if(mode==='overlap')await policy(f,'0.01');const before=await f.snapshot();await memberWithdrawal(f,member).expect(409);expect(await f.snapshot()).toEqual(before);}
+  for(const mode of ['gap','overlap','steps']){const f=await fixture(),member=await memberAuth(f);await policy(f,mode==='gap'?'1.02':'0.00',null,mode!=='steps');if(mode==='overlap')await policy(f,'1.01');const before=await f.snapshot();await memberWithdrawal(f,member).expect(409);expect(await f.snapshot()).toEqual(before);}
  });
  it('member account ownership, receipt identity and tenant decisions cannot cross boundaries',async()=>{
   const f=await fixture(2),g=await fixture(),member=await memberAuth(f),other=await memberAuth(f,1),foreign=await memberAuth(g);await policy(f);const key=randomUUID(),r=(await memberWithdrawal(f,member,key).expect(201)).body;
   await memberWithdrawal(f,other).expect(400);await memberWithdrawal(f,other,key).expect(409);await memberWithdrawal(f,foreign).expect(404);await decision(f,r.requestId,g.checker).expect(404);expect(await balance(f)).toBe('1.15');expect(await balance(g)).toBe('1.15');
  });
  it('without active policies members stay parked and use the existing staff approval path',async()=>{
-  const f=await fixture(),member=await memberAuth(f);await policy(f,'0.00',null,true,false);const r=(await memberWithdrawal(f,member).expect(201)).body;expect(r.kind).toBe('PENDING');expect(await balance(f)).toBe('1.15');expect((await f.tenant(c=>c.query('SELECT count(*)::int AS n FROM approval_requests'))).rows[0].n).toBe(0);await f.send(`/savings/withdrawals/${r.requestId}/approve`,{},f.checker).expect(200);expect(await balance(f)).toBe('1.14');
+  const f=await fixture(),member=await memberAuth(f);await policy(f,'0.00',null,true,false);const r=(await memberWithdrawal(f,member).expect(201)).body;expect(r.kind).toBe('PENDING');expect(await balance(f)).toBe('1.15');expect((await f.tenant(c=>c.query('SELECT count(*)::int AS n FROM approval_requests'))).rows[0].n).toBe(0);await f.send(`/savings/withdrawals/${r.requestId}/approve`,{},f.checker).expect(200);expect(await balance(f)).toBe('0.14');
  });
  it('database rejects ambiguous request identity and foreign-tenant member references',async()=>{
   const f=await fixture(),g=await fixture(),member=await memberAuth(f);await policy(f);const r=(await memberWithdrawal(f,member).expect(201)).body;
