@@ -261,8 +261,8 @@ export default function MemberDashboardPage() {
   }
 
   return (
-    <main style={{ maxWidth: 560, margin: '0 auto', padding: 20 }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <main style={{ maxWidth: 560, margin: '0 auto', padding: 20, overflowWrap: 'anywhere' }}>
+      <header style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <p style={{ margin: 0, color: '#5b6772', fontSize: 13 }}>
             Member #{(data?.member.memberNo ?? info?.memberNo) ?? '…'} · Co-opEngine
@@ -271,7 +271,7 @@ export default function MemberDashboardPage() {
             {data ? `${data.member.firstName} ${data.member.lastName}` : 'Loading…'}
           </h1>
         </div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', maxWidth: '100%', gap: 6 }}>
           <Link href="/savings" style={{ fontSize: 13, padding: '6px 10px', background: '#eef4ff', borderRadius: 8, color: '#123a6b' }}>
             Savings
           </Link>
@@ -290,7 +290,7 @@ export default function MemberDashboardPage() {
         </div>
       </header>
 
-      <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 18 }}>
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 12, marginTop: 18 }}>
         <div className="card">
           <p className="stat-label">My savings</p>
           <p className="stat-value">{data ? naira(data.savingsTotal) : '…'}</p>
@@ -482,7 +482,7 @@ export default function MemberDashboardPage() {
 
       {notes.length > 0 && (
         <section className="card" style={{ marginTop: 14 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center' }}>
             <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Notifications</h2>
             <button
               style={{ fontSize: 12, padding: '4px 8px' }}
