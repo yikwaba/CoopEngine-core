@@ -272,8 +272,8 @@ export class ReconciliationService {
             if (!(error instanceof BadRequestException || error instanceof ConflictException || error instanceof NotFoundException)) throw error;
             const reason=error.message;
             const entryId=await this.postUnallocated(c,orgId,actorUserId,tx.id,amount,tx);
-            await this.mark(c,orgId,tx.id,{status:'EXCEPTION',reason,journalEntryId:entryId});
-            return {matched:false,exception:true,transactionId,reason,journalEntryId:entryId};
+            await this.mark(c,orgId,tx.id,{status:'EXCEPTION',reason,memberId,intentId,journalEntryId:entryId});
+            return {matched:false,exception:true,transactionId,memberId,intentId,reason,journalEntryId:entryId};
           }
         }
         const posting=await this.post(c,orgId,actorUserId,{memberId,purpose:selected?.purpose??'SAVINGS_DEPOSIT',amount,
@@ -493,21 +493,37 @@ export class ReconciliationService {
     const orgId = this.requireOrg(organizationId);
     return withTenant(this.pool, orgId, async (c) => {
       const { rows } = await c.query(
-        `SELECT id, provider, provider_reference, amount, payer_name, narration, virtual_account_no,
-                received_at, exception_reason, journal_entry_id
-           FROM provider_transactions
-          WHERE status = 'EXCEPTION'
-          ORDER BY received_at DESC
+        `SELECT tx.id, tx.provider, tx.provider_reference, tx.amount, tx.payer_name, tx.narration, tx.virtual_account_no,
+                tx.received_at, tx.exception_reason, tx.journal_entry_id, tx.member_id, tx.payment_intent_id,
+                i.reference AS intent_reference, i.purpose AS intent_purpose, i.status AS intent_status,
+                m.member_no, m.first_name || ' ' || m.last_name AS member
+           FROM provider_transactions tx
+           LEFT JOIN payment_intents i ON i.organization_id=tx.organization_id AND i.id=tx.payment_intent_id
+           LEFT JOIN members m ON m.organization_id=tx.organization_id AND m.id=tx.member_id
+          WHERE tx.status = 'EXCEPTION'
+          ORDER BY tx.received_at DESC
           LIMIT 200`,
       );
       return rows;
     });
   }
 
+  private async lockAllocationIntent(c:PoolClient,orgId:string,intentId:string,memberId:string,purpose:PaymentPurpose):Promise<void>{
+    const {rows}=await c.query(`SELECT member_id,purpose,status,expected_amount,received_amount FROM payment_intents
+      WHERE organization_id=$1 AND id=$2 FOR UPDATE`,[orgId,intentId]);
+    const intent=rows[0];
+    if (!intent) throw new NotFoundException('Payment intent not found');
+    if (intent.member_id!==memberId || intent.purpose!==purpose) throw new ConflictException('Payment intent member and purpose must match this allocation');
+    if (!['OPEN','PARTIAL','MATCHED'].includes(intent.status)) throw new ConflictException('Payment intent is no longer available; reconciliation is required');
+    if (moneyKobo(intent.expected_amount)<=0n || moneyKobo(intent.received_amount)<0n) throw new ConflictException('Payment intent amounts require reconciliation');
+    // A funded intent may receive a distinct receipt, matching existing overpayment behavior.
+    // Cancellation is serialized by this lock; cached completed assignments replay before it.
+  }
+
   /** Assign the parked receipt once; suspense release and domain posting share one commit. */
   async assignException(
     organizationId: string | null, actorUserId: string, transactionId: string,
-    dto: {memberId:string;purpose?:PaymentPurpose},
+    dto: {memberId:string;purpose?:PaymentPurpose;paymentIntentId?:string},
   ) {
     const orgId=this.requireOrg(organizationId),purpose=dto.purpose??'SAVINGS_DEPOSIT';
     return withTenant(this.pool,orgId,async c=>{
@@ -515,8 +531,15 @@ export class ReconciliationService {
       const tx=rows[0];
       if (!tx) throw new NotFoundException('Transaction not found');
       return financialIntent(this.pool,orgId,'provider.assign',`provider-assign:${transactionId}`,
-        {transactionId,memberId:dto.memberId,purpose},async()=>{
+        // Omit the new optional field for old clients, preserving committed legacy receipt fingerprints.
+        {transactionId,memberId:dto.memberId,purpose,...(dto.paymentIntentId?{paymentIntentId:dto.paymentIntentId}:{})},async()=>{
           if (tx.status!=='EXCEPTION' || !tx.journal_entry_id) throw new ConflictException('Only a parked exception can be allocated; historical incomplete receipts require reconciliation');
+          const intentId:string|null=tx.payment_intent_id??dto.paymentIntentId??null;
+          if (tx.payment_intent_id && dto.paymentIntentId && tx.payment_intent_id!==dto.paymentIntentId) {
+            throw new ConflictException('This receipt is linked to a different payment intent; reconciliation is required');
+          }
+          // Row -> retry receipt -> intent -> member/account: same ordering as automatic matching.
+          if (intentId) await this.lockAllocationIntent(c,orgId,intentId,dto.memberId,purpose);
           const original=await c.query(`SELECT je.id FROM journal_entries je WHERE je.organization_id=$1 AND je.id=$2
             AND je.source='PAYMENT_UNALLOCATED' AND je.source_id=$3 AND je.status='POSTED' FOR UPDATE`,[orgId,tx.journal_entry_id,transactionId]);
           if (!original.rowCount) throw new ConflictException('Receipt has no valid posted suspense journal');
@@ -547,11 +570,14 @@ export class ReconciliationService {
           if (!byCode.has('1000') || !byCode.has('2990')) throw new ConflictException('Missing cash or suspense account');
           await c.query(`INSERT INTO journal_lines (organization_id,journal_entry_id,account_id,debit,credit,member_id)
             VALUES ($1,$2,$3,$4,0,$5),($1,$2,$6,0,$4,$5)`,[orgId,entryId,byCode.get('2990'),amount,dto.memberId,byCode.get('1000')]);
-          await this.mark(c,orgId,transactionId,{status:'MATCHED',memberId:dto.memberId,journalEntryId:posting.journalEntryId});
+          if (intentId) await c.query(`UPDATE payment_intents SET received_amount=received_amount+$3,
+            status=CASE WHEN received_amount+$3>=expected_amount THEN 'MATCHED' ELSE 'PARTIAL' END,updated_at=now()
+            WHERE organization_id=$1 AND id=$2`,[orgId,intentId,amount]);
+          await this.mark(c,orgId,transactionId,{status:'MATCHED',memberId:dto.memberId,intentId,journalEntryId:posting.journalEntryId});
           await c.query(`INSERT INTO audit_logs (organization_id,actor_user_id,action,entity_type,entity_id,metadata)
             VALUES ($1,$2,'payment.allocated','provider_transaction',$3,$4::jsonb)`,
-            [orgId,actorUserId,transactionId,JSON.stringify({memberId:dto.memberId,purpose,entryId,journalEntryId:posting.journalEntryId,amount})]);
-          return {allocated:true,transactionId,entryId,journalEntryId:posting.journalEntryId,
+            [orgId,actorUserId,transactionId,JSON.stringify({memberId:dto.memberId,purpose,intentId,entryId,journalEntryId:posting.journalEntryId,amount})]);
+          return {allocated:true,transactionId,intentId,entryId,journalEntryId:posting.journalEntryId,
             target:purpose==='LOAN_REPAYMENT'?'1020':purpose==='SHARE_PURCHASE'?'3000':'2000'};
         },c);
     });

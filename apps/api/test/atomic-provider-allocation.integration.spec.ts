@@ -31,7 +31,7 @@ describe('atomic provider allocation and retries (PostgreSQL)',()=>{
   const tenant=<T>(fn:Parameters<typeof withTenant<T>>[2])=>withTenant(pool,org,fn);
   const intent=async(purpose='SAVINGS_DEPOSIT',expectedAmount=1,memberId=members[0])=>(await request(app.getHttpServer()).post('/api/v1/payments/intents').set(auth).send({memberId,purpose,expectedAmount}).expect(201)).body;
   const record=(body:unknown)=>request(app.getHttpServer()).post('/api/v1/payments/transactions').set(auth).send(body);
-  const assign=(id:string,memberId=members[0],purpose='SAVINGS_DEPOSIT')=>request(app.getHttpServer()).post(`/api/v1/payments/exceptions/${id}/assign`).set(auth).send({memberId,purpose});
+  const assign=(id:string,memberId=members[0],purpose='SAVINGS_DEPOSIT',paymentIntentId?:string)=>request(app.getHttpServer()).post(`/api/v1/payments/exceptions/${id}/assign`).set(auth).send({memberId,purpose,...(paymentIntentId?{paymentIntentId}:{})});
   const parked=async(amount=0.23)=>(await record({providerReference:randomUUID(),amount,narration:'unknown payer'}).expect(201)).body;
   const va=async(memberId=members[0])=>(await request(app.getHttpServer()).post('/api/v1/payments/virtual-accounts').set(auth).send({memberId}).expect(201)).body.accountNumber;
   return {org,auth,members,tenant,intent,record,assign,parked,va};
@@ -167,9 +167,9 @@ describe('atomic provider allocation and retries (PostgreSQL)',()=>{
  async function providerMinimum(f:F,value:number){const id=(await f.tenant(c=>c.query("SELECT id FROM savings_products WHERE code='REGULAR-SAVINGS'"))).rows[0].id;await request(app.getHttpServer()).patch(`/api/v1/products/savings/${id}`).set(f.auth).send({code:'REGULAR-SAVINGS',name:'Regular savings',interestRatePa:0,minDeposit:value,allowWithdrawal:true}).expect(200);return id as string;}
  it('below-minimum incoming cash stays in suspense, duplicates do not multiply it, and assignment credits once after rule correction',async()=>{
   const f=await fixture(1);await providerMinimum(f,1);const intent=await f.intent(),body={providerReference:randomUUID(),amount:0.23,narration:intent.reference};const first=(await f.record(body).expect(201)).body;expect(first.exception).toBe(true);expect(first.matched).toBe(false);
-  const parked=await proof(f);expect(parked.savings).toHaveLength(0);expect(parked.journals).toHaveLength(1);expect(parked.providers[0].status).toBe('EXCEPTION');expect(parked.intents[0].received_amount).toBe('0.00');expect(parked.totals.find(x=>x.code==='1000').net).toBe('0.23');expect(parked.totals.find(x=>x.code==='2990').net).toBe('-0.23');
+  const parked=await proof(f);expect(parked.savings).toHaveLength(0);expect(parked.journals).toHaveLength(1);expect(parked.providers[0]).toMatchObject({status:'EXCEPTION',member_id:f.members[0],payment_intent_id:intent.id});expect(parked.intents[0].received_amount).toBe('0.00');expect(parked.totals.find(x=>x.code==='1000').net).toBe('0.23');expect(parked.totals.find(x=>x.code==='2990').net).toBe('-0.23');
   await f.record(body).expect(201);expect(await proof(f)).toEqual(parked);await f.assign(first.transactionId).expect(400);expect(await proof(f)).toEqual(parked);
-  await providerMinimum(f,0.23);await f.assign(first.transactionId).expect(200);const assigned=await proof(f);expect(assigned.savings[0].current_balance).toBe('0.23');expect(assigned.totals.find(x=>x.code==='1000').net).toBe('0.23');expect(assigned.totals.find(x=>x.code==='2990').net).toBe('0.00');await providerMinimum(f,1);const before=await proof(f);await f.assign(first.transactionId).expect(200);expect(await proof(f)).toEqual(before);
+  await providerMinimum(f,0.23);await f.assign(first.transactionId).expect(200);const assigned=await proof(f);expect(assigned.savings[0].current_balance).toBe('0.23');expect(assigned.intents[0]).toMatchObject({received_amount:'0.23',status:'PARTIAL'});expect(assigned.totals.find(x=>x.code==='1000').net).toBe('0.23');expect(assigned.totals.find(x=>x.code==='2990').net).toBe('0.00');await providerMinimum(f,1);const before=await proof(f);await f.assign(first.transactionId).expect(200);expect(await proof(f)).toEqual(before);
  });
  it('provider savings allocation explicitly selects regular savings and leaves another active product untouched',async()=>{
   const f=await fixture(1);await providerMinimum(f,0.23);const p=(await request(app.getHttpServer()).post('/api/v1/products/savings').set(f.auth).send({code:'OTHER',name:'Other savings',interestRatePa:0,minDeposit:100,allowWithdrawal:true}).expect(201)).body;
@@ -181,6 +181,64 @@ describe('atomic provider allocation and retries (PostgreSQL)',()=>{
    await f.tenant(c=>mode==='account'?c.query("UPDATE member_savings_accounts SET status='CLOSED' WHERE id=$1",[account]):c.query("UPDATE savings_products SET status='INACTIVE' WHERE id=$1",[product]));
    const r=(await f.record({providerReference:randomUUID(),amount:0.23,narration:intent.reference}).expect(201)).body;expect(r.exception).toBe(true);const p=await proof(f);expect(p.savings).toHaveLength(1);expect(p.savings[0].current_balance).toBe('0.00');expect(p.totals.find(x=>x.code==='1000').net).toBe('0.23');expect(p.intents[0].received_amount).toBe('0.00');
   }
+ });
+
+ it('linked parked assignment advances partial progress once; the remaining distinct receipt completes the intent',async()=>{
+  const f=await fixture(1),i=await f.intent('SAVINGS_DEPOSIT',1);await providerMinimum(f,1);
+  const body={providerReference:randomUUID(),amount:0.23,narration:i.reference},parked=(await f.record(body).expect(201)).body;
+  const listed=(await request(app.getHttpServer()).get('/api/v1/payments/exceptions').set(f.auth).expect(200)).body.find((r:{id:string})=>r.id===parked.transactionId);
+  expect(listed).toMatchObject({member_id:f.members[0],payment_intent_id:i.id,intent_reference:i.reference,intent_purpose:'SAVINGS_DEPOSIT',intent_status:'OPEN'});
+  await providerMinimum(f,0);const results=await Promise.all([f.assign(parked.transactionId).expect(200),f.assign(parked.transactionId).expect(200)]);expect(results[0].body).toEqual(results[1].body);expect(results[0].body.intentId).toBe(i.id);
+  const partial=await proof(f);expect(partial.intents[0]).toMatchObject({received_amount:'0.23',status:'PARTIAL'});expect(partial.movements).toHaveLength(1);await f.record(body).expect(201);await f.assign(parked.transactionId).expect(200);expect(await proof(f)).toEqual(partial);
+  await f.record({providerReference:randomUUID(),amount:0.77,narration:i.reference}).expect(201);expect((await proof(f)).intents[0]).toMatchObject({received_amount:'1.00',status:'MATCHED'});
+ });
+ it('unlinked receipts require explicit intent selection and retries bind that exact selection',async()=>{
+  const f=await fixture(1),i=await f.intent('SAVINGS_DEPOSIT',0.23),other=await f.intent(),p=await f.parked();
+  const result=await f.assign(p.transactionId,f.members[0],'SAVINGS_DEPOSIT',i.id).expect(200);expect(result.body.intentId).toBe(i.id);
+  const posted=await proof(f);expect(posted.providers[0].payment_intent_id).toBe(i.id);expect(posted.intents.find(x=>x.id===i.id)).toMatchObject({received_amount:'0.23',status:'MATCHED'});expect(posted.intents.find(x=>x.id===other.id)?.received_amount).toBe('0.00');
+  await f.assign(p.transactionId,f.members[0],'SAVINGS_DEPOSIT',i.id).expect(200);await f.assign(p.transactionId,f.members[0],'SAVINGS_DEPOSIT',other.id).expect(409);await f.assign(p.transactionId).expect(409);expect(await proof(f)).toEqual(posted);
+ });
+ it('allocation without an intent does not guess an open intent or retrofit a committed receipt',async()=>{
+  const f=await fixture(1),i=await f.intent(),p=await f.parked();await f.assign(p.transactionId).expect(200);const posted=await proof(f);expect(posted.intents[0].received_amount).toBe('0.00');expect(posted.providers[0].payment_intent_id).toBeNull();
+  await f.assign(p.transactionId).expect(200);await f.assign(p.transactionId,f.members[0],'SAVINGS_DEPOSIT',i.id).expect(409);expect(await proof(f)).toEqual(posted);
+ });
+ it('wrong member, purpose, tenant, missing, malformed or cancelled intent leaves suspense and all allocation state intact',async()=>{
+  const f=await fixture(2),foreign=await fixture(1),i=await f.intent(),wrongMember=await f.intent('SAVINGS_DEPOSIT',1,f.members[1]),wrongPurpose=await f.intent('SHARE_PURCHASE'),foreignIntent=await foreign.intent(),p=await f.parked();
+  for(const [id,status] of [[wrongMember.id,409],[wrongPurpose.id,409],[foreignIntent.id,404],[randomUUID(),404],['invalid',400]] as const){const before=await proof(f);await f.assign(p.transactionId,f.members[0],'SAVINGS_DEPOSIT',id).expect(status);expect(await proof(f)).toEqual(before);}
+  await request(app.getHttpServer()).post(`/api/v1/payments/intents/${i.id}/cancel`).set(f.auth).expect(200);const before=await proof(f);await f.assign(p.transactionId,f.members[0],'SAVINGS_DEPOSIT',i.id).expect(409);expect(await proof(f)).toEqual(before);
+ });
+ it('a known linked receipt cannot be redirected to another member, purpose or intent',async()=>{
+  const f=await fixture(2),i=await f.intent(),other=await f.intent();await providerMinimum(f,1);const p=(await f.record({providerReference:randomUUID(),amount:0.23,narration:i.reference}).expect(201)).body;await providerMinimum(f,0);
+  const before=await proof(f);await f.assign(p.transactionId,f.members[1]).expect(409);await f.assign(p.transactionId,f.members[0],'SHARE_PURCHASE').expect(409);await f.assign(p.transactionId,f.members[0],'SAVINGS_DEPOSIT',other.id).expect(409);expect(await proof(f)).toEqual(before);
+  await f.assign(p.transactionId).expect(200);expect((await proof(f)).intents.find(x=>x.id===i.id)?.received_amount).toBe('0.23');
+ });
+ it('concurrent distinct suspense assignments and an automatic match serialize one exact intent total',async()=>{
+  const f=await fixture(1),i=await f.intent('SAVINGS_DEPOSIT',0.31),a=await f.parked(0.01),b=await f.parked(0.23);
+  await Promise.all([f.assign(a.transactionId,f.members[0],'SAVINGS_DEPOSIT',i.id).expect(200),f.assign(b.transactionId,f.members[0],'SAVINGS_DEPOSIT',i.id).expect(200),f.record({providerReference:randomUUID(),amount:0.07,narration:i.reference}).expect(201)]);
+  const p=await proof(f);expect(p.intents[0]).toMatchObject({received_amount:'0.31',status:'MATCHED'});expect(p.savings[0].current_balance).toBe('0.31');expect(p.movements).toHaveLength(3);expect(net(p,'1000')).toBe('0.31');expect(net(p,'2990')).toBe('0.00');
+ });
+ it('intent cancellation races with assignment without cancelled credited progress or duplicate money',async()=>{
+  const f=await fixture(1),i=await f.intent('SAVINGS_DEPOSIT',0.23),p=await f.parked();
+  const [allocated,cancelled]=await Promise.all([f.assign(p.transactionId,f.members[0],'SAVINGS_DEPOSIT',i.id),request(app.getHttpServer()).post(`/api/v1/payments/intents/${i.id}/cancel`).set(f.auth)]);
+  const state=await proof(f);expect([allocated.status,cancelled.status].sort()).toEqual([200,409]);
+  if(allocated.status===200){expect(state.intents[0]).toMatchObject({received_amount:'0.23',status:'MATCHED'});expect(state.movements).toHaveLength(1);expect(net(state,'2990')).toBe('0.00');}
+  else {expect(state.intents[0]).toMatchObject({received_amount:'0.00',status:'CANCELLED'});expect(state.movements).toHaveLength(0);expect(net(state,'2990')).toBe('-0.23');}
+ });
+ it('intent update, late audit and receipt failures roll back member allocation, suspense, intent progress and receipt together',async()=>{
+  const f=await fixture(1),i=await f.intent('SAVINGS_DEPOSIT',0.23),p=await f.parked(),before=await proof(f);
+  for(const [table,event,condition] of [['payment_intents','UPDATE','true'],['audit_logs','INSERT',"NEW.action='payment.allocated'"],['financial_write_receipts','UPDATE',"NEW.action='provider.assign'"]])await fault(f,table,event,condition,async()=>{await f.assign(p.transactionId,f.members[0],'SAVINGS_DEPOSIT',i.id).expect(500);expect(await proof(f)).toEqual(before);});
+  await f.assign(p.transactionId,f.members[0],'SAVINGS_DEPOSIT',i.id).expect(200);const final=await proof(f);expect(final.intents[0]).toMatchObject({received_amount:'0.23',status:'MATCHED'});expect(final.movements).toHaveLength(1);
+ });
+ it('intent progress adds one kobo exactly above JavaScript safe integer cents; overflow rolls back',async()=>{
+  const f=await fixture(1),i=await f.intent(),p=await f.parked(0.01);
+  // Synthetic arithmetic boundary, not a historical reconciliation fixture.
+  await f.tenant(c=>c.query("UPDATE payment_intents SET expected_amount='90071992547409.92',received_amount='90071992547409.91',status='PARTIAL' WHERE id=$1",[i.id]));
+  await f.assign(p.transactionId,f.members[0],'SAVINGS_DEPOSIT',i.id).expect(200);expect((await proof(f)).intents[0]).toMatchObject({received_amount:'90071992547409.92',status:'MATCHED'});
+  const next=await f.parked(0.01);await f.tenant(c=>c.query("UPDATE payment_intents SET expected_amount='99999999999999999.99',received_amount='99999999999999999.99',status='MATCHED' WHERE id=$1",[i.id]));const before=await proof(f);await f.assign(next.transactionId,f.members[0],'SAVINGS_DEPOSIT',i.id).expect(500);expect(await proof(f)).toEqual(before);
+ });
+ it('linked full-intent assignment receipts replay after later lifecycle changes without revalidation or increments',async()=>{
+  const f=await fixture(1),i=await f.intent('SAVINGS_DEPOSIT',0.23);await providerMinimum(f,1);const p=(await f.record({providerReference:randomUUID(),amount:0.23,narration:i.reference}).expect(201)).body;await providerMinimum(f,0);const result=await f.assign(p.transactionId).expect(200);
+  await f.tenant(c=>c.query("UPDATE payment_intents SET status='CANCELLED' WHERE id=$1",[i.id]));await providerMinimum(f,1);const before=await proof(f);expect((await f.assign(p.transactionId).expect(200)).body).toEqual(result.body);expect(await proof(f)).toEqual(before);
  });
 
 });
