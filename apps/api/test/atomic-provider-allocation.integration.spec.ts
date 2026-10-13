@@ -163,4 +163,24 @@ describe('atomic provider allocation and retries (PostgreSQL)',()=>{
   await f.record({providerReference:randomUUID(),amount:0.23,narration:'unknown'}).expect(409);expect(await proof(f)).toEqual(before);
  });
 
+
+ async function providerMinimum(f:F,value:number){const id=(await f.tenant(c=>c.query("SELECT id FROM savings_products WHERE code='REGULAR-SAVINGS'"))).rows[0].id;await request(app.getHttpServer()).patch(`/api/v1/products/savings/${id}`).set(f.auth).send({code:'REGULAR-SAVINGS',name:'Regular savings',interestRatePa:0,minDeposit:value,allowWithdrawal:true}).expect(200);return id as string;}
+ it('below-minimum incoming cash stays in suspense, duplicates do not multiply it, and assignment credits once after rule correction',async()=>{
+  const f=await fixture(1);await providerMinimum(f,1);const intent=await f.intent(),body={providerReference:randomUUID(),amount:0.23,narration:intent.reference};const first=(await f.record(body).expect(201)).body;expect(first.exception).toBe(true);expect(first.matched).toBe(false);
+  const parked=await proof(f);expect(parked.savings).toHaveLength(0);expect(parked.journals).toHaveLength(1);expect(parked.providers[0].status).toBe('EXCEPTION');expect(parked.intents[0].received_amount).toBe('0.00');expect(parked.totals.find(x=>x.code==='1000').net).toBe('0.23');expect(parked.totals.find(x=>x.code==='2990').net).toBe('-0.23');
+  await f.record(body).expect(201);expect(await proof(f)).toEqual(parked);await f.assign(first.transactionId).expect(400);expect(await proof(f)).toEqual(parked);
+  await providerMinimum(f,0.23);await f.assign(first.transactionId).expect(200);const assigned=await proof(f);expect(assigned.savings[0].current_balance).toBe('0.23');expect(assigned.totals.find(x=>x.code==='1000').net).toBe('0.23');expect(assigned.totals.find(x=>x.code==='2990').net).toBe('0.00');await providerMinimum(f,1);const before=await proof(f);await f.assign(first.transactionId).expect(200);expect(await proof(f)).toEqual(before);
+ });
+ it('provider savings allocation explicitly selects regular savings and leaves another active product untouched',async()=>{
+  const f=await fixture(1);await providerMinimum(f,0.23);const p=(await request(app.getHttpServer()).post('/api/v1/products/savings').set(f.auth).send({code:'OTHER',name:'Other savings',interestRatePa:0,minDeposit:100,allowWithdrawal:true}).expect(201)).body;
+  const other=(await request(app.getHttpServer()).post(`/api/v1/savings/member/${f.members[0]}/account`).set(f.auth).send({productId:p.id}).expect(201)).body.id;const intent=await f.intent();expect((await f.record({providerReference:randomUUID(),amount:0.23,narration:intent.reference}).expect(201)).body.matched).toBe(true);
+  const a=(await f.tenant(c=>c.query('SELECT a.id,p.code,a.current_balance FROM member_savings_accounts a JOIN savings_products p ON p.id=a.product_id'))).rows;expect(a).toHaveLength(2);expect(a.find(x=>x.id===other).current_balance).toBe('0.00');expect(a.find(x=>x.code==='REGULAR-SAVINGS').current_balance).toBe('0.23');
+ });
+ it('ineligible regular account/product states preserve bank cash in suspense instead of reopening or dropping the receipt',async()=>{
+  for(const mode of ['account','product']){const f=await fixture(1),product=await providerMinimum(f,0),intent=await f.intent();const account=(await request(app.getHttpServer()).post(`/api/v1/savings/member/${f.members[0]}/account`).set(f.auth).send({}).expect(201)).body.id;
+   await f.tenant(c=>mode==='account'?c.query("UPDATE member_savings_accounts SET status='CLOSED' WHERE id=$1",[account]):c.query("UPDATE savings_products SET status='INACTIVE' WHERE id=$1",[product]));
+   const r=(await f.record({providerReference:randomUUID(),amount:0.23,narration:intent.reference}).expect(201)).body;expect(r.exception).toBe(true);const p=await proof(f);expect(p.savings).toHaveLength(1);expect(p.savings[0].current_balance).toBe('0.00');expect(p.totals.find(x=>x.code==='1000').net).toBe('0.23');expect(p.intents[0].received_amount).toBe('0.00');
+  }
+ });
+
 });

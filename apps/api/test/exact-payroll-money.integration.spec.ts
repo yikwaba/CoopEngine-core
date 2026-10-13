@@ -96,4 +96,34 @@ describe('exact payroll preview, allocation and posting (PostgreSQL)',()=>{
  it('skips a member who became inactive without allocating their amount',async()=>{
   const f=await fixture(),id=await f.staged(['0.23','1.15']);await f.tenant(c=>c.query("UPDATE members SET status='EXITED' WHERE id=$1",[f.members[1]!.id]));const result=await f.approve(id).expect(200);expect(result.body.committed).toBe(1);expect(result.body.totalAmount).toBe(0.23);expect(result.body.skipped).toHaveLength(1);const p=await f.proof(id);expect(p.journal.debit).toBe('0.23');expect(p.members).toHaveLength(1);
  });
+
+ async function payrollMinimum(f:Awaited<ReturnType<typeof fixture>>,value:number){const id=(await f.tenant(c=>c.query("SELECT id FROM savings_products WHERE code='REGULAR-SAVINGS'"))).rows[0].id;await request(app.getHttpServer()).patch(`/api/v1/products/savings/${id}`).set(f.auth).send({code:'REGULAR-SAVINGS',name:'Regular savings',interestRatePa:0,minDeposit:value,allowWithdrawal:true}).expect(200);return id as string;}
+ async function payrollSnapshot(f:Awaited<ReturnType<typeof fixture>>){return f.tenant(async c=>{const o:Record<string,unknown>={};for(const t of ['payroll_batches','member_savings_accounts','savings_transactions','journal_entries','journal_lines','financial_write_receipts','audit_logs','org_counters'])o[t]=(await c.query(`SELECT * FROM ${t} ORDER BY ${t==='org_counters'?'organization_id':'id'}`)).rows;return o;});}
+ it('payroll minimum refusal rolls back the whole batch; original approval can succeed after a valid rule change',async()=>{
+  const f=await fixture(2),id=await f.staged(['0.23','0.25']);await payrollMinimum(f,0.24);const before=await payrollSnapshot(f);await f.approve(id).expect(400);expect(await payrollSnapshot(f)).toEqual(before);
+  await payrollMinimum(f,0.23);await f.approve(id).expect(200);expect((await f.proof(id)).journal.debit).toBe('0.48');await payrollMinimum(f,1);const posted=await payrollSnapshot(f);await f.approve(id).expect(200);expect(await payrollSnapshot(f)).toEqual(posted);
+ });
+ it('payroll applies the configured minimum to its existing per-member aggregate credit',async()=>{
+  const f=await fixture(1);await payrollMinimum(f,0.23);const id=await f.staged(['0.23']);
+  // Synthetic stored-row fixture tests existing posting aggregation; normal CSV imports reject duplicates.
+  await f.tenant(c=>c.query('UPDATE payroll_batches SET rows=$2::jsonb,total_rows=2,valid_rows=2 WHERE id=$1',[id,JSON.stringify(['0.12','0.11'].map(amount=>({memberNo:f.members[0]!.memberNo,memberId:f.members[0]!.id,amount})))]));
+  await f.approve(id).expect(200);expect((await f.proof(id)).members[0]!.current_balance).toBe('0.23');
+ });
+ it('payroll selects regular savings rather than another active product',async()=>{
+  const f=await fixture(1);await payrollMinimum(f,0.23);const p=(await request(app.getHttpServer()).post('/api/v1/products/savings').set(f.auth).send({code:'OTHER',name:'Other savings',interestRatePa:0,minDeposit:100,allowWithdrawal:true}).expect(201)).body;
+  const other=(await request(app.getHttpServer()).post(`/api/v1/savings/member/${f.members[0]!.id}/account`).set(f.auth).send({productId:p.id}).expect(201)).body.id;
+  const id=await f.staged(['0.23']);await f.approve(id).expect(200);const a=(await f.tenant(c=>c.query('SELECT a.id,p.code,a.current_balance FROM member_savings_accounts a JOIN savings_products p ON p.id=a.product_id ORDER BY p.code'))).rows;expect(a).toHaveLength(2);expect(a.find(x=>x.id===other).current_balance).toBe('0.00');expect(a.find(x=>x.code==='REGULAR-SAVINGS').current_balance).toBe('0.23');
+ });
+ it('closed regular accounts and inactive default products cannot be replaced or credited by payroll',async()=>{
+  for(const mode of ['account','product']){const f=await fixture(1),product=await payrollMinimum(f,0);const account=(await request(app.getHttpServer()).post(`/api/v1/savings/member/${f.members[0]!.id}/account`).set(f.auth).send({}).expect(201)).body.id;
+   await f.tenant(c=>mode==='account'?c.query("UPDATE member_savings_accounts SET status='CLOSED' WHERE id=$1",[account]):c.query("UPDATE savings_products SET status='INACTIVE' WHERE id=$1",[product]));const id=await f.staged(['0.23']),before=await payrollSnapshot(f);await f.approve(id).expect(409);expect(await payrollSnapshot(f)).toEqual(before);
+  }
+ });
+ it('manual contribution, withdrawal and payroll on one member serialize without lost credit or a lock cycle',async()=>{
+  const f=await fixture(1),account=(await request(app.getHttpServer()).post(`/api/v1/savings/member/${f.members[0]!.id}/account`).set(f.auth).send({}).expect(201)).body.id;
+  const deposit=(amount:number)=>request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/deposits`).set(f.auth).send({amount,idempotencyKey:randomUUID()});await deposit(1.15).expect(201);const id=await f.staged(['0.23']);
+  await Promise.all([deposit(0.23).expect(201),f.approve(id).expect(200),request(app.getHttpServer()).post(`/api/v1/savings/accounts/${account}/withdrawals`).set(f.auth).send({amount:0.01,idempotencyKey:randomUUID()}).expect(200)]);
+  expect((await f.tenant(c=>c.query('SELECT current_balance FROM member_savings_accounts WHERE id=$1',[account]))).rows[0].current_balance).toBe('1.60');
+ });
+
 });

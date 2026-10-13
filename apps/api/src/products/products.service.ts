@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { moneyDecimal, moneyKobo } from '../common/money';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { withTenant } from '@coopengine/db';
@@ -37,6 +38,7 @@ export interface SavingsProductRow {
   name: string;
   interestRatePa: number;
   minDeposit: number;
+  minDepositDecimal: string;
   allowWithdrawal: boolean;
   status: string;
   accountCount: number;
@@ -82,6 +84,7 @@ export class ProductsService {
         name: r.name as string,
         interestRatePa: Number(r.interest_rate_pa),
         minDeposit: Number(r.min_deposit),
+        minDepositDecimal: moneyDecimal(moneyKobo(String(r.min_deposit))),
         allowWithdrawal: Boolean(r.allow_withdrawal),
         status: r.status as string,
         accountCount: Number(r.account_count),
@@ -120,7 +123,7 @@ export class ProductsService {
     if (input.interestRatePa < 0 || input.interestRatePa > 100) {
       throw new BadRequestException('interestRatePa must be between 0 and 100');
     }
-    if (input.minDeposit < 0) throw new BadRequestException('minDeposit cannot be negative');
+    if (moneyKobo(input.minDeposit) < 0n) throw new BadRequestException('minDeposit cannot be negative');
   }
 
   private validateLoan(input: LoanProductInput): void {
@@ -155,7 +158,7 @@ export class ProductsService {
            (id, organization_id, code, name, interest_rate_pa, min_deposit, allow_withdrawal, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE')`,
         [id, orgId, input.code, input.name, String(input.interestRatePa),
-         String(input.minDeposit), input.allowWithdrawal],
+         moneyDecimal(moneyKobo(input.minDeposit)), input.allowWithdrawal],
       );
       await this.audit(c, orgId, user, 'product.created', 'savings_product', id, input);
       return { id };
@@ -184,7 +187,7 @@ export class ProductsService {
                 allow_withdrawal = $6, updated_at = now()
           WHERE id = $1`,
         [id, input.code, input.name, String(input.interestRatePa),
-         String(input.minDeposit), input.allowWithdrawal],
+         moneyDecimal(moneyKobo(input.minDeposit)), input.allowWithdrawal],
       );
       await this.audit(c, orgId, user, 'product.updated', 'savings_product', id, input);
       return { id };

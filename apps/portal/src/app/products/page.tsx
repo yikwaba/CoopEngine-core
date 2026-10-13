@@ -1,4 +1,6 @@
 'use client';
+import {savingsMinimum} from '../../lib/savings-minimum';
+import {reportMoney} from '../../lib/report-money';
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -12,6 +14,7 @@ interface SavingsProduct {
   name: string;
   interestRatePa: number;
   minDeposit: number;
+  minDepositDecimal?: string;
   allowWithdrawal: boolean;
   status: string;
   accountCount: number;
@@ -85,7 +88,7 @@ export default function ProductsPage() {
           code: newSavings.code.toUpperCase(),
           name: newSavings.name,
           interestRatePa: Number(newSavings.interestRatePa),
-          minDeposit: Number(newSavings.minDeposit),
+          minDeposit: savingsMinimum(newSavings.minDeposit),
           allowWithdrawal: true,
         }),
       });
@@ -124,6 +127,15 @@ export default function ProductsPage() {
     }
   }
 
+  async function updateMinimum(product: SavingsProduct, value: string) {
+    const token=readToken();if(!token)return;setBusy(true);setError(null);
+    try {
+      const minDeposit=savingsMinimum(value);
+      await apiFetch(`/products/savings/${product.id}`,token,{method:'PATCH',body:JSON.stringify({code:product.code,name:product.name,interestRatePa:product.interestRatePa,minDeposit,allowWithdrawal:product.allowWithdrawal})});
+      await load();
+    }catch(e){setError(e instanceof Error?e.message:'Minimum update failed');}finally{setBusy(false);}
+  }
+
   async function updateRate(kind: 'savings' | 'loans', product: SavingsProduct | LoanProduct, rate: number) {
     const token = readToken();
     if (!token) return;
@@ -135,7 +147,7 @@ export default function ProductsPage() {
               code: (product as SavingsProduct).code,
               name: product.name,
               interestRatePa: rate,
-              minDeposit: (product as SavingsProduct).minDeposit,
+              minDeposit: savingsMinimum((product as SavingsProduct).minDepositDecimal ?? String((product as SavingsProduct).minDeposit)),
               allowWithdrawal: (product as SavingsProduct).allowWithdrawal,
             }
           : {
@@ -193,7 +205,7 @@ export default function ProductsPage() {
 
       <section style={{ marginTop: 18 }}>
         <h2 style={{ fontSize: 16 }}>Savings products</h2>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div style={{overflowX:'auto'}}><table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ textAlign: 'left', color: '#5b6772', fontSize: 13 }}>
               <th style={cell}>Code</th>
@@ -221,7 +233,7 @@ export default function ProductsPage() {
                     }}
                   />
                 </td>
-                <td style={cell}>{p.minDeposit.toFixed(2)}</td>
+                <td style={cell}><span>{reportMoney(p.minDepositDecimal ?? p.minDeposit)}</span><input aria-label={`Minimum deposit for ${p.code}`} key={`${p.id}:${p.minDepositDecimal ?? p.minDeposit}`} inputMode="decimal" defaultValue={p.minDepositDecimal ?? String(p.minDeposit)} disabled={busy} style={{...input,width:120}} onBlur={e=>{if(e.target.value.trim()!==(p.minDepositDecimal ?? String(p.minDeposit)))void updateMinimum(p,e.target.value);}} /></td>
                 <td style={cell}>{p.allowWithdrawal ? 'Yes' : 'No'}</td>
                 <td style={cell}>{p.accountCount}</td>
                 <td style={cell}>{p.status}</td>
@@ -233,7 +245,7 @@ export default function ProductsPage() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
           <input style={{ ...input, width: 120 }} placeholder="CODE" value={newSavings.code} onChange={(e) => setNewSavings({ ...newSavings, code: e.target.value })} />
@@ -248,7 +260,7 @@ export default function ProductsPage() {
 
       <section style={{ marginTop: 28 }}>
         <h2 style={{ fontSize: 16 }}>Loan products</h2>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div style={{overflowX:'auto'}}><table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ textAlign: 'left', color: '#5b6772', fontSize: 13 }}>
               <th style={cell}>Code</th>
@@ -292,7 +304,7 @@ export default function ProductsPage() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
           <input style={{ ...input, width: 110 }} placeholder="CODE" value={newLoan.code} onChange={(e) => setNewLoan({ ...newLoan, code: e.target.value })} />
