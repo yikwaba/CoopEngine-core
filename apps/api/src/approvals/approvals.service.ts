@@ -256,7 +256,17 @@ export class ApprovalsService {
     input: { decision: 'APPROVE' | 'REJECT'; comment?: string; expectedStepNo?: number },
   ) {
     const orgId = this.requireOrg(organizationId);
-    return withTenant(this.pool,orgId,c=>this.decideRequestInTransaction(c,orgId,actorUserId,requestId,input));
+    return withTenant(this.pool,orgId,async c=>{
+      // Real withdrawals must use the owner route, which checks eligibility and
+      // commits approval, payout and request state together. Standalone policy
+      // engine records are retained; this guard does not reinterpret their receipts.
+      const linked=await c.query(`SELECT 1 FROM approval_requests a
+        JOIN savings_withdrawal_requests r ON r.organization_id=a.organization_id AND r.id=a.entity_id
+        WHERE a.organization_id=$1 AND a.id=$2 AND a.kind='WITHDRAWAL'
+          AND a.entity_type='savings_withdrawal_request'`,[orgId,requestId]);
+      if (linked.rowCount) throw new ConflictException('Decide this withdrawal through its savings withdrawal endpoint so eligibility and payout are checked');
+      return this.decideRequestInTransaction(c,orgId,actorUserId,requestId,input);
+    });
   }
 
   async decideRequestInTransaction(

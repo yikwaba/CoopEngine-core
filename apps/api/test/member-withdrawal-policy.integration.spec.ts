@@ -198,4 +198,16 @@ describe('member withdrawal approval identity (PostgreSQL)',()=>{
   expect(read.accounts[0]).toMatchObject({balanceDecimal:'1.15',allowWithdrawal:false});
  });
 
+ it('generic approval decisions cannot bypass the owner route for a real withdrawal',async()=>{
+  const f=await fixture(),member=await memberAuth(f);await policy(f);
+  const r=(await memberWithdrawal(f,member).expect(201)).body;
+  const engine=(await f.tenant(c=>c.query('SELECT id FROM approval_requests WHERE entity_id=$1',[r.requestId]))).rows[0].id;
+  for(const allowed of [false,true]){
+   await allowWithdrawals(f,allowed);const before=await f.snapshot();
+   for(const action of ['APPROVE','REJECT'])await f.send(`/approvals/requests/${engine}/decisions`,{decision:action,expectedStepNo:1},f.checker).expect(409);
+   expect(await f.snapshot()).toEqual(before);
+  }
+  expect((await decision(f,r.requestId).expect(200)).body.currentStep).toBe(2);expect(await balance(f)).toBe('1.15');
+ });
+
 });
