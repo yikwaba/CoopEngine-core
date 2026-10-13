@@ -49,7 +49,7 @@ export default function SavingsPage(){
    {data?.accounts.map(a=><p key={a.id}>{a.productName} · {a.accountNo}: <strong>{money(a.balanceDecimal??a.balance)}</strong> · {a.status}</p>)}
    <button className='btn' type='button' disabled={downloadBusy} onClick={download}>{downloadBusy?'Preparing…':'Download statement (PDF)'}</button>
   </section>
-  <section className='card' style={{marginTop:16}}><h2>Request a withdrawal</h2><p>Your cooperative must approve the request. Submitting it does not deduct your savings.</p>
+  <section className='card' style={{marginTop:16}}><h2>Request a withdrawal</h2><p>Your cooperative must approve the request. Requests do not deduct or reserve your savings. Your account, product and current balance are checked again before approval and payout.</p>
    {submitError&&<p role='alert'>{submitError}</p>}{notice&&<p role='status'>{notice}</p>}
    {unconfirmed&&<p role='status'>Your previous withdrawal submission has not been acknowledged. Use Recover original request before submitting another withdrawal.</p>}
    {data&&eligible.length===0&&<p>No active account currently allows withdrawals. Contact your cooperative.</p>}

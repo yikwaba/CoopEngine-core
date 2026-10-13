@@ -250,27 +250,7 @@ export class SavingsService {
     const value = this.validateAmount(amount, 'withdrawal');
     return financialIntent(this.pool,orgId,'savings.withdraw',idempotencyKey,
       {actorUserId,accountId,amount:moneyDecimal(value),description:description??null},async (c,journalKey) => {
-      const account = await this.lockAccount(c, orgId, accountId);
-      if (account.status !== 'ACTIVE') {
-        throw new ConflictException('Account is not active');
-      }
-      const product = await c.query(
-        `SELECT allow_withdrawal FROM savings_products p
-           JOIN member_savings_accounts a ON a.product_id = p.id
-          WHERE a.id = $1 AND a.organization_id = $2`,
-        [accountId, orgId],
-      );
-      const allow =
-        (product.rows[0] as { allow_withdrawal: boolean } | undefined)
-          ?.allow_withdrawal ?? false;
-      if (!allow) {
-        throw new ConflictException('Product does not allow withdrawals');
-      }
-      if (account.currentBalance - value < 0n) {
-        throw new BadRequestException(
-          `Insufficient balance: available ${moneyDecimal(account.currentBalance)}, requested ${moneyDecimal(value)}`,
-        );
-      }
+      const account = await this.checkWithdrawalEligibility(c, orgId, accountId, value);
       const entryId = randomUUID();
       const entryNo = await this.allocJournalNo(c, orgId);
       await this.insertEntryAndLines(
@@ -351,6 +331,40 @@ export class SavingsService {
       status: row.status as string,
       openedAt: row.opened_at as Date,
     };
+  }
+
+  /** Current posted balance is checked under the same account lock as payout.
+   * Pending requests do not reserve money. Successful receipts replay before
+   * this check; an old acknowledgement never authorizes another debit.
+   */
+  async checkWithdrawalEligibility(
+    c: PoolClient, orgId: string, accountId: string, value: bigint, expectedMemberId?: string | null,
+  ): Promise<LockedSavingsAccount> {
+    const account = await this.lockAccount(c, orgId, accountId);
+    if (expectedMemberId && expectedMemberId !== account.memberId) {
+      throw new BadRequestException('Account does not belong to this member');
+    }
+    if (account.status !== 'ACTIVE') throw new ConflictException('Account is not active');
+    const member = await c.query(
+      `SELECT status FROM members WHERE organization_id=$1 AND id=$2 FOR SHARE`,
+      [orgId, account.memberId],
+    );
+    if (!member.rows[0]) throw new NotFoundException('Member not found');
+    if (member.rows[0].status !== 'ACTIVE') throw new ConflictException('Member is not active');
+    const product = await c.query(
+      `SELECT p.status, p.allow_withdrawal FROM savings_products p
+        JOIN member_savings_accounts a ON a.product_id=p.id
+        WHERE a.id=$1 AND a.organization_id=$2 AND p.organization_id=$2 FOR SHARE OF p`,
+      [accountId, orgId],
+    );
+    if (!product.rows[0]) throw new NotFoundException('Savings product not found');
+    if (product.rows[0].status !== 'ACTIVE') throw new ConflictException('Savings product is not active');
+    if (!product.rows[0].allow_withdrawal) throw new ConflictException('Product does not allow withdrawals');
+    if (value <= 0n) throw new BadRequestException('Invalid amount');
+    if (account.currentBalance < value) {
+      throw new BadRequestException(`Insufficient balance: available ${moneyDecimal(account.currentBalance)}, requested ${moneyDecimal(value)}`);
+    }
+    return account;
   }
 
   /** SELECT ... FOR UPDATE inside the tenant transaction (row lock). */

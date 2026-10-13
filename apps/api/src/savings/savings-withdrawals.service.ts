@@ -147,17 +147,7 @@ export class SavingsWithdrawalsService {
       return { kind: 'POSTED', account };
     }
 
-      const acc = await c.query(
-        `SELECT a.id, a.member_id, a.status FROM member_savings_accounts a
-          WHERE a.id = $1 AND a.organization_id = $2`,
-        [accountId, orgId],
-      );
-      const account = acc.rows[0] as { id: string; member_id: string; status: string } | undefined;
-      if (!account) throw new NotFoundException('Savings account not found');
-      if (account.status !== 'ACTIVE') throw new ConflictException('Account is not active');
-      if (memberId && memberId !== account.member_id) {
-        throw new BadRequestException('Account does not belong to this member');
-      }
+      const account = await this.savings.checkWithdrawalEligibility(c, orgId, accountId, value, memberId);
 
       const id = (
         await c.query(
@@ -169,7 +159,7 @@ export class SavingsWithdrawalsService {
           [
             orgId,
             accountId,
-            account.member_id,
+            account.memberId,
             moneyDecimal(value),
             description?.slice(0, 240) ?? null,
             source,
@@ -189,7 +179,7 @@ export class SavingsWithdrawalsService {
           amount: moneyDecimal(value),
           ...(source === 'MEMBER' ? { requesterMemberId: memberId! } : {}),
           summary: description ?? `Savings withdrawal from account ${accountId}`,
-          payload: { accountId, memberId: account.member_id, source },
+          payload: { accountId, memberId: account.memberId, source },
         });
       }
 
@@ -287,6 +277,11 @@ export class SavingsWithdrawalsService {
         if (!pending) throw new NotFoundException('Withdrawal request not found');
         if (pending.status!=='PENDING') throw new ConflictException('Withdrawal is already decided; historical outcomes without a receipt require reconciliation');
         if (pending.requested_by_user_id===approverUserId) throw new ConflictException('A withdrawal request must be decided by a different user (segregation of duties)');
+        // Refusal rolls back the decision receipt and any approval step. Rejection
+        // remains available even when current eligibility no longer permits payout.
+        if (decision === 'APPROVE') {
+          await this.savings.checkWithdrawalEligibility(c, orgId, pending.account_id, moneyKobo(pending.amount));
+        }
         const linked=await c.query(`SELECT id,status,current_step FROM approval_requests
           WHERE organization_id=$1 AND entity_type='savings_withdrawal_request' AND entity_id=$2 ORDER BY created_at DESC LIMIT 1`,[orgId,requestId]);
         const approval=linked.rows[0];

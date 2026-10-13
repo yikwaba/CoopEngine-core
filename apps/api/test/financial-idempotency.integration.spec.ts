@@ -88,7 +88,7 @@ describe('durable financial retry receipts (PostgreSQL)',()=>{
   const f=await savings(),key=randomUUID();await deposit(f,randomUUID()).expect(201);const original=await withdrawal(f,key).expect(200);await f.tenant(c=>c.query('UPDATE organizations SET withdrawal_approval_threshold=0 WHERE id=$1',[f.org]));const before=await state(f);expect((await withdrawal(f,key).expect(200)).body).toEqual(original.body);expect(await state(f)).toEqual(before);expect(before.requests).toHaveLength(0);
  });
  it('concurrent duplicate pending withdrawals create one request and replay it after a policy change',async()=>{
-  const f=await savings(),key=randomUUID();await f.tenant(c=>c.query('UPDATE organizations SET withdrawal_approval_threshold=0 WHERE id=$1',[f.org]));const results=await Promise.all([withdrawal(f,key).expect(200),withdrawal(f,key).expect(200)]);expect(results[0].body).toEqual(results[1].body);expect(results[0].body.kind).toBe('PENDING');await f.tenant(c=>c.query('UPDATE organizations SET withdrawal_approval_threshold=NULL WHERE id=$1',[f.org]));const before=await state(f);expect((await withdrawal(f,key).expect(200)).body).toEqual(results[0].body);expect(await state(f)).toEqual(before);expect(before.requests).toHaveLength(1);expect(before.journals).toHaveLength(0);
+  const f=await savings(),key=randomUUID();await deposit(f,randomUUID()).expect(201);await f.tenant(c=>c.query('UPDATE organizations SET withdrawal_approval_threshold=0 WHERE id=$1',[f.org]));const results=await Promise.all([withdrawal(f,key).expect(200),withdrawal(f,key).expect(200)]);expect(results[0].body).toEqual(results[1].body);expect(results[0].body.kind).toBe('PENDING');await f.tenant(c=>c.query('UPDATE organizations SET withdrawal_approval_threshold=NULL WHERE id=$1',[f.org]));const before=await state(f);expect((await withdrawal(f,key).expect(200)).body).toEqual(results[0].body);expect(await state(f)).toEqual(before);expect(before.requests).toHaveLength(1);expect(before.journals).toHaveLength(1);expect(before.savings[0].current_balance).toBe('0.23');
  });
  it('concurrent share purchase and redemption retries post each intent once',async()=>{
   const f=await savings(),buy=randomUUID(),sell=randomUUID();const buys=await Promise.all([purchase(f,buy).expect(201),purchase(f,buy).expect(201)]);expect(buys[0].body).toEqual(buys[1].body);const sells=await Promise.all([redemption(f,sell).expect(201),redemption(f,sell).expect(201)]);expect(sells[0].body).toEqual(sells[1].body);const s=await state(f);expect(s.shares[0].current_balance).toBe('0.22');expect(s.shareMovements).toHaveLength(2);expect(s.journals).toHaveLength(2);
@@ -119,7 +119,7 @@ describe('durable financial retry receipts (PostgreSQL)',()=>{
   const proof=await f.tenant(async c=>(await c.query("SELECT count(*)::int AS entries FROM journal_entries WHERE source='LOAN_REPAYMENT' AND source_id=$1",[loan])).rows[0]);expect(proof.entries).toBe(1);
  });
  it('member-originated withdrawal retries create only one pending request',async()=>{
-  const f=await savings(),key=randomUUID();
+  const f=await savings(),key=randomUUID();await deposit(f,randomUUID(),5).expect(201);
   const service=app.get((await import('../src/savings/savings-withdrawals.service')).SavingsWithdrawalsService);
   const call=()=>service.request(f.org,null,'MEMBER',f.members[0]!.id,f.account,5,'Member request',key);
   const replies=await Promise.all([call(),call()]);expect(replies[0]).toEqual(replies[1]);const before=await state(f);expect(before.requests).toHaveLength(1);expect(await call()).toEqual(replies[0]);expect(await state(f)).toEqual(before);
@@ -142,7 +142,7 @@ describe('durable financial retry receipts (PostgreSQL)',()=>{
  });
 
  it('member recovery is bound to the current member and cooperative',async()=>{
-  const f=await savings(),m=f.members[0]!,token=await app.get(JwtService).signAsync({typ:'member',sub:m.id,org:f.org,mid:String(m.memberNo)},{secret:ENV.jwtAccessSecret,expiresIn:'5m'}),auth={Authorization:`Bearer ${token}`};
+  const f=await savings();await deposit(f,randomUUID(),5).expect(201);const m=f.members[0]!,token=await app.get(JwtService).signAsync({typ:'member',sub:m.id,org:f.org,mid:String(m.memberNo)},{secret:ENV.jwtAccessSecret,expiresIn:'5m'}),auth={Authorization:`Bearer ${token}`};
   const me=(await request(app.getHttpServer()).get('/api/v1/member/me').set(auth).expect(200)).body;expect(me.financialScope).toBe(`${f.org}:${m.id}`);
   const key=randomUUID(),send=(scope:string)=>request(app.getHttpServer()).post('/api/v1/member/withdrawals/request').set(auth).set('X-CoopEngine-Financial-Scope',scope).send({accountId:f.account,amount:5,idempotencyKey:key});
   const before=await state(f);await send(`${f.org}:${randomUUID()}`).expect(409);await send(`${randomUUID()}:${m.id}`).expect(409);expect(await state(f)).toEqual(before);
