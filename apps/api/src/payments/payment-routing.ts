@@ -21,7 +21,7 @@ export function resolvePaymentRoute(narration:string,virtualMemberId:string|null
  if(/\bCOOP-[\p{L}\p{N}_-]+/iu.test(narration))return parked('Payment intent reference was not found in this cooperative; explicit allocation is required');
  if(!virtualMemberId)return parked('No member matched and no complete intent reference was quoted',null);
  if(intents.some(i=>i.member_id===virtualMemberId&&['OPEN','PARTIAL'].includes(i.status)))return parked('An open payment intent exists but its reference was not quoted; explicit allocation is required');
- if(/\b(?:loan|repay(?:ment)?|instal(?:l)?ment|shares?|dividends?)\b/iu.test(narration))return parked('Payment purpose requires an explicit intent reference or staff allocation');
+ if(/\b(?:loan|repay(?:ments?)?|instal(?:l)?ments?|shares?|dividends?)\b/iu.test(narration))return parked('Payment purpose requires an explicit intent reference or staff allocation');
  // Preserve unreferenced savings receipts to a unique virtual account when no open intent competes.
  return {memberId:virtualMemberId,intent:null,reason:null};
 }
