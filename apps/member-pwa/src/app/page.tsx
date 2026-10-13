@@ -1,4 +1,5 @@
 'use client';
+import {memberMoney} from '../lib/withdrawal-money';
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -81,6 +82,7 @@ interface MemberPayment {
   id: string;
   paymentReference: string;
   amount: number;
+  amountDecimal?: string;
   paidAt: string;
   status: string;
 }
@@ -526,17 +528,21 @@ export default function MemberDashboardPage() {
               {funding.map((p) => (
                 <li
                   key={`fund-${p.id}`}
+                  aria-label={`Payment reference ${p.paymentReference}`}
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: 12,
+                    overflowWrap: 'anywhere',
                     padding: '9px 0',
                     borderBottom: '1px solid #eef1f5',
                     fontSize: 14,
                   }}
                 >
-                  <span>Transfer received — {p.paymentReference}</span>
-                  <span style={{ fontWeight: 600, color: '#067647' }}>
-                    +{naira(p.amount)}
+                  <span>Transfer received — {p.paymentReference}<br /><small>{({POSTED:'Allocated',PARKED:'Parked — awaiting allocation',REVIEW_REQUIRED:'Needs cooperative review',ALLOCATED_ELSEWHERE:'Allocated to another member after review',FAILED:'Failed'}[p.status]??p.status)}</small></span>
+                  <span style={{ fontWeight: 600 }}>
+                    {memberMoney(p.amountDecimal??p.amount)}
                   </span>
                 </li>
               ))}
@@ -546,6 +552,9 @@ export default function MemberDashboardPage() {
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: 12,
+                    overflowWrap: 'anywhere',
                     padding: '9px 0',
                     borderBottom: '1px solid #eef1f5',
                     fontSize: 14,

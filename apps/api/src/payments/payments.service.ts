@@ -1,3 +1,4 @@
+import {notificationJoins,notificationStatus,notificationJournal} from './notification-projection';
 import {
   BadRequestException,
   ConflictException,
@@ -247,13 +248,6 @@ export class PaymentsService {
     return withTenant(this.pool,orgId,async c=>{
     await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
       [JSON.stringify([orgId,'provider-notification',paymentReference])]);
-    const delivered=await c.query(`SELECT transaction_reference,account_number,amount FROM payment_notifications
-      WHERE organization_id=$1 AND payment_reference=$2 FOR UPDATE`,[orgId,paymentReference]);
-    const original=delivered.rows[0];
-    if (original && (original.transaction_reference!==(transactionReference||paymentReference)
-      || original.account_number!==accountNumber || moneyKobo(original.amount)!==moneyKobo(amountDecimal))) {
-      throw new ConflictException('This payment notification reference was already used with different details');
-    }
     const outcome: { matched: boolean; exception?: boolean; reason?: string } =
       await this.reconciliation.recordTransaction(orgId, null, {
       provider: 'MONNIFY',
@@ -267,6 +261,14 @@ export class PaymentsService {
       raw: payload,
     },c);
 
+    // Provider row precedes notification row, including duplicate identity checks.
+    const delivered=await c.query(`SELECT transaction_reference,account_number,amount FROM payment_notifications
+      WHERE organization_id=$1 AND payment_reference=$2 FOR UPDATE`,[orgId,paymentReference]);
+    const original=delivered.rows[0];
+    if (original && (original.transaction_reference!==(transactionReference||paymentReference)
+      || original.account_number!==accountNumber || moneyKobo(original.amount)!==moneyKobo(amountDecimal))) {
+      throw new ConflictException('This payment notification reference was already used with different details');
+    }
     // Keep the provider's own record of what it told us, exactly as it told us: a reconciliation
     // engine is only as good as the evidence behind it, and this is the evidence.
       await c.query(
@@ -284,7 +286,7 @@ export class PaymentsService {
           transactionReference || paymentReference,
           amountDecimal,
           paidAt,
-          outcome.matched ? 'POSTED' : 'FAILED',
+          outcome.matched ? 'POSTED' : outcome.exception ? 'PARKED' : 'FAILED',
           (outcome as { journalEntryId?: string }).journalEntryId ?? null,
           JSON.stringify(payload),
         ],
@@ -308,6 +310,12 @@ export class PaymentsService {
       paymentReference: string;
       transactionReference: string;
       amount: number;
+      amountDecimal: string;
+      recordedStatus: string;
+      recordedJournalEntryId: string | null;
+      providerTransactionId: string | null;
+      journalEntryId: string | null;
+      allocationMemberId: string | null;
       paidAt: Date;
       status: string;
     }[];
@@ -316,14 +324,19 @@ export class PaymentsService {
     const n = Math.min(Math.max(Number.isFinite(Number(limit)) ? Number(limit) : 100, 1), 500);
     const off = Math.max(offset, 0);
     return withTenant(this.pool, orgId, async (c) => {
-      const whereClause = `organization_id = $1${accountNumber ? ' AND account_number = $2' : ''}`;
+      const whereClause = `n.organization_id = $1${accountNumber ? ' AND n.account_number = $2' : ''}`;
       const params = accountNumber ? [orgId, accountNumber] : [orgId];
       const { rows } = await c.query(
-        `SELECT id, account_number, member_id, payment_reference,
-                transaction_reference, amount, paid_at, status
-           FROM payment_notifications
+        `SELECT n.id,n.account_number,n.member_id,n.payment_reference,n.transaction_reference,n.amount,n.paid_at,
+                n.status AS recorded_status,n.journal_entry_id AS recorded_journal_entry_id,p.id AS provider_transaction_id,
+                ${notificationStatus} AS status,
+                ${notificationJournal} AS journal_entry_id,
+                CASE WHEN p.amount=n.amount AND p.virtual_account_no=n.account_number AND je.status='POSTED'
+                     AND p.status='MATCHED' THEN p.member_id END AS allocation_member_id
+           FROM payment_notifications n
+           ${notificationJoins}
           WHERE ${whereClause}
-          ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+          ORDER BY n.created_at DESC,n.id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, n, off],
       );
       const count = await c.query(
@@ -340,6 +353,12 @@ export class PaymentsService {
           paymentReference: r.payment_reference as string,
           transactionReference: r.transaction_reference as string,
           amount: Number(r.amount),
+          amountDecimal: moneyDecimal(moneyKobo(String(r.amount))),
+          recordedStatus: r.recorded_status as string,
+          recordedJournalEntryId: (r.recorded_journal_entry_id ?? null) as string | null,
+          providerTransactionId: (r.provider_transaction_id ?? null) as string | null,
+          journalEntryId: (r.journal_entry_id ?? null) as string | null,
+          allocationMemberId: (r.allocation_member_id ?? null) as string | null,
           paidAt: r.paid_at as Date,
           status: r.status as string,
         })),

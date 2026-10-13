@@ -7,6 +7,7 @@ import { withTenant } from '@coopengine/db';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
+import { MemberSpaceService } from '../src/member-space/member-space.service';
 import { SavingsService } from '../src/savings/savings.service';
 import { ReconciliationService } from '../src/payments/reconciliation.service';
 import { ADMIN_PASSWORD, TEST_DATABASE_URL, ensureRbacSeeded } from './helpers';
@@ -48,7 +49,7 @@ describe('atomic provider allocation and retries (PostgreSQL)',()=>{
   schedule:(await c.query('SELECT id,status,paid_principal,paid_interest FROM loan_repayments ORDER BY id')).rows,
   journals:(await c.query('SELECT id,status,source,source_id,idempotency_key FROM journal_entries ORDER BY id')).rows,
   totals:(await c.query(`SELECT a.code,sum(jl.debit-jl.credit)::text AS net FROM journal_lines jl JOIN chart_of_accounts a ON a.id=jl.account_id GROUP BY a.code ORDER BY a.code`)).rows,
-  notifications:(await c.query('SELECT id,status,journal_entry_id FROM payment_notifications ORDER BY id')).rows,
+  notifications:(await c.query('SELECT id,status,journal_entry_id,member_id,account_number,payment_reference,transaction_reference,amount,raw FROM payment_notifications ORDER BY id')).rows,
   queue:(await c.query('SELECT id FROM notifications ORDER BY id')).rows,
   receipts:(await c.query('SELECT id,action,response FROM financial_write_receipts ORDER BY id')).rows,
   audits:(await c.query('SELECT id FROM audit_logs ORDER BY id')).rows,
@@ -268,6 +269,42 @@ describe('atomic provider allocation and retries (PostgreSQL)',()=>{
  });
  it('signed ambiguous callbacks are acknowledged and parked once without intent progress',async()=>{
   const f=await fixture(1),accountNumber=await f.va(),a=await f.intent(),b=await f.intent(),body={accountNumber,paymentReference:randomUUID(),transactionReference:randomUUID(),amountPaid:0.23,transactionStatus:'SUCCESSFUL',paymentDescription:`${a.reference} / ${b.reference}`};const replies=await Promise.all([webhook(body).expect(200),webhook(body).expect(200)]);expect(replies.every(r=>r.body.acknowledged&&r.body.exception&&!r.body.matched)).toBe(true);const p=await proof(f);expect(p.notifications).toHaveLength(1);expect(p.providers).toHaveLength(1);expect(p.journals).toHaveLength(1);expect(p.intents.every(x=>x.received_amount==='0.00')).toBe(true);expect(p.movements).toHaveLength(0);expect(net(p,'2990')).toBe('-0.23');
+ });
+
+ async function callbackReceipt(f:F,reference=randomUUID(),amount=0.23){
+  const accountNumber=await f.va(),i=await f.intent('SAVINGS_DEPOSIT',1);await providerMinimum(f,1);const body={accountNumber,paymentReference:randomUUID(),transactionReference:reference,amountPaid:amount,transactionStatus:'SUCCESSFUL',paymentDescription:i.reference};const response=(await webhook(body).expect(200)).body;expect(response.exception).toBe(true);const state=await proof(f);return {body,intent:i,tx:state.providers.find(p=>p.amount===moneyText(amount))!,notification:state.notifications[0]};
+ }
+ const moneyText=(value:number)=>value.toFixed(2);
+ const feed=async(f:F)=>(await request(app.getHttpServer()).get('/api/v1/payments/internal/notifications').set(f.auth).expect(200)).body;
+ it('signed parked receipt becomes allocated with its current journal and exact progress, preserving original callback evidence',async()=>{
+  const f=await fixture(1),p=await callbackReceipt(f),parked=await proof(f);expect(p.notification.status).toBe('PARKED');expect((await feed(f))[0]).toMatchObject({status:'PARKED',recordedStatus:'PARKED',journalEntryId:p.tx.journal_entry_id,amountDecimal:'0.23'});
+  await providerMinimum(f,0);const result=await f.assign(p.tx.id).expect(200);const posted=await proof(f);expect(posted.notifications[0]).toMatchObject({status:'POSTED',journal_entry_id:result.body.journalEntryId});expect(posted.notifications[0].raw).toEqual(parked.notifications[0].raw);expect(posted.intents[0].received_amount).toBe('0.23');expect((await feed(f))[0]).toMatchObject({status:'POSTED',recordedStatus:'POSTED',journalEntryId:result.body.journalEntryId,allocationMemberId:f.members[0]});
+  await webhook(p.body).expect(200);await f.assign(p.tx.id).expect(200);expect(await proof(f)).toEqual(posted);
+ });
+ it('notification update failure rolls back intent progress, member credit, suspense release and retry receipt',async()=>{
+  const f=await fixture(1),p=await callbackReceipt(f);await providerMinimum(f,0);const before=await proof(f);await fault(f,'payment_notifications','UPDATE',"NEW.status='POSTED'",async()=>{await f.assign(p.tx.id).expect(500);expect(await proof(f)).toEqual(before);expect((await feed(f))[0].status).toBe('PARKED');});await f.assign(p.tx.id).expect(200);expect((await proof(f)).notifications[0].status).toBe('POSTED');
+ });
+ it('duplicate signed callbacks racing with assignment serialize without a notification/provider lock cycle',async()=>{
+  const f=await fixture(1),p=await callbackReceipt(f);await providerMinimum(f,0);const results=await Promise.all([f.assign(p.tx.id).expect(200),webhook(p.body).expect(200),f.assign(p.tx.id).expect(200),webhook(p.body).expect(200)]);expect(results[0].body).toEqual(results[2].body);const after=await proof(f);expect(after.movements).toHaveLength(1);expect(after.notifications).toHaveLength(1);expect(after.notifications[0].status).toBe('POSTED');expect(after.intents[0].received_amount).toBe('0.23');expect(net(after,'2990')).toBe('0.00');
+ });
+ it('all exact notification aliases follow one allocation without duplicate money; original deliveries stay immutable',async()=>{
+  const f=await fixture(1),p=await callbackReceipt(f),alias={...p.body,paymentReference:randomUUID()};await webhook(alias).expect(200);const before=await proof(f);expect(before.notifications).toHaveLength(2);await providerMinimum(f,0);await f.assign(p.tx.id).expect(200);const after=await proof(f);expect(after.notifications.every(n=>n.status==='POSTED'&&n.journal_entry_id===after.providers[0].journal_entry_id)).toBe(true);expect(after.movements).toHaveLength(1);expect(after.notifications.map(n=>n.raw)).toEqual(before.notifications.map(n=>n.raw));
+ });
+ it('equal references in another tenant and manual-provider records cannot relabel a callback',async()=>{
+  const a=await fixture(1),b=await fixture(1),ref=randomUUID(),pa=await callbackReceipt(a,ref),pb=await callbackReceipt(b,ref);await providerMinimum(a,0);const bBefore=await proof(b);await a.record({provider:'MANUAL',providerReference:ref,amount:0.01,virtualAccountNo:pa.body.accountNumber,narration:pa.intent.reference}).expect(201);expect((await proof(a)).notifications[0].status).toBe('PARKED');await a.assign(pa.tx.id).expect(200);expect((await proof(a)).notifications[0].status).toBe('POSTED');expect(await proof(b)).toEqual(bBefore);expect((await feed(b))[0].providerTransactionId).toBe(pb.tx.id);
+ });
+ it('legacy failed notifications read as current parked/allocated state without rewriting their stored evidence',async()=>{
+  const f=await fixture(1),p=await callbackReceipt(f);await f.tenant(c=>c.query("UPDATE payment_notifications SET status='FAILED' WHERE id=$1",[p.notification.id]));const before=await proof(f);expect((await feed(f))[0]).toMatchObject({status:'PARKED',recordedStatus:'FAILED'});expect(await proof(f)).toEqual(before);await providerMinimum(f,0);await f.assign(p.tx.id).expect(200);await f.tenant(c=>c.query("UPDATE payment_notifications SET status='FAILED',journal_entry_id=$2 WHERE id=$1",[p.notification.id,p.tx.journal_entry_id]));const historical=await proof(f);expect((await feed(f))[0]).toMatchObject({status:'POSTED',recordedStatus:'FAILED',recordedJournalEntryId:p.tx.journal_entry_id,journalEntryId:historical.providers[0].journal_entry_id});await f.assign(p.tx.id).expect(200);expect(await proof(f)).toEqual(historical);
+ });
+ it('mismatched identity, missing provider or missing journal requires review instead of a false allocated status',async()=>{
+  for(const mode of ['amount','account','provider','journal']){const f=await fixture(1),p=await callbackReceipt(f);await f.tenant(c=>mode==='amount'?c.query("UPDATE payment_notifications SET amount='0.24' WHERE id=$1",[p.notification.id]):mode==='account'?c.query("UPDATE payment_notifications SET account_number='unrelated' WHERE id=$1",[p.notification.id]):mode==='provider'?c.query("UPDATE payment_notifications SET transaction_reference='unrelated' WHERE id=$1",[p.notification.id]):c.query('UPDATE provider_transactions SET journal_entry_id=NULL WHERE id=$1',[p.tx.id]));const before=await proof(f);expect((await feed(f))[0]).toMatchObject({status:'REVIEW_REQUIRED',journalEntryId:null,allocationMemberId:null});expect(await proof(f)).toEqual(before);}
+ });
+ it('member receipt state reflects redirection without leaking the destination member or changing callback ownership',async()=>{
+  const f=await fixture(2),accountNumber=await f.va(),body={accountNumber,paymentReference:randomUUID(),transactionReference:randomUUID(),amountPaid:0.23,transactionStatus:'SUCCESSFUL',paymentDescription:'unknown COOP-NOTFOUND'};await webhook(body).expect(200);const parked=await proof(f);const own=()=>app.get(MemberSpaceService).myPayments(f.org,f.members[0]);expect((await own())[0]).toMatchObject({status:'PARKED',amountDecimal:'0.23'});await f.assign(parked.providers[0].id,f.members[1]).expect(200);const after=await proof(f);expect(after.notifications[0].member_id).toBe(f.members[0]);expect(after.notifications[0].raw).toEqual(parked.notifications[0].raw);const receipt=(await own())[0];expect(receipt).toMatchObject({status:'ALLOCATED_ELSEWHERE',amountDecimal:'0.23'});expect(JSON.stringify(receipt)).not.toContain(f.members[1]);expect(await app.get(MemberSpaceService).myPayments(f.org,f.members[1])).toHaveLength(0);expect((await feed(f))[0].allocationMemberId).toBe(f.members[1]);
+ });
+
+ it('provider feed and own member receipt preserve a large decimal beyond safe integer cents',async()=>{
+  const f=await fixture(1),accountNumber=await f.va(),body={accountNumber,paymentReference:randomUUID(),transactionReference:randomUUID(),amountPaid:'90071992547409.91',transactionStatus:'SUCCESSFUL',paymentDescription:'savings'};expect((await webhook(body).expect(200)).body.matched).toBe(true);expect((await feed(f))[0]).toMatchObject({amountDecimal:'90071992547409.91',status:'POSTED'});expect((await app.get(MemberSpaceService).myPayments(f.org,f.members[0]))[0].amountDecimal).toBe('90071992547409.91');expect((await proof(f)).savings[0].current_balance).toBe('90071992547409.91');
  });
 
 });
