@@ -110,9 +110,10 @@ export default function MemberDashboardPage() {
     { id: string; amount: number; status: string; description: string | null; requestedAt: string }[]
   >([]);
   const [error, setError] = useState<string | null>(null);
-  const info = readMemberInfo();
+  const [info, setInfo] = useState<ReturnType<typeof readMemberInfo>>(null);
 
   useEffect(() => {
+    setInfo(readMemberInfo());
     const token = readMemberToken();
     if (!token) {
       router.replace('/login');
