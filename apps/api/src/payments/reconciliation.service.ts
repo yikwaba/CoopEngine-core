@@ -434,6 +434,15 @@ export class ReconciliationService {
           outcome.journalEntryId ?? null,
         ],
     );
+    // Only exact callback identities are projected; raw provider evidence/member ownership stays intact.
+    // Webhooks also lock the provider row before notification rows, preventing allocation/retry cycles.
+    await c.query(`UPDATE payment_notifications n
+      SET status=CASE WHEN p.status='MATCHED' THEN 'POSTED' ELSE 'PARKED' END,
+          journal_entry_id=p.journal_entry_id
+      FROM provider_transactions p
+      WHERE p.organization_id=$1 AND p.id=$2 AND p.provider='MONNIFY' AND p.status IN ('MATCHED','EXCEPTION')
+        AND n.organization_id=p.organization_id AND n.transaction_reference=p.provider_reference
+        AND n.account_number=p.virtual_account_no AND n.amount=p.amount`,[orgId,transactionId]);
   }
 
   private async checkRegularContribution(c:PoolClient,orgId:string,memberId:string,value?:bigint):Promise<string>{

@@ -1,4 +1,5 @@
 'use client';
+import {memberMoney} from '../lib/withdrawal-money';
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -81,6 +82,7 @@ interface MemberPayment {
   id: string;
   paymentReference: string;
   amount: number;
+  amountDecimal?: string;
   paidAt: string;
   status: string;
 }
@@ -108,9 +110,10 @@ export default function MemberDashboardPage() {
     { id: string; amount: number; status: string; description: string | null; requestedAt: string }[]
   >([]);
   const [error, setError] = useState<string | null>(null);
-  const info = readMemberInfo();
+  const [info, setInfo] = useState<ReturnType<typeof readMemberInfo>>(null);
 
   useEffect(() => {
+    setInfo(readMemberInfo());
     const token = readMemberToken();
     if (!token) {
       router.replace('/login');
@@ -259,8 +262,8 @@ export default function MemberDashboardPage() {
   }
 
   return (
-    <main style={{ maxWidth: 560, margin: '0 auto', padding: 20 }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <main style={{ maxWidth: 560, margin: '0 auto', padding: 20, overflowWrap: 'anywhere' }}>
+      <header style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <p style={{ margin: 0, color: '#5b6772', fontSize: 13 }}>
             Member #{(data?.member.memberNo ?? info?.memberNo) ?? '…'} · Co-opEngine
@@ -269,7 +272,7 @@ export default function MemberDashboardPage() {
             {data ? `${data.member.firstName} ${data.member.lastName}` : 'Loading…'}
           </h1>
         </div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', maxWidth: '100%', gap: 6 }}>
           <Link href="/savings" style={{ fontSize: 13, padding: '6px 10px', background: '#eef4ff', borderRadius: 8, color: '#123a6b' }}>
             Savings
           </Link>
@@ -288,7 +291,7 @@ export default function MemberDashboardPage() {
         </div>
       </header>
 
-      <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 18 }}>
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 12, marginTop: 18 }}>
         <div className="card">
           <p className="stat-label">My savings</p>
           <p className="stat-value">{data ? naira(data.savingsTotal) : '…'}</p>
@@ -399,12 +402,12 @@ export default function MemberDashboardPage() {
           </div>
         ))}
         {goals.length === 0 && <p style={{ fontSize: 13, color: '#5b6772' }}>No goals yet.</p>}
-        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
           <input
             placeholder="Goal name (e.g. Rent)"
             value={goalForm.name}
             onChange={(e) => setGoalForm({ ...goalForm, name: e.target.value })}
-            style={{ flex: 1, padding: 8, borderRadius: 8, border: '1px solid #cfd6de' }}
+            style={{ flex: '1 1 160px', minWidth: 0, padding: 8, borderRadius: 8, border: '1px solid #cfd6de' }}
           />
           <input
             placeholder="Target ₦"
@@ -480,7 +483,7 @@ export default function MemberDashboardPage() {
 
       {notes.length > 0 && (
         <section className="card" style={{ marginTop: 14 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center' }}>
             <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Notifications</h2>
             <button
               style={{ fontSize: 12, padding: '4px 8px' }}
@@ -526,17 +529,21 @@ export default function MemberDashboardPage() {
               {funding.map((p) => (
                 <li
                   key={`fund-${p.id}`}
+                  aria-label={`Payment reference ${p.paymentReference}`}
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: 12,
+                    overflowWrap: 'anywhere',
                     padding: '9px 0',
                     borderBottom: '1px solid #eef1f5',
                     fontSize: 14,
                   }}
                 >
-                  <span>Transfer received — {p.paymentReference}</span>
-                  <span style={{ fontWeight: 600, color: '#067647' }}>
-                    +{naira(p.amount)}
+                  <span>Transfer received — {p.paymentReference}<br /><small>{({POSTED:'Allocated',PARKED:'Parked — awaiting allocation',REVIEW_REQUIRED:'Needs cooperative review',ALLOCATED_ELSEWHERE:'Allocated to another member after review',FAILED:'Failed'}[p.status]??p.status)}</small></span>
+                  <span style={{ fontWeight: 600 }}>
+                    {memberMoney(p.amountDecimal??p.amount)}
                   </span>
                 </li>
               ))}
@@ -546,6 +553,9 @@ export default function MemberDashboardPage() {
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: 12,
+                    overflowWrap: 'anywhere',
                     padding: '9px 0',
                     borderBottom: '1px solid #eef1f5',
                     fontSize: 14,

@@ -1239,7 +1239,7 @@ export const paymentNotifications = pgTable(
     transactionReference: varchar('transaction_reference', { length: 120 }).notNull(),
     amount: numeric('amount', { precision: 19, scale: 2 }).notNull(),
     paidAt: timestamp('paid_at', { withTimezone: true }).notNull(),
-    status: text('status').notNull().default('POSTED'), // POSTED|FAILED
+    status: text('status').notNull().default('POSTED'), // POSTED|PARKED|FAILED; current read projection may require review
     journalEntryId: uuid('journal_entry_id').references(() => journalEntries.id, {
       onDelete: 'set null',
     }),

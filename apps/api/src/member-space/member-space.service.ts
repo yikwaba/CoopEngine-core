@@ -1,3 +1,4 @@
+import {notificationJoins,notificationStatus} from '../payments/notification-projection';
 import {
   BadRequestException,
   ConflictException,
@@ -106,6 +107,7 @@ export class MemberSpaceService {
       id: string;
       paymentReference: string;
       amount: number;
+      amountDecimal: string;
       paidAt: Date;
       status: string;
     }[]
@@ -113,16 +115,19 @@ export class MemberSpaceService {
     const n = Math.min(Math.max(limit, 1), 100);
     return withTenant(this.pool, organizationId, async (c) => {
       const { rows } = await c.query(
-        `SELECT id, payment_reference, amount, paid_at, status
-           FROM payment_notifications
-          WHERE organization_id = $1 AND member_id = $2
-          ORDER BY paid_at DESC LIMIT $3`,
+        `SELECT n.id,n.payment_reference,n.amount,n.paid_at,
+                CASE WHEN (${notificationStatus})='POSTED' AND p.member_id IS DISTINCT FROM n.member_id
+                     THEN 'ALLOCATED_ELSEWHERE' ELSE (${notificationStatus}) END AS status
+           FROM payment_notifications n ${notificationJoins}
+          WHERE n.organization_id=$1 AND n.member_id=$2
+          ORDER BY n.paid_at DESC,n.id LIMIT $3`,
         [organizationId, memberId, n],
       );
       return rows.map((r: Record<string, unknown>) => ({
         id: r.id as string,
         paymentReference: r.payment_reference as string,
         amount: Number(r.amount),
+        amountDecimal: reportDecimal(String(r.amount)),
         paidAt: r.paid_at as Date,
         status: r.status as string,
       }));

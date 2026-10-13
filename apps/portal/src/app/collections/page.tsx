@@ -4,7 +4,8 @@ import ParkedPayments from '../../components/parked-payments';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { apiFetch, apiResponse, readToken } from '../../lib/api';
+import {reportMoney} from '../../lib/report-money';
+import { apiFetch, apiResponse, FINANCIAL_WRITES_EVENT, readToken } from '../../lib/api';
 
 interface VirtualAccount {
   id: string;
@@ -22,11 +23,12 @@ interface PaymentFeedItem {
   accountNumber: string;
   paymentReference: string;
   amount: number;
+  amountDecimal?: string;
   paidAt: string;
   status: string;
 }
 
-const naira = (n: number): string => `₦${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const paymentStatus=(status:string)=>({POSTED:'Allocated',PARKED:'Parked — awaiting allocation',FAILED:'Failed',REVIEW_REQUIRED:'Needs review'}[status]??status);
 
 export default function CollectionsPage() {
   const router = useRouter();
@@ -61,7 +63,9 @@ export default function CollectionsPage() {
   }, [router]);
 
   useEffect(() => {
-    void load();
+    const refresh=()=>{void load();};refresh();
+    window.addEventListener(FINANCIAL_WRITES_EVENT,refresh);window.addEventListener('focus',refresh);
+    return()=>{window.removeEventListener(FINANCIAL_WRITES_EVENT,refresh);window.removeEventListener('focus',refresh);};
   }, [load]);
 
   async function createAccount(): Promise<void> {
@@ -93,6 +97,8 @@ export default function CollectionsPage() {
           ← Dashboard
         </Link>
       </div>
+
+      <button className="btn" style={{marginTop:14}} onClick={()=>void load()}>Refresh collections</button>
 
       {notice && <p style={{ background: '#ecfdf3', color: '#067647', borderRadius: 8, padding: '10px 12px', marginTop: 14 }}>{notice}</p>}
       {error && <p style={{ background: '#fdecea', color: '#b42318', borderRadius: 8, padding: '10px 12px', marginTop: 14 }}>{error}</p>}
@@ -166,12 +172,12 @@ export default function CollectionsPage() {
             </thead>
             <tbody>
               {feed.map((p) => (
-                <tr key={p.id}>
+                <tr key={p.id} aria-label={`Payment reference ${p.paymentReference}`}>
                   <td>{p.accountNumber}</td>
                   <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{p.paymentReference}</td>
-                  <td>{naira(p.amount)}</td>
+                  <td>{reportMoney(p.amountDecimal??p.amount)}</td>
                   <td>{new Date(p.paidAt).toLocaleString()}</td>
-                  <td>{p.status}</td>
+                  <td>{paymentStatus(p.status)}</td>
                 </tr>
               ))}
             </tbody>
