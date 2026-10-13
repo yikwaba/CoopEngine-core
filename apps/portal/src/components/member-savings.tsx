@@ -19,7 +19,6 @@ export default function MemberSavings({ memberId, memberStatus, accounts, reload
   const pendingAccount = (id: string) => pending.some(record => record.path.startsWith(`/savings/accounts/${id}/`));
   const canPost = permissions.includes('savings.post'), canWithdraw = permissions.includes('savings.withdraw');
   const readPending = useCallback(async () => {
-    await syncFinancialWrites();
     const records = pendingFinancialWrites();
     const paths = records.map(record => record.path);
     // Acknowledging a recovered posting clears its old amount, even in another tab.
@@ -56,6 +55,8 @@ export default function MemberSavings({ memberId, memberStatus, accounts, reload
   useEffect(() => {
     const refresh = () => { void readPending().catch(e => setError(e instanceof Error ? e.message : 'Could not read pending requests.')); };
     refresh();
+    // Show current intent immediately while another tab holds the write lock.
+    void syncFinancialWrites().then(refresh).catch(e => setError(e instanceof Error ? e.message : 'Could not migrate pending requests.'));
     window.addEventListener(FINANCIAL_WRITES_EVENT, refresh); window.addEventListener('storage', refresh); window.addEventListener('focus', refresh);
     return () => { window.removeEventListener(FINANCIAL_WRITES_EVENT, refresh); window.removeEventListener('storage', refresh); window.removeEventListener('focus', refresh); };
   }, [readPending]);
@@ -86,10 +87,10 @@ export default function MemberSavings({ memberId, memberStatus, accounts, reload
   return <section className="card" style={{ marginTop: 14 }} aria-label="Member savings accounts">
     <h2 style={{ margin: '0 0 10px', fontSize: 16 }}>Savings accounts</h2>
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
-    {canPost && <fieldset disabled={busy || !!opening || memberStatus !== 'ACTIVE'} style={{ border: 0, padding: 0, marginBottom: 16 }}>
+    {canPost && <fieldset disabled={busy || !!opening || memberStatus !== 'ACTIVE'} style={{ border: 0, padding: 0, marginBottom: 16, minWidth: 0 }}>
       <legend>Open savings account</legend>
       <label htmlFor="savings-product">Savings product</label>
-      <select id="savings-product" className="field" value={selectedProduct} onChange={e => setProductId(e.target.value)}>
+      <select id="savings-product" className="field" style={{ width: '100%', maxWidth: '100%', padding: 10, marginBottom: 10 }} value={selectedProduct} onChange={e => setProductId(e.target.value)}>
         <option value="">Choose a product</option>
         {products.map(product => <option key={product.id} value={product.id}>{product.code} · {product.name}{product.allowWithdrawal ? ' · withdrawals allowed' : ' · withdrawals restricted'}</option>)}
         {opening && selectedProduct && !products.some(p => p.id === selectedProduct) && <option value={selectedProduct}>Original requested product</option>}
