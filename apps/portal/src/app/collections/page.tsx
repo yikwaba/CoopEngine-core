@@ -118,7 +118,7 @@ export default function CollectionsPage() {
         {accounts.length === 0 ? (
           <p style={{ color: '#5b6772' }}>None issued yet.</p>
         ) : (
-          <table className="data">
+          <div style={{overflowX:'auto'}}><table className="data">
             <thead>
               <tr>
                 <th>Member</th>
@@ -143,7 +143,7 @@ export default function CollectionsPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </section>
 
@@ -154,7 +154,7 @@ export default function CollectionsPage() {
         {feed.length === 0 ? (
           <p style={{ color: '#5b6772' }}>No inbound payments yet.</p>
         ) : (
-          <table className="data">
+          <div style={{overflowX:'auto'}}><table className="data">
             <thead>
               <tr>
                 <th>Account</th>
@@ -175,7 +175,7 @@ export default function CollectionsPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </section>
       <ParkedPayments />
