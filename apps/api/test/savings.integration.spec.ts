@@ -259,3 +259,58 @@ describe('savings on the ledger', () => {
     expect(crossStmt.status).toBe(404);
   });
 });
+
+describe('staff savings account opening recovery', () => {
+  it('concurrent explicit product opens and later retries return one zero-balance account and consume one sequence', async () => {
+    const coop = await onboardCoop('opening');
+    const auth = { Authorization: `Bearer ${coop.tokens.accessToken}` };
+    const member = await createApprovedMember(coop, randomUUID());
+    const product = (await request(app.getHttpServer()).post('/api/v1/products/savings').set(auth).send({code:'EXTRA',name:'Extra savings',interestRatePa:0,minDeposit:0,allowWithdrawal:true}).expect(201)).body;
+    const open = () => request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(auth).send({productId:product.id});
+    const results = await Promise.all(Array.from({length:5},()=>open().expect(201)));
+    for (const r of results) expect(r.body).toEqual(results[0]!.body);
+    expect(results[0]!.body).toMatchObject({accountNo:1,currentBalance:0,productCode:'EXTRA',status:'ACTIVE'});
+    expect((await open().expect(201)).body).toEqual(results[0]!.body);
+    const accounts = (await request(app.getHttpServer()).get(`/api/v1/savings/member/${member.id}/accounts`).set(auth).expect(200)).body;
+    expect(accounts).toHaveLength(1);
+    const next = (await request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(auth).send({}).expect(201)).body;
+    expect(next.accountNo).toBe(2);
+    expect((await request(app.getHttpServer()).get('/api/v1/ledger/journals').set(auth).expect(200)).body).toHaveLength(0);
+  });
+  it('foreign, missing and inactive products refuse opening without consuming an account number', async () => {
+    const coop = await onboardCoop('opening-validation'), other = await onboardCoop('opening-other');
+    const auth = {Authorization:`Bearer ${coop.tokens.accessToken}`}, foreignAuth = {Authorization:`Bearer ${other.tokens.accessToken}`};
+    const member = await createApprovedMember(coop, randomUUID());
+    const foreign = (await request(app.getHttpServer()).get('/api/v1/savings/products').set(foreignAuth).expect(200)).body[0];
+    const inactive = (await request(app.getHttpServer()).post('/api/v1/products/savings').set(auth).send({code:'INACTIVE',name:'Unavailable',interestRatePa:0,minDeposit:0,allowWithdrawal:true}).expect(201)).body;
+    await request(app.getHttpServer()).post(`/api/v1/products/savings/${inactive.id}/status`).set(auth).send({status:'INACTIVE'}).expect(201);
+    for (const [productId,status] of [[foreign.id,404],[randomUUID(),404],[inactive.id,409]] as const) {
+      await request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(auth).send({productId}).expect(status);
+    }
+    await request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(foreignAuth).send({}).expect(404);
+    const account = (await request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(auth).send({}).expect(201)).body;
+    expect(account.accountNo).toBe(1);
+    await request(app.getHttpServer()).post(`/api/v1/products/savings/${(await request(app.getHttpServer()).get('/api/v1/savings/products').set(auth)).body.find((p:{code:string})=>p.code==='REGULAR-SAVINGS').id}/status`).set(auth).send({status:'INACTIVE'}).expect(409);
+  });
+  it('auditors can read accounts but cannot open one', async () => {
+    const coop = await onboardCoop('opening-permissions'), auth = {Authorization:`Bearer ${coop.tokens.accessToken}`};
+    const member = await createApprovedMember(coop, randomUUID());
+    const auditor = (await request(app.getHttpServer()).post('/api/v1/users').set(auth).send({email:`opening-auditor-${randomUUID()}@coopengine.test`,roleCodes:['AUDITOR']}).expect(201)).body;
+    const login = (await request(app.getHttpServer()).post('/api/v1/auth/login').send({email:auditor.email,password:auditor.tempPassword}).expect(200)).body;
+    const headers = {Authorization:`Bearer ${login.tokens.accessToken}`};
+    expect((await request(app.getHttpServer()).get(`/api/v1/savings/member/${member.id}/accounts`).set(headers).expect(200)).body).toEqual([]);
+    await request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(headers).send({}).expect(403);
+  });
+  it('a closed existing account is returned without reopening; an exited member cannot open another', async () => {
+    const coop = await onboardCoop('opening-lifecycle'), auth = {Authorization:`Bearer ${coop.tokens.accessToken}`};
+    const member = await createApprovedMember(coop, randomUUID());
+    const account = (await request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(auth).send({}).expect(201)).body;
+    const org=(await request(app.getHttpServer()).get('/api/v1/auth/me').set(auth).expect(200)).body.organizationId;
+    // Test-only lifecycle fixture; never mutate staging/production records directly.
+    const c=await pool.connect();try{await c.query('BEGIN');await c.query("SELECT set_config('app.tenant_id',$1,true)",[org]);await c.query("UPDATE member_savings_accounts SET status='CLOSED' WHERE id=$1 AND organization_id=$2",[account.id,org]);await c.query('COMMIT');}finally{c.release();}
+    const retry=(await request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(auth).send({}).expect(201)).body;
+    expect(retry.id).toBe(account.id);expect(retry.status).toBe('CLOSED');
+    await request(app.getHttpServer()).post(`/api/v1/members/${member.id}/exit`).set(auth).expect(200);
+    await request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(auth).send({}).expect(409);
+  });
+});

@@ -249,3 +249,19 @@ test('journal submission: overlapping tabs send once',async()=>{let release;cons
 test('journal submission: changed unresolved payload is refused',async()=>{let calls=0;setFetch(async()=>{calls++;throw new TypeError('lost');});await assert.rejects(staff.apiFetch(journalSubmit,undefined,submitInit));await assert.rejects(staff.apiFetch(journalSubmit,undefined,{...submitInit,body:'{"changed":true}'}),/uncertain result/);assert.equal(calls,1);});
 test('journal submission: changed account cannot recover',async()=>{let calls=0;setFetch(async()=>{calls++;throw new TypeError('lost');});await assert.rejects(staff.apiFetch(journalSubmit,undefined,submitInit));scope='other:actor';await assert.rejects(staff.recoverFinancialWrite(staff.pendingFinancialWrites()[0].storageKey),/another account/);assert.equal(calls,1);});
 test('journal submission: malformed acknowledgement retains original request',async()=>{setFetch(async()=>new Response('{',{status:200}));await assert.rejects(staff.apiFetch(journalSubmit,undefined,submitInit));assert.equal(staff.pendingFinancialWrites().length,1);});
+
+const openingPath='/savings/member/synthetic-member/account';
+test('account opening retains explicit product and scope after response loss, and rejects replacement',async()=>{
+  const bodies=[];setFetch(async(_url,options)=>{bodies.push(JSON.parse(options.body));if(bodies.length===1)throw new TypeError('response lost after opening');return Response.json({id:'same-account',status:'ACTIVE'});});
+  await assert.rejects(staff.apiFetch(openingPath,undefined,{method:'POST',body:'{"productId":"product-a"}'}));
+  const original=staff.pendingFinancialWrites()[0];assert.equal(original.scope,scope);
+  await assert.rejects(staff.apiFetch(openingPath,undefined,{method:'POST',body:'{"productId":"product-b"}'}),/uncertain result/);
+  assert.deepEqual(await staff.recoverFinancialWrite(original.storageKey),{id:'same-account',status:'ACTIVE'});
+  assert.deepEqual(bodies,[{productId:'product-a'},{productId:'product-a'}]);assert.equal(staff.pendingFinancialWrites().length,0);
+});
+test('account opening recovery refuses a different cooperative without sending',async()=>{
+  let writes=0;setFetch(async()=>{writes++;throw new TypeError('response lost');});
+  await assert.rejects(staff.apiFetch(openingPath,undefined,{method:'POST',body:'{"productId":"product-a"}'}));
+  const original=staff.pendingFinancialWrites()[0];scope='other-org:same-actor';
+  await assert.rejects(staff.recoverFinancialWrite(original.storageKey),/another account or cooperative/);assert.equal(writes,1);
+});

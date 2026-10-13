@@ -1,4 +1,5 @@
 'use client';
+import MemberSavings from '../../../components/member-savings';
 import {reportMoney} from '../../../lib/report-money';
 
 import { useCallback, useEffect, useState } from 'react';
@@ -41,8 +42,6 @@ export default function MemberDetailPage() {
   const params = useParams<{ id: string }>();
   const memberId = params.id;
   const [data, setData] = useState<Member360 | null>(null);
-  const [amount, setAmount] = useState('');
-  const [mode, setMode] = useState<'DEPOSIT' | 'WITHDRAWAL'>('DEPOSIT');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -65,25 +64,6 @@ export default function MemberDetailPage() {
     void load();
   }, [load]);
 
-  async function postMoney(accountId: string): Promise<void> {
-    const token = readToken();
-    if (!token || !amount) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await apiFetch(`/savings/accounts/${accountId}/${mode.toLowerCase()}s`, token, {
-        method: 'POST',
-        body: JSON.stringify({ amount: Number(amount) }),
-      });
-      setAmount('');
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Transaction failed');
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function setMemberStatus(action: 'approve' | 'suspend' | 'exit'): Promise<void> {
     const token = readToken();
     if (!token) return;
@@ -105,7 +85,7 @@ export default function MemberDetailPage() {
 
   if (!data) {
     return (
-      <main style={{ maxWidth: 900, margin: '0 auto', padding: 28 }}>
+      <main style={{ maxWidth: 900, margin: '0 auto', padding: 28, minWidth: 0, overflowWrap: 'anywhere' }}>
         <p>{error ?? 'Loading…'}</p>
       </main>
     );
@@ -113,8 +93,8 @@ export default function MemberDetailPage() {
   const m = data.member;
 
   return (
-    <main style={{ maxWidth: 900, margin: '0 auto', padding: 28 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <main style={{ maxWidth: 900, margin: '0 auto', padding: 28, minWidth: 0, overflowWrap: 'anywhere' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <p style={{ margin: 0, color: '#5b6772', fontSize: 13 }}>
             Member #{m.memberNo} · {m.status}
@@ -124,7 +104,7 @@ export default function MemberDetailPage() {
           </h1>
           <p style={{ margin: '4px 0 0', color: '#5b6772' }}>{m.email ?? 'No email'}</p>
         </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <button
             onClick={() => {
               void downloadStatement(m.id, m.memberNo).catch((e) =>
@@ -162,68 +142,7 @@ export default function MemberDetailPage() {
         </div>
       </section>
 
-      <section className="card" style={{ marginTop: 14 }}>
-        <h2 style={{ margin: '0 0 10px', fontSize: 16 }}>Savings accounts</h2>
-        {data.savings.length === 0 ? (
-          <p style={{ color: '#5b6772' }}>No savings account yet.</p>
-        ) : (
-          <table className="data">
-            <thead>
-              <tr>
-                <th>Account</th>
-                <th>Balance</th>
-                <th>Status</th>
-                <th>Amount</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.savings.map((a) => (
-                <tr key={a.accountId}>
-                  <td>#{a.accountNo}</td>
-                  <td>{naira(a.balanceDecimal ?? a.balance)}</td>
-                  <td>{a.status}</td>
-                  <td style={{ width: 140 }}>
-                    <input
-                      className="field"
-                      type="number"
-                      min="0"
-                      value={amount}
-                      onChange={(e) => setAmount(e.target.value)}
-                      placeholder="Amount"
-                      style={{ padding: '6px 8px', fontSize: 14 }}
-                    />
-                  </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    <button
-                      className="btn"
-                      style={{ padding: '6px 10px', marginRight: 6 }}
-                      disabled={busy || !amount}
-                      onClick={() => {
-                        setMode('DEPOSIT');
-                        void postMoney(a.accountId);
-                      }}
-                    >
-                      Deposit
-                    </button>
-                    <button
-                      className="btn secondary"
-                      style={{ padding: '6px 10px' }}
-                      disabled={busy || !amount}
-                      onClick={() => {
-                        setMode('WITHDRAWAL');
-                        void postMoney(a.accountId);
-                      }}
-                    >
-                      Withdraw
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <MemberSavings key={memberId} memberId={memberId} memberStatus={m.status} accounts={data.savings} reload={load} />
 
       <section className="card" style={{ marginTop: 14 }}>
         <h2 style={{ margin: '0 0 10px', fontSize: 16 }}>Loans</h2>

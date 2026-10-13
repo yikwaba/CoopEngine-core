@@ -108,6 +108,12 @@ export class SavingsService {
       if (!productIdResolved) {
         throw new NotFoundException('Savings product not found');
       }
+      const product = await c.query(
+        `SELECT code, status FROM savings_products
+          WHERE organization_id = $1 AND id = $2 FOR SHARE`,
+        [orgId, productIdResolved],
+      );
+      if (!product.rows[0]) throw new NotFoundException('Savings product not found');
       const existing = await c.query(
         `SELECT id, account_no, member_id, current_balance, status, opened_at
            FROM member_savings_accounts
@@ -115,7 +121,10 @@ export class SavingsService {
         [orgId, memberId, productIdResolved],
       );
       if (existing.rows[0]) {
-        return this.mapAccount(existing.rows[0] as Record<string, unknown>);
+        return this.mapAccount({ ...existing.rows[0], product_code: product.rows[0].code });
+      }
+      if (product.rows[0].status !== 'ACTIVE') {
+        throw new ConflictException('Savings product is not active');
       }
       await c.query(
         `INSERT INTO org_counters (organization_id) VALUES ($1)
@@ -137,7 +146,7 @@ export class SavingsService {
          RETURNING id, account_no, member_id, current_balance, status, opened_at`,
         [orgId, memberId, productIdResolved, accountNo],
       );
-      return this.mapAccount(ins.rows[0] as Record<string, unknown>);
+      return this.mapAccount({ ...ins.rows[0], product_code: product.rows[0].code });
     });
   }
 
