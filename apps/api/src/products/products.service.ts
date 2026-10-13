@@ -260,7 +260,7 @@ export class ProductsService {
     const orgId = this.requireOrg(organizationId);
     return withTenant(this.pool, orgId, async (c) => {
       const table = kind === 'savings' ? 'savings_products' : 'loan_products';
-      const cur = await c.query(`SELECT status FROM ${table} WHERE id = $1`, [id]);
+      const cur = await c.query(`SELECT status FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
       if (cur.rows.length === 0) throw new NotFoundException('Product not found');
       if (status === 'INACTIVE') {
         const usage =

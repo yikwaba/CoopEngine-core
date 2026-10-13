@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { apiFetch, FINANCIAL_WRITES_EVENT, pendingFinancialWrites, recoverFinancialWrite, syncFinancialWrites } from '../lib/api';
 
 function description(path:string,payload:string):string {
+ if(/^\/savings\/member\/[^/]+\/account$/.test(path)) return 'Open savings account';
  if(/^\/ledger\/journals\/[^/]+\/submit$/.test(path)) return 'Journal submission · '+path.split('/')[3];
  if(path==='/loans') return 'Loan application';
  if(path==='/ledger/journals') {try{return 'Journal draft · '+JSON.parse(payload).description;}catch{return 'Journal draft requiring review';}}
