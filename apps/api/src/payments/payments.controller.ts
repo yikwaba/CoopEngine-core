@@ -103,6 +103,10 @@ class RecordTransactionDto {
 }
 
 class AssignExceptionDto {
+  @IsOptional()
+  @IsUUID()
+  paymentIntentId?: string;
+
   @IsUUID()
   memberId!: string;
 

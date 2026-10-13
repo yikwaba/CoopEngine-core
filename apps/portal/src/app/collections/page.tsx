@@ -1,4 +1,5 @@
 'use client';
+import ParkedPayments from '../../components/parked-payments';
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -177,6 +178,7 @@ export default function CollectionsPage() {
           </table>
         )}
       </section>
+      <ParkedPayments />
     </main>
   );
 }
