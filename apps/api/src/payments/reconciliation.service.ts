@@ -15,6 +15,7 @@ import { checkSavingsContribution, lockActiveSavingsMember } from '../savings/co
 import { SavingsService } from '../savings/savings.service';
 import { SharesService } from '../shares/shares.service';
 
+import { resolvePaymentRoute, RoutingIntent } from './payment-routing';
 import { financialIntent } from '../common/financial-intent';
 import { moneyDecimal, moneyKobo } from '../common/money';
 
@@ -240,30 +241,32 @@ export class ReconciliationService {
         const legacy = await c.query(`SELECT id FROM journal_entries WHERE organization_id=$1 AND idempotency_key=ANY($2::varchar[])`,
           [orgId,[legacyKey,legacyKey+':unallocated',this.idempotencyKey(orgId,tx.provider,tx.provider_reference)]]);
         if (legacy.rowCount) throw new ConflictException('Historical provider posting exists without matching state; reconciliation is required');
-        const haystack = `${tx.narration??''} ${tx.payer_name??''}`.toLowerCase();
-        let memberId: string | null = null;
+        let virtualMemberId:string|null=null;
         if (tx.virtual_account_no) {
-          const va = await c.query(`SELECT member_id FROM virtual_account_lookups WHERE organization_id=$1 AND account_number=$2 LIMIT 1`,[orgId,tx.virtual_account_no]);
-          memberId=va.rows[0]?.member_id??null;
+          const va=await c.query(`SELECT member_id FROM virtual_account_lookups WHERE organization_id=$1 AND account_number=$2`,[orgId,tx.virtual_account_no]);
+          virtualMemberId=va.rows[0]?.member_id??null;
         }
-        const intents = await c.query(`SELECT id,member_id,reference,purpose FROM payment_intents WHERE status IN ('OPEN','PARTIAL') ORDER BY created_at,id`);
-        const quoted = intents.rows.find(i=>haystack.includes(i.reference.toLowerCase()));
-        if (quoted && memberId && quoted.member_id !== memberId) throw new ConflictException('Virtual account and payment intent identify different members');
-        memberId=memberId??quoted?.member_id??null;
-        const mine=intents.rows.filter(i=>i.member_id===memberId);
-        const selected=quoted??(/loan|repay|instal|installment/.test(haystack)?mine.find(i=>i.purpose==='LOAN_REPAYMENT'):undefined)??mine[0];
-        const intentId: string | null=selected?.id??null;
-        if (intentId) {
-          const locked=await c.query(`SELECT status FROM payment_intents WHERE id=$1 FOR UPDATE`,[intentId]);
-          if (!locked.rows[0] || locked.rows[0].status==='CANCELLED') throw new ConflictException('Payment intent is no longer available');
-        }
+        const intents=await c.query<RoutingIntent>(`SELECT id,member_id,reference,purpose,status FROM payment_intents
+          WHERE organization_id=$1 ORDER BY id`,[orgId]);
+        const route=resolvePaymentRoute(tx.narration??'',virtualMemberId,intents.rows);
+        let selected=route.intent,memberId=route.memberId,intentId:string|null=selected?.id??null;
         const amount=moneyDecimal(moneyKobo(tx.amount));
-        if (!memberId) {
+        const park=async(reason:string,linkedMember=memberId,linkedIntent=intentId)=>{
           const entryId=await this.postUnallocated(c,orgId,actorUserId,tx.id,amount,tx);
-          const reason=`No member matched — payer "${tx.payer_name??'unknown'}" and no intent reference in the narration`;
-          await this.mark(c,orgId,tx.id,{status:'EXCEPTION',reason,journalEntryId:entryId});
-          return {matched:false,exception:true,transactionId,reason:'no-member',journalEntryId:entryId};
+          await this.mark(c,orgId,tx.id,{status:'EXCEPTION',reason,memberId:linkedMember,intentId:linkedIntent,journalEntryId:entryId});
+          return {matched:false,exception:true,transactionId,memberId:linkedMember,intentId:linkedIntent,reason,journalEntryId:entryId};
+        };
+        if(route.reason)return park(route.reason);
+        if(selected){
+          const locked=await c.query<RoutingIntent>(`SELECT id,member_id,reference,purpose,status FROM payment_intents
+            WHERE organization_id=$1 AND id=$2 FOR UPDATE`,[orgId,selected.id]);
+          const current=locked.rows[0];
+          if(!current||current.member_id!==memberId||current.purpose!==selected.purpose||current.reference!==selected.reference)
+            return park('Payment intent routing changed; explicit allocation is required',null,null);
+          if(!['OPEN','PARTIAL'].includes(current.status))return park('Quoted payment intent is not open; explicit review is required');
+          selected=current;
         }
+        if(!memberId)return park('No member matched and no complete intent reference was quoted');
         if ((selected?.purpose ?? 'SAVINGS_DEPOSIT') === 'SAVINGS_DEPOSIT') {
           // Preflight performs no financial writes. A real bank receipt that cannot
           // be credited stays visible in suspense for explicit later assignment.
@@ -276,7 +279,7 @@ export class ReconciliationService {
             return {matched:false,exception:true,transactionId,memberId,intentId,reason,journalEntryId:entryId};
           }
         }
-        const posting=await this.post(c,orgId,actorUserId,{memberId,purpose:selected?.purpose??'SAVINGS_DEPOSIT',amount,
+        const posting=await this.post(c,orgId,actorUserId,{memberId,purpose:(selected?.purpose??'SAVINGS_DEPOSIT') as PaymentPurpose,amount,
           provider:tx.provider,reference:tx.provider_reference});
         if (intentId) await c.query(`UPDATE payment_intents SET received_amount=received_amount+$2,
           status=CASE WHEN received_amount+$2>=expected_amount THEN 'MATCHED' ELSE 'PARTIAL' END,updated_at=now() WHERE id=$1`,[intentId,amount]);

@@ -35,6 +35,7 @@ describe('payment reconciliation', () => {
   let token = '';
   let memberId = '';
   let memberNo = 0;
+  let partialReference = '';
 
   const api = (path: string, method: 'get' | 'post' = 'post', body?: unknown) =>
     (body === undefined ? http[method](path) : http[method](path).send(body)).set(auth(token));
@@ -146,6 +147,7 @@ describe('payment reconciliation', () => {
       expectedAmount: 100000,
     }).expect(201);
     const reference = intent.body.reference as string;
+    partialReference = reference;
 
     await api('/api/v1/payments/transactions', 'post', {
       provider: 'MANUAL',
@@ -265,7 +267,7 @@ describe('payment reconciliation', () => {
       amountPaid: 5000,
       transactionStatus: 'SUCCESSFUL',
       payerName: 'WEBHOOK PAYER',
-      paymentDescription: 'contribution',
+      paymentDescription: `contribution ${partialReference}`,
       paymentDate: new Date().toISOString(),
     };
     const raw = JSON.stringify(payload);
