@@ -24,7 +24,10 @@ export default function MemberSavings({ memberId, memberStatus, accounts, reload
     const paths = records.map(record => record.path);
     // Acknowledging a recovered posting clears its old amount, even in another tab.
     const acknowledged = previousPending.current.filter(path => !paths.includes(path));
+    previousPending.current = paths;
+    setPending(records);
     if (acknowledged.length) {
+      setError('');
       if (acknowledged.includes(`/savings/member/${memberId}/account`)) setProductId('');
       setAmounts(current => {
         const next = { ...current };
@@ -33,8 +36,6 @@ export default function MemberSavings({ memberId, memberStatus, accounts, reload
       });
       await reload();
     }
-    previousPending.current = paths;
-    setPending(records);
   }, [reload, memberId]);
   useEffect(() => {
     let cancelled = false;

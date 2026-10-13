@@ -292,6 +292,22 @@ describe('staff savings account opening recovery', () => {
     expect(account.accountNo).toBe(1);
     await request(app.getHttpServer()).post(`/api/v1/products/savings/${(await request(app.getHttpServer()).get('/api/v1/savings/products').set(auth)).body.find((p:{code:string})=>p.code==='REGULAR-SAVINGS').id}/status`).set(auth).send({status:'INACTIVE'}).expect(409);
   });
+  it('account opening and product deactivation serialize without an active account on an inactive product', async () => {
+    const coop = await onboardCoop('opening-status-race'), auth = {Authorization:`Bearer ${coop.tokens.accessToken}`};
+    for (let n=0;n<3;n++) {
+      const member = await createApprovedMember(coop, randomUUID());
+      const product = (await request(app.getHttpServer()).post('/api/v1/products/savings').set(auth).send({code:`RACE-${n}`,name:'Concurrent product',interestRatePa:0,minDeposit:0,allowWithdrawal:true}).expect(201)).body;
+      const [opening,deactivation] = await Promise.all([
+        request(app.getHttpServer()).post(`/api/v1/savings/member/${member.id}/account`).set(auth).send({productId:product.id}),
+        request(app.getHttpServer()).post(`/api/v1/products/savings/${product.id}/status`).set(auth).send({status:'INACTIVE'}),
+      ]);
+      expect([[201,409],[409,201]]).toContainEqual([opening.status,deactivation.status]);
+      const products = (await request(app.getHttpServer()).get('/api/v1/savings/products').set(auth).expect(200)).body;
+      const accounts = (await request(app.getHttpServer()).get(`/api/v1/savings/member/${member.id}/accounts`).set(auth).expect(200)).body;
+      expect(products.find((p:{id:string})=>p.id===product.id).status).toBe(opening.status===201?'ACTIVE':'INACTIVE');
+      expect(accounts).toHaveLength(opening.status===201?1:0);
+    }
+  });
   it('auditors can read accounts but cannot open one', async () => {
     const coop = await onboardCoop('opening-permissions'), auth = {Authorization:`Bearer ${coop.tokens.accessToken}`};
     const member = await createApprovedMember(coop, randomUUID());
