@@ -5,7 +5,7 @@ import { reportMoney } from '../lib/report-money';
 import { savingsAmount } from '../lib/savings-money';
 
 interface Account { accountId: string; accountNo: number; productCode: string; balance: number; balanceDecimal?: string; status: string }
-interface Product { id: string; code: string; name: string; status: string; allowWithdrawal: boolean }
+interface Product { id: string; code: string; name: string; status: string; allowWithdrawal: boolean; minDeposit: number; minDepositDecimal?: string }
 export default function MemberSavings({ memberId, memberStatus, accounts, reload }: {
   memberId: string; memberStatus: string; accounts: Account[]; reload: () => Promise<void>;
 }) {
@@ -92,7 +92,7 @@ export default function MemberSavings({ memberId, memberStatus, accounts, reload
       <label htmlFor="savings-product">Savings product</label>
       <select id="savings-product" className="field" style={{ width: '100%', maxWidth: '100%', padding: 10, marginBottom: 10 }} value={selectedProduct} onChange={e => setProductId(e.target.value)}>
         <option value="">Choose a product</option>
-        {products.map(product => <option key={product.id} value={product.id}>{product.code} · {product.name}{product.allowWithdrawal ? ' · withdrawals allowed' : ' · withdrawals restricted'}</option>)}
+        {products.map(product => <option key={product.id} value={product.id}>{product.code} · {product.name}{product.allowWithdrawal ? ' · withdrawals allowed' : ' · withdrawals restricted'} · minimum deposit {reportMoney(product.minDepositDecimal ?? product.minDeposit)}</option>)}
         {opening && selectedProduct && !products.some(p => p.id === selectedProduct) && <option value={selectedProduct}>Original requested product</option>}
       </select>
       <button className="btn" type="button" disabled={!selectedProduct} onClick={() => void openAccount()}>Open savings account</button>

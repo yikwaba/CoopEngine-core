@@ -11,6 +11,7 @@ import { Pool, PoolClient } from 'pg';
 import { withTenant } from '@coopengine/db';
 import { DB_POOL } from '../database/database.module';
 import { LoansService } from '../loans/loans.service';
+import { checkSavingsContribution, lockActiveSavingsMember } from '../savings/contribution-rules';
 import { SavingsService } from '../savings/savings.service';
 import { SharesService } from '../shares/shares.service';
 
@@ -263,6 +264,18 @@ export class ReconciliationService {
           await this.mark(c,orgId,tx.id,{status:'EXCEPTION',reason,journalEntryId:entryId});
           return {matched:false,exception:true,transactionId,reason:'no-member',journalEntryId:entryId};
         }
+        if ((selected?.purpose ?? 'SAVINGS_DEPOSIT') === 'SAVINGS_DEPOSIT') {
+          // Preflight performs no financial writes. A real bank receipt that cannot
+          // be credited stays visible in suspense for explicit later assignment.
+          try { await this.checkRegularContribution(c,orgId,memberId,moneyKobo(amount)); }
+          catch (error) {
+            if (!(error instanceof BadRequestException || error instanceof ConflictException || error instanceof NotFoundException)) throw error;
+            const reason=error.message;
+            const entryId=await this.postUnallocated(c,orgId,actorUserId,tx.id,amount,tx);
+            await this.mark(c,orgId,tx.id,{status:'EXCEPTION',reason,journalEntryId:entryId});
+            return {matched:false,exception:true,transactionId,reason,journalEntryId:entryId};
+          }
+        }
         const posting=await this.post(c,orgId,actorUserId,{memberId,purpose:selected?.purpose??'SAVINGS_DEPOSIT',amount,
           provider:tx.provider,reference:tx.provider_reference});
         if (intentId) await c.query(`UPDATE payment_intents SET received_amount=received_amount+$2,
@@ -420,22 +433,30 @@ export class ReconciliationService {
     );
   }
 
+  private async checkRegularContribution(c:PoolClient,orgId:string,memberId:string,value?:bigint):Promise<string>{
+    await lockActiveSavingsMember(c,orgId,memberId);
+    const product=await c.query("SELECT id,status FROM savings_products WHERE organization_id=$1 AND code='REGULAR-SAVINGS' FOR SHARE",[orgId]);
+    if(!product.rows[0])throw new NotFoundException('Default REGULAR-SAVINGS product not found');
+    if(product.rows[0].status!=='ACTIVE')throw new ConflictException('Savings product is not active');
+    const id=product.rows[0].id as string;
+    if(value!==undefined)await checkSavingsContribution(c,orgId,id,value);
+    const account=await c.query('SELECT status FROM member_savings_accounts WHERE organization_id=$1 AND member_id=$2 AND product_id=$3',[orgId,memberId,id]);
+    if(account.rows[0] && account.rows[0].status!=='ACTIVE')throw new ConflictException('Regular savings account is not active');
+    return id;
+  }
+
   /** Open the cooperative's standard savings account for a member who has none. */
   private async openRegularSavingsAccount(c: PoolClient, orgId: string, memberId: string): Promise<string> {
 
+    const productId=await this.checkRegularContribution(c,orgId,memberId);
     const existing = await c.query(
-      `SELECT id FROM member_savings_accounts WHERE member_id = $1 AND status = 'ACTIVE' LIMIT 1`,
-      [memberId],
+      `SELECT id,status FROM member_savings_accounts WHERE organization_id=$1 AND member_id=$2 AND product_id=$3`,
+      [orgId,memberId,productId],
     );
-    const found = (existing.rows[0] as { id: string } | undefined)?.id;
-    if (found) return found;
-
-    const product = await c.query(
-      `SELECT id FROM savings_products WHERE organization_id = $1 AND code = 'REGULAR-SAVINGS'`,
-      [orgId],
-    );
-    const productId = (product.rows[0] as { id: string } | undefined)?.id;
-    if (!productId) throw new ConflictException('This cooperative has no REGULAR-SAVINGS product');
+    if(existing.rows[0]) {
+      if(existing.rows[0].status!=='ACTIVE')throw new ConflictException('Regular savings account is not active');
+      return existing.rows[0].id as string;
+    }
 
     const seq = await c.query(
       `UPDATE org_counters SET savings_seq = savings_seq + 1, updated_at = now()

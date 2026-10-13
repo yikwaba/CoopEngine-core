@@ -95,4 +95,41 @@ describe('exact savings postings, balances and interest (PostgreSQL)',()=>{
   const posted=await f.withdraw(0.23).expect(200);expect(posted.body.kind).toBe('POSTED');expect((await f.proof()).current_balance).toBe('0.92');
   await request(app.getHttpServer()).patch('/api/v1/savings/settings/withdrawal-approval').set(f.auth).send({threshold:0.001}).expect(400);
  });
+
+ async function contributionProduct(f:Awaited<ReturnType<typeof fixture>>,minimum:number){
+  const id=(await f.tenant(c=>c.query('SELECT product_id FROM member_savings_accounts WHERE id=$1',[f.account]))).rows[0].product_id;
+  await request(app.getHttpServer()).patch(`/api/v1/products/savings/${id}`).set(f.auth).send({code:'REGULAR-SAVINGS',name:'Regular savings',interestRatePa:0,minDeposit:minimum,allowWithdrawal:true}).expect(200);return id as string;
+ }
+ async function contributionSnapshot(f:Awaited<ReturnType<typeof fixture>>){return f.tenant(async c=>{const out:Record<string,unknown>={};for(const table of ['member_savings_accounts','savings_transactions','journal_entries','journal_lines','financial_write_receipts','audit_logs','org_counters'])out[table]=(await c.query(`SELECT * FROM ${table} ORDER BY ${table==='org_counters'?'organization_id':'id'}`)).rows;return out;});}
+ it('minimum deposit exact boundary refuses a smaller credit atomically and allows correction with the uncommitted key',async()=>{
+  const f=await fixture();await contributionProduct(f,1.15);const key=randomUUID(),before=await contributionSnapshot(f);
+  await f.deposit(1.14,key).expect(400);expect(await contributionSnapshot(f)).toEqual(before);
+  await f.deposit(1.15,key).expect(201);expect((await f.proof()).current_balance).toBe('1.15');
+ });
+ it('concurrent minimum-boundary deposits post once and original receipts replay after minimum changes',async()=>{
+  const f=await fixture();await contributionProduct(f,1.15);const key=randomUUID();const results=await Promise.all([f.deposit(1.15,key).expect(201),f.deposit(1.15,key).expect(201)]);expect(results[0].body).toEqual(results[1].body);
+  await contributionProduct(f,2);const before=await contributionSnapshot(f);expect((await f.deposit(1.15,key).expect(201)).body).toEqual(results[0].body);await f.deposit(1.15).expect(400);expect(await contributionSnapshot(f)).toEqual(before);expect((await f.proof()).transactions).toBe(1);
+ });
+ it('manual contributions refuse inactive member, account or product without receipts or money movement',async()=>{
+  for(const mode of ['member','account','product']){
+   const f=await fixture(),id=await contributionProduct(f,0);
+   await f.tenant(c=>mode==='member'?c.query("UPDATE members SET status='SUSPENDED' WHERE id=(SELECT member_id FROM member_savings_accounts WHERE id=$1)",[f.account]):mode==='account'?c.query("UPDATE member_savings_accounts SET status='CLOSED' WHERE id=$1",[f.account]):c.query("UPDATE savings_products SET status='INACTIVE' WHERE id=$1",[id]));
+   const before=await contributionSnapshot(f);await f.deposit(0.01).expect(409);expect(await contributionSnapshot(f)).toEqual(before);
+  }
+ });
+ it('configured minimum refuses overprecision instead of rounding and returns an exact decimal read field',async()=>{
+  const f=await fixture(),id=await contributionProduct(f,1.15);
+  await request(app.getHttpServer()).patch(`/api/v1/products/savings/${id}`).set(f.auth).send({code:'REGULAR-SAVINGS',name:'Regular savings',interestRatePa:0,minDeposit:0.001,allowWithdrawal:true}).expect(400);
+  for(const path of ['/products/savings','/savings/products'])expect((await request(app.getHttpServer()).get('/api/v1'+path).set(f.auth).expect(200)).body.find((p:{id:string})=>p.id===id)).toMatchObject({minDeposit:1.15,minDepositDecimal:'1.15'});
+ });
+ it('a withdrawal waiting on the member lifecycle lock holds no savings account lock',async()=>{
+  const f=await fixture();await f.deposit(1.15).expect(201);let posting:Promise<request.Response>|undefined;
+  await f.tenant(async c=>{
+   const member=(await c.query('SELECT member_id FROM member_savings_accounts WHERE id=$1',[f.account])).rows[0].member_id;
+   await c.query('SELECT id FROM members WHERE id=$1 FOR NO KEY UPDATE',[member]);posting=f.withdraw(0.01).then(r=>r);
+   let blocked=false;for(let n=0;n<100;n++){const r=await pool.query("SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%SELECT status FROM members%' LIMIT 1");if(r.rowCount){blocked=true;break;}await new Promise(r=>setTimeout(r,20));}
+   expect(blocked).toBe(true);await c.query('SELECT id FROM member_savings_accounts WHERE id=$1 FOR UPDATE NOWAIT',[f.account]);
+  });expect((await posting!).status).toBe(200);expect((await f.proof()).current_balance).toBe('1.14');
+ });
+
 });

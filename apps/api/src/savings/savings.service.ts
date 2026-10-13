@@ -1,3 +1,4 @@
+import { checkSavingsContribution, lockActiveSavingsMember } from './contribution-rules';
 import { moneyDecimal, moneyKobo } from '../common/money';
 import {
   BadRequestException,
@@ -19,6 +20,7 @@ export interface SavingsProductRow {
   name: string;
   interestRatePa: number;
   minDeposit: number;
+  minDepositDecimal: string;
   allowWithdrawal: boolean;
   status: string;
 }
@@ -42,7 +44,7 @@ export interface SavingsTxnRow {
   createdAt: Date;
 }
 
-type LockedSavingsAccount = Pick<SavingsAccountRow, 'id' | 'accountNo' | 'memberId' | 'status'> & { currentBalance: bigint };
+type LockedSavingsAccount = Pick<SavingsAccountRow, 'id' | 'accountNo' | 'memberId' | 'status'> & { currentBalance: bigint; productId: string };
 
 // Default account mapping (Decision Log): cash movement hits Cash at Bank
 // until per-coop payment-channel settings exist.
@@ -74,6 +76,7 @@ export class SavingsService {
         name: r.name as string,
         interestRatePa: Number(r.interest_rate_pa),
         minDeposit: Number(r.min_deposit),
+        minDepositDecimal: moneyDecimal(moneyKobo(String(r.min_deposit))),
         allowWithdrawal: Boolean(r.allow_withdrawal),
         status: r.status as string,
       }));
@@ -204,6 +207,8 @@ export class SavingsService {
     return financialIntent(this.pool,orgId,'savings.deposit',idempotencyKey,
       {actorUserId,accountId,amount:moneyDecimal(value),description:description??null},async (c,journalKey) => {
       const account = await this.lockAccount(c, orgId, accountId);
+      if (account.status !== 'ACTIVE') throw new ConflictException('Account is not active');
+      await checkSavingsContribution(c, orgId, account.productId, value);
       const entryId = randomUUID();
       const entryNo = await this.allocJournalNo(c, orgId);
       await this.insertEntryAndLines(
@@ -345,12 +350,6 @@ export class SavingsService {
       throw new BadRequestException('Account does not belong to this member');
     }
     if (account.status !== 'ACTIVE') throw new ConflictException('Account is not active');
-    const member = await c.query(
-      `SELECT status FROM members WHERE organization_id=$1 AND id=$2 FOR SHARE`,
-      [orgId, account.memberId],
-    );
-    if (!member.rows[0]) throw new NotFoundException('Member not found');
-    if (member.rows[0].status !== 'ACTIVE') throw new ConflictException('Member is not active');
     const product = await c.query(
       `SELECT p.status, p.allow_withdrawal FROM savings_products p
         JOIN member_savings_accounts a ON a.product_id=p.id
@@ -369,12 +368,15 @@ export class SavingsService {
 
   /** SELECT ... FOR UPDATE inside the tenant transaction (row lock). */
   private async lockAccount(
-    c: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> },
+    c: PoolClient,
     orgId: string,
     accountId: string,
   ): Promise<LockedSavingsAccount> {
+    const anchor = await c.query('SELECT member_id FROM member_savings_accounts WHERE organization_id=$1 AND id=$2', [orgId, accountId]);
+    if (!anchor.rows[0]) throw new NotFoundException('Savings account not found');
+    await lockActiveSavingsMember(c, orgId, anchor.rows[0].member_id);
     const { rows } = await c.query(
-      `SELECT a.id, a.account_no, a.member_id, a.current_balance, a.status, a.opened_at,
+      `SELECT a.id, a.account_no, a.member_id, a.product_id, a.current_balance, a.status, a.opened_at,
               p.code AS product_code
          FROM member_savings_accounts a
          JOIN savings_products p ON p.id = a.product_id
@@ -384,7 +386,8 @@ export class SavingsService {
     );
     if (!rows[0]) throw new NotFoundException('Savings account not found');
     const row = rows[0] as Record<string, unknown>;
-    return { id: row.id as string, accountNo: Number(row.account_no),
+    if (row.member_id !== anchor.rows[0].member_id) throw new ConflictException('Account membership changed; review before retrying');
+    return { productId: row.product_id as string, id: row.id as string, accountNo: Number(row.account_no),
       memberId: row.member_id as string, status: row.status as string,
       currentBalance: moneyKobo(row.current_balance as string) };
   }

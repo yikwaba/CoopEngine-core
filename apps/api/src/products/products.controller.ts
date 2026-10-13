@@ -12,6 +12,7 @@ import {
   IsBoolean,
   IsIn,
   IsNumber,
+  Min,
   IsOptional,
   IsString,
   MaxLength,
@@ -38,7 +39,8 @@ class SavingsProductDto {
   @IsNumber()
   interestRatePa!: number;
 
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   minDeposit!: number;
 
   @IsBoolean()

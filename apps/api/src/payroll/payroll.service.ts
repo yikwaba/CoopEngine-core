@@ -1,3 +1,4 @@
+import { checkSavingsContribution } from '../savings/contribution-rules';
 import { financialIntent } from '../common/financial-intent';
 import { moneyDecimal, moneyKobo } from '../common/money';
 import {
@@ -237,14 +238,26 @@ export class PayrollService {
         throw new BadRequestException('No valid payroll rows to commit');
       }
 
+      const product = await c.query(
+        `SELECT id FROM savings_products
+          WHERE organization_id = $1 AND code = 'REGULAR-SAVINGS'`,
+        [orgId],
+      );
+      const productId = (product.rows[0] as { id: string } | undefined)?.id;
+      if (!productId) {
+        throw new BadRequestException('Default REGULAR-SAVINGS product not found');
+      }
+      // A payroll credit is the existing per-member aggregate, not each CSV line.
+      for (const value of amountsByMember.values()) await checkSavingsContribution(c, orgId, productId, value);
+
       // Open savings accounts for members who do not have one yet
       const memberIds = [...amountsByMember.keys()];
       const accounts = await c.query(
-        `SELECT a.id, a.member_id, a.account_no, a.current_balance
+        `SELECT a.id, a.member_id, a.account_no, a.current_balance, a.status
            FROM member_savings_accounts a
           WHERE a.organization_id = $1 AND a.member_id = ANY($2::uuid[])
-            AND a.status = 'ACTIVE' ORDER BY a.id FOR UPDATE OF a`,
-        [orgId, memberIds],
+            AND a.product_id = $3 ORDER BY a.id FOR UPDATE OF a`,
+        [orgId, memberIds, productId],
       );
       const accountByMember = new Map<
         string,
@@ -255,7 +268,9 @@ export class PayrollService {
         member_id: string;
         account_no: string | number;
         current_balance: string;
+        status: string;
       }[]) {
+        if (r.status !== 'ACTIVE') throw new ConflictException('Regular savings account is not active');
         accountByMember.set(r.member_id, {
           id: r.id,
           accountNo: Number(r.account_no),
@@ -266,15 +281,6 @@ export class PayrollService {
         `INSERT INTO org_counters (organization_id) VALUES ($1) ON CONFLICT (organization_id) DO NOTHING`,
         [orgId],
       );
-      const product = await c.query(
-        `SELECT id FROM savings_products
-          WHERE organization_id = $1 AND code = 'REGULAR-SAVINGS'`,
-        [orgId],
-      );
-      const productId = (product.rows[0] as { id: string } | undefined)?.id;
-      if (!productId) {
-        throw new BadRequestException('Default REGULAR-SAVINGS product not found');
-      }
       for (const memberId of memberIds) {
         if (accountByMember.has(memberId)) continue;
         const seq = await c.query(
