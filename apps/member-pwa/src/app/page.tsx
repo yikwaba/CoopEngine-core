@@ -401,12 +401,12 @@ export default function MemberDashboardPage() {
           </div>
         ))}
         {goals.length === 0 && <p style={{ fontSize: 13, color: '#5b6772' }}>No goals yet.</p>}
-        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
           <input
             placeholder="Goal name (e.g. Rent)"
             value={goalForm.name}
             onChange={(e) => setGoalForm({ ...goalForm, name: e.target.value })}
-            style={{ flex: 1, padding: 8, borderRadius: 8, border: '1px solid #cfd6de' }}
+            style={{ flex: '1 1 160px', minWidth: 0, padding: 8, borderRadius: 8, border: '1px solid #cfd6de' }}
           />
           <input
             placeholder="Target ₦"
