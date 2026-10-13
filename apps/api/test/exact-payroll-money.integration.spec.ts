@@ -104,7 +104,10 @@ describe('exact payroll preview, allocation and posting (PostgreSQL)',()=>{
   await payrollMinimum(f,0.23);await f.approve(id).expect(200);expect((await f.proof(id)).journal.debit).toBe('0.48');await payrollMinimum(f,1);const posted=await payrollSnapshot(f);await f.approve(id).expect(200);expect(await payrollSnapshot(f)).toEqual(posted);
  });
  it('payroll applies the configured minimum to its existing per-member aggregate credit',async()=>{
-  const f=await fixture(1);await payrollMinimum(f,0.23);const result=await f.preview(`memberNo,amount\n${f.members[0]!.memberNo},0.12\n${f.members[0]!.memberNo},0.11`).expect(201);await f.submit(result.body.batchId).expect(200);await f.approve(result.body.batchId).expect(200);expect((await f.proof(result.body.batchId)).members[0]!.current_balance).toBe('0.23');
+  const f=await fixture(1);await payrollMinimum(f,0.23);const id=await f.staged(['0.23']);
+  // Synthetic stored-row fixture tests existing posting aggregation; normal CSV imports reject duplicates.
+  await f.tenant(c=>c.query('UPDATE payroll_batches SET rows=$2::jsonb,total_rows=2,valid_rows=2 WHERE id=$1',[id,JSON.stringify(['0.12','0.11'].map(amount=>({memberNo:f.members[0]!.memberNo,memberId:f.members[0]!.id,amount})))]));
+  await f.approve(id).expect(200);expect((await f.proof(id)).members[0]!.current_balance).toBe('0.23');
  });
  it('payroll selects regular savings rather than another active product',async()=>{
   const f=await fixture(1);await payrollMinimum(f,0.23);const p=(await request(app.getHttpServer()).post('/api/v1/products/savings').set(f.auth).send({code:'OTHER',name:'Other savings',interestRatePa:0,minDeposit:100,allowWithdrawal:true}).expect(201)).body;
