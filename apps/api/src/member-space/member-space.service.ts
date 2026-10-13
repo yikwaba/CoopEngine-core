@@ -268,7 +268,7 @@ export class MemberSpaceService {
     return withTenant(this.pool, orgId, async (c) => {
       const accounts = await c.query(
         `SELECT a.id, a.account_no, a.current_balance, a.status,
-                p.code AS product_code, p.name AS product_name, p.allow_withdrawal
+                p.code AS product_code, p.name AS product_name, p.allow_withdrawal, p.status AS product_status
            FROM member_savings_accounts a
            JOIN savings_products p ON p.id = a.product_id
           WHERE a.organization_id = $1 AND a.member_id = $2
@@ -297,7 +297,7 @@ export class MemberSpaceService {
           accountNo: a.account_no as string,
           balance: Number(a.current_balance),
           balanceDecimal: reportDecimal(a.current_balance),
-          allowWithdrawal: Boolean(a.allow_withdrawal),
+          allowWithdrawal: Boolean(a.allow_withdrawal) && a.product_status === 'ACTIVE',
           status: a.status as string,
           productCode: a.product_code as string,
           productName: a.product_name as string,

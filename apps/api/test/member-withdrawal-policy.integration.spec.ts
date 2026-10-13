@@ -122,4 +122,80 @@ describe('member withdrawal approval identity (PostgreSQL)',()=>{
   const read=(await request(app.getHttpServer()).get('/api/v1/member/savings').set(member).expect(200)).body;expect(read.totalBalanceDecimal).toBe('199999999999999999.98');expect(read.accounts.every((a:{balanceDecimal:string})=>a.balanceDecimal==='99999999999999999.99')).toBe(true);
  });
 
+ async function productId(f:Awaited<ReturnType<typeof fixture>>) {return (await f.tenant(c=>c.query('SELECT product_id FROM member_savings_accounts WHERE id=$1',[f.account]))).rows[0].product_id as string;}
+ async function allowWithdrawals(f:Awaited<ReturnType<typeof fixture>>,allowWithdrawal:boolean) {
+  return request(app.getHttpServer()).patch(`/api/v1/products/savings/${await productId(f)}`).set(f.auth).send({code:'REGULAR-SAVINGS',name:'Regular savings',interestRatePa:0,minDeposit:0,allowWithdrawal}).expect(200);
+ }
+ it('refuses over-balance member and parked staff requests without requests, receipts or approval actions',async()=>{
+  const f=await fixture(),member=await memberAuth(f);await policy(f);const before=await f.snapshot();
+  await memberWithdrawal(f,member,randomUUID(),1.16).expect(400);
+  await withdrawal(f,randomUUID(),1.16).expect(400);expect(await f.snapshot()).toEqual(before);
+  const key=randomUUID();await memberWithdrawal(f,member,key,1.16).expect(400);
+  await f.send(`/savings/accounts/${f.account}/deposits`,{amount:0.01,idempotencyKey:randomUUID()}).expect(201);
+  const r=(await memberWithdrawal(f,member,key,1.16).expect(201)).body;expect(r.kind).toBe('PENDING');expect(await balance(f)).toBe('1.16');
+ });
+ it('request checks refuse blocked/inactive products and inactive accounts or members for staff and member origins',async()=>{
+  for(const mode of ['blocked','product','account','member']) {
+   const f=await fixture(),member=await memberAuth(f);await policy(f);
+   if(mode==='blocked')await allowWithdrawals(f,false);
+   // Inactive product/account states are explicit disposable fixtures; normal product deactivation refuses an in-use product.
+   if(mode==='product'){const id=await productId(f);await f.tenant(c=>c.query("UPDATE savings_products SET status='INACTIVE' WHERE id=$1",[id]));}
+   if(mode==='account')await f.tenant(c=>c.query("UPDATE member_savings_accounts SET status='CLOSED' WHERE id=$1",[f.account]));
+   if(mode==='member')await request(app.getHttpServer()).post(`/api/v1/members/${f.members[0]!.id}/suspend`).set(f.auth).expect(200);
+   const before=await f.snapshot();await withdrawal(f,randomUUID(),1.01).expect(409);
+   if(mode!=='member')await memberWithdrawal(f,member).expect(409);
+   expect(await f.snapshot()).toEqual(before);
+  }
+ });
+ it('each approval step rechecks eligibility and a failed final decision rolls back its receipt and approval trail',async()=>{
+  for(const mode of ['blocked','account','member']) {
+   const f=await fixture(),member=await memberAuth(f),final=await chair(f);await policy(f);
+   const r=(await memberWithdrawal(f,member).expect(201)).body;
+   await allowWithdrawals(f,false);const atFirst=await f.snapshot();await decision(f,r.requestId).expect(409);expect(await f.snapshot()).toEqual(atFirst);
+   await allowWithdrawals(f,true);await decision(f,r.requestId).expect(200);
+   if(mode==='blocked')await allowWithdrawals(f,false);
+   if(mode==='account')await f.tenant(c=>c.query("UPDATE member_savings_accounts SET status='CLOSED' WHERE id=$1",[f.account]));
+   if(mode==='member')await request(app.getHttpServer()).post(`/api/v1/members/${f.members[0]!.id}/suspend`).set(f.auth).expect(200);
+   const before=await f.snapshot();await decision(f,r.requestId,final,2).expect(409);expect(await f.snapshot()).toEqual(before);
+   await decision(f,r.requestId,final,2,'reject').expect(200);expect(await balance(f)).toBe('1.15');
+  }
+ });
+ it('rechecks a depleted posted balance at payout, then safely pays after funding with the original decision',async()=>{
+  const f=await fixture(),member=await memberAuth(f),key=randomUUID();
+  const original=(await memberWithdrawal(f,member,key).expect(201)).body;
+  await withdrawal(f,randomUUID(),0.15).expect(200);expect(await balance(f)).toBe('1.00');
+  expect((await memberWithdrawal(f,member,key).expect(201)).body).toEqual(original);
+  const before=await f.snapshot();await f.send(`/savings/withdrawals/${original.requestId}/approve`,{},f.checker).expect(400);expect(await f.snapshot()).toEqual(before);
+  await f.send(`/savings/accounts/${f.account}/deposits`,{amount:0.01,idempotencyKey:randomUUID()}).expect(201);
+  const first=(await f.send(`/savings/withdrawals/${original.requestId}/approve`,{},f.checker).expect(200)).body;expect(await balance(f)).toBe('0.00');
+  await allowWithdrawals(f,false);const posted=await f.snapshot();expect((await f.send(`/savings/withdrawals/${original.requestId}/approve`,{},f.checker).expect(200)).body).toEqual(first);expect(await f.snapshot()).toEqual(posted);
+ });
+ it('unreserved distinct pending requests can coexist but concurrent final approvals can fund only one',async()=>{
+  const f=await fixture(),member=await memberAuth(f),final=await chair(f);await policy(f);
+  const requests=await Promise.all([memberWithdrawal(f,member).expect(201),memberWithdrawal(f,member).expect(201)]);const ids=requests.map(r=>r.body.requestId);
+  expect(new Set(ids).size).toBe(2);expect(await balance(f)).toBe('1.15');
+  for(const id of ids)await decision(f,id).expect(200);
+  const outcomes=await Promise.all(ids.map(id=>decision(f,id,final,2)));expect(outcomes.map(r=>r.status).sort()).toEqual([200,400]);expect(await balance(f)).toBe('0.14');
+  const paid=outcomes.find(r=>r.status===200)!,refused=outcomes.find(r=>r.status===400)!;const pendingId=ids[outcomes.indexOf(refused)]!;
+  const check=await f.tenant(c=>c.query('SELECT r.status,a.status AS chain_status,a.current_step FROM savings_withdrawal_requests r JOIN approval_requests a ON a.entity_id=r.id WHERE r.id=$1',[pendingId]));expect(check.rows[0]).toEqual({status:'PENDING',chain_status:'PENDING',current_step:2});
+  const before=await f.snapshot();expect((await decision(f,paid.body.requestId,final,2).expect(200)).body).toEqual(paid.body);expect(await f.snapshot()).toEqual(before);
+  await decision(f,pendingId,final,2,'reject').expect(200);expect(await balance(f)).toBe('0.14');
+ });
+ it('distinct concurrent immediate withdrawals cannot overdraw the locked account',async()=>{
+  const f=await fixture();const results=await Promise.all([withdrawal(f,randomUUID(),0.92),withdrawal(f,randomUUID(),0.92)]);
+  expect(results.map(r=>r.status).sort()).toEqual([200,400]);expect(await balance(f)).toBe('0.23');
+  const proof=await f.tenant(c=>c.query("SELECT count(*)::int AS n FROM journal_entries WHERE source='SAVINGS_WITHDRAWAL'"));expect(proof.rows[0].n).toBe(1);
+ });
+ it('product edits racing an immediate withdrawal serialize and later attempts obey the current rule',async()=>{
+  const f=await fixture();const results=await Promise.all([withdrawal(f,randomUUID(),0.01),allowWithdrawals(f,false)]);
+  expect([200,409]).toContain(results[0]!.status);expect(await balance(f)).toBe(results[0]!.status===200?'1.14':'1.15');
+  const before=await f.snapshot();await withdrawal(f,randomUUID(),0.01).expect(409);expect(await f.snapshot()).toEqual(before);
+ });
+ it('member savings read removes inactive-product eligibility while preserving the posted balance',async()=>{
+  const f=await fixture(),member=await memberAuth(f);const id=await productId(f);
+  await f.tenant(c=>c.query("UPDATE savings_products SET status='INACTIVE' WHERE id=$1",[id]));
+  const read=(await request(app.getHttpServer()).get('/api/v1/member/savings').set(member).expect(200)).body;
+  expect(read.accounts[0]).toMatchObject({balanceDecimal:'1.15',allowWithdrawal:false});
+ });
+
 });
