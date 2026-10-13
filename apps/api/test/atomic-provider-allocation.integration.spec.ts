@@ -52,7 +52,7 @@ describe('atomic provider allocation and retries (PostgreSQL)',()=>{
   notifications:(await c.query('SELECT id,status,journal_entry_id,member_id,account_number,payment_reference,transaction_reference,amount,raw FROM payment_notifications ORDER BY id')).rows,
   queue:(await c.query('SELECT id FROM notifications ORDER BY id')).rows,
   receipts:(await c.query('SELECT id,action,response FROM financial_write_receipts ORDER BY id')).rows,
-  audits:(await c.query('SELECT id FROM audit_logs ORDER BY id')).rows,
+  audits:(await c.query('SELECT id FROM audit_logs WHERE organization_id=$1 ORDER BY id',[f.org])).rows,
   counter:(await c.query('SELECT journal_seq,savings_seq FROM org_counters')).rows[0],
  }));}
  async function fault(f:F,table:string,event:string,condition:string,work:()=>Promise<void>){
