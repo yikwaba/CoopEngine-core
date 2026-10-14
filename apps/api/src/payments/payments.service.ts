@@ -1,4 +1,4 @@
-import {notificationJoins,notificationStatus,notificationJournal} from './notification-projection';
+import {notificationJoins,notificationStatus,notificationJournal,notificationReceiptIdentity,notificationDeliveryPartition} from './notification-projection';
 import {
   BadRequestException,
   ConflictException,
@@ -311,6 +311,8 @@ export class PaymentsService {
       transactionReference: string;
       amount: number;
       amountDecimal: string;
+      deliveryCount: number;
+      deliveryReferences: string[];
       recordedStatus: string;
       recordedJournalEntryId: string | null;
       providerTransactionId: string | null;
@@ -327,7 +329,10 @@ export class PaymentsService {
       const whereClause = `n.organization_id = $1${accountNumber ? ' AND n.account_number = $2' : ''}`;
       const params = accountNumber ? [orgId, accountNumber] : [orgId];
       const { rows } = await c.query(
-        `SELECT n.id,n.account_number,n.member_id,n.payment_reference,n.transaction_reference,n.amount,n.paid_at,
+        `WITH receipts AS (SELECT n.id,n.account_number,n.member_id,n.payment_reference,n.transaction_reference,n.amount,n.paid_at,n.created_at,
+                count(*) OVER (PARTITION BY ${notificationDeliveryPartition})::int AS delivery_count,
+                array_agg(n.payment_reference) OVER (PARTITION BY ${notificationDeliveryPartition}) AS delivery_references,
+                row_number() OVER (PARTITION BY ${notificationDeliveryPartition} ORDER BY n.created_at,n.id) AS delivery_rank,
                 n.status AS recorded_status,n.journal_entry_id AS recorded_journal_entry_id,p.id AS provider_transaction_id,
                 ${notificationStatus} AS status,
                 ${notificationJournal} AS journal_entry_id,
@@ -336,12 +341,14 @@ export class PaymentsService {
            FROM payment_notifications n
            ${notificationJoins}
           WHERE ${whereClause}
-          ORDER BY n.created_at DESC,n.id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+          ) SELECT * FROM receipts WHERE delivery_rank=1
+          ORDER BY created_at DESC,id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, n, off],
       );
       const count = await c.query(
-        `SELECT count(*)::int AS n FROM payment_notifications
-          WHERE organization_id = $1 ${accountNumber ? 'AND account_number = $2' : ''}`,
+        `SELECT count(*)::int AS n FROM (SELECT ${notificationReceiptIdentity},n.member_id
+          FROM payment_notifications n ${notificationJoins} WHERE ${whereClause}
+          GROUP BY ${notificationReceiptIdentity},n.member_id) receipts`,
         accountNumber ? [orgId, accountNumber] : [orgId],
       );
       return {
@@ -354,6 +361,8 @@ export class PaymentsService {
           transactionReference: r.transaction_reference as string,
           amount: Number(r.amount),
           amountDecimal: moneyDecimal(moneyKobo(String(r.amount))),
+          deliveryCount: Number(r.delivery_count),
+          deliveryReferences: (r.delivery_references as string[]).sort(),
           recordedStatus: r.recorded_status as string,
           recordedJournalEntryId: (r.recorded_journal_entry_id ?? null) as string | null,
           providerTransactionId: (r.provider_transaction_id ?? null) as string | null,

@@ -451,6 +451,12 @@ export class LedgerService {
     const original = rows[0];
     if (!original) throw new NotFoundException('Journal entry not found');
     if (original.status !== 'POSTED') throw new ConflictException('Only a posted journal can be reversed');
+    // A ledger-only reversal cannot undo provider allocation, domain balances or intent progress.
+    // Read the link without locking the provider row: allocation locks provider before journals.
+    const providerLinked = ['PAYMENT_UNALLOCATED','PAYMENT_ALLOCATED'].includes(original.source)
+      || original.source_type === 'provider_transaction'
+      || (await c.query('SELECT 1 FROM provider_transactions WHERE organization_id=$1 AND journal_entry_id=$2 LIMIT 1',[orgId,journalId])).rowCount;
+    if (providerLinked) throw new ConflictException('Provider-linked journals cannot be reversed independently; a coordinated payment reversal is required.');
     if (['PAYROLL','PAYROLL_DEDUCTION'].includes(original.source) || original.source_type === 'payroll_batch') {
       if (!payrollBatchId || original.source_type !== 'payroll_batch' || original.source_id !== payrollBatchId) {
         throw new ConflictException('Reverse payroll through its batch to reconcile savings atomically');
