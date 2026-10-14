@@ -272,7 +272,7 @@ describe('atomic provider allocation and retries (PostgreSQL)',()=>{
  });
 
  async function callbackReceipt(f:F,reference=randomUUID(),amount=0.23,existingAccount?:string){
-  const accountNumber=existingAccount??await f.va(),i=await f.intent('SAVINGS_DEPOSIT',1);await providerMinimum(f,1);const body={accountNumber,paymentReference:randomUUID(),transactionReference:reference,amountPaid:amount,transactionStatus:'SUCCESSFUL',paymentDescription:i.reference};const response=(await webhook(body).expect(200)).body;expect(response.exception).toBe(true);const state=await proof(f);return {body,intent:i,tx:state.providers.find(p=>p.amount===moneyText(amount))!,notification:state.notifications[0]};
+  const accountNumber=existingAccount??await f.va(),i=await f.intent('SAVINGS_DEPOSIT',1);await providerMinimum(f,1);const body={accountNumber,paymentReference:randomUUID(),transactionReference:reference,amountPaid:amount,transactionStatus:'SUCCESSFUL',paymentDescription:i.reference};const response=(await webhook(body).expect(200)).body;expect(response.exception).toBe(true);const state=await proof(f);return {body,intent:i,tx:await f.tenant(async c=>(await c.query('SELECT id,journal_entry_id,status FROM provider_transactions WHERE organization_id=$1 AND provider_reference=$2',[f.org,reference])).rows[0]),notification:state.notifications.find(n=>n.payment_reference===body.paymentReference)};
  }
  const moneyText=(value:number)=>value.toFixed(2);
  const feed=async(f:F)=>(await request(app.getHttpServer()).get('/api/v1/payments/internal/notifications').set(f.auth).expect(200)).body;
