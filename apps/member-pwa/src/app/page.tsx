@@ -83,6 +83,7 @@ interface MemberPayment {
   paymentReference: string;
   amount: number;
   amountDecimal?: string;
+  deliveryCount?: number;
   paidAt: string;
   status: string;
 }
@@ -541,7 +542,7 @@ export default function MemberDashboardPage() {
                     fontSize: 14,
                   }}
                 >
-                  <span>Transfer received — {p.paymentReference}<br /><small>{({POSTED:'Allocated',PARKED:'Parked — awaiting allocation',REVIEW_REQUIRED:'Needs cooperative review',ALLOCATED_ELSEWHERE:'Allocated to another member after review',FAILED:'Failed'}[p.status]??p.status)}</small></span>
+                  <span>Transfer received — {p.paymentReference}<br /><small>{({POSTED:'Allocated',PARKED:'Parked — awaiting allocation',REVIEW_REQUIRED:'Needs cooperative review',ALLOCATED_ELSEWHERE:'Allocated to another member after review',FAILED:'Failed'}[p.status]??p.status)}</small>{(p.deliveryCount??1)>1&&<><br /><small>{p.deliveryCount} deliveries · one bank receipt</small></>}</span>
                   <span style={{ fontWeight: 600 }}>
                     {memberMoney(p.amountDecimal??p.amount)}
                   </span>

@@ -1,4 +1,4 @@
-import {notificationJoins,notificationStatus} from '../payments/notification-projection';
+import {notificationJoins,notificationStatus,notificationDeliveryPartition} from '../payments/notification-projection';
 import {
   BadRequestException,
   ConflictException,
@@ -108,6 +108,7 @@ export class MemberSpaceService {
       paymentReference: string;
       amount: number;
       amountDecimal: string;
+      deliveryCount: number;
       paidAt: Date;
       status: string;
     }[]
@@ -115,12 +116,14 @@ export class MemberSpaceService {
     const n = Math.min(Math.max(limit, 1), 100);
     return withTenant(this.pool, organizationId, async (c) => {
       const { rows } = await c.query(
-        `SELECT n.id,n.payment_reference,n.amount,n.paid_at,
+        `WITH receipts AS (SELECT n.id,n.payment_reference,n.amount,n.paid_at,
+                count(*) OVER (PARTITION BY ${notificationDeliveryPartition})::int AS delivery_count,
+                row_number() OVER (PARTITION BY ${notificationDeliveryPartition} ORDER BY n.created_at,n.id) AS delivery_rank,
                 CASE WHEN (${notificationStatus})='POSTED' AND p.member_id IS DISTINCT FROM n.member_id
                      THEN 'ALLOCATED_ELSEWHERE' ELSE (${notificationStatus}) END AS status
            FROM payment_notifications n ${notificationJoins}
           WHERE n.organization_id=$1 AND n.member_id=$2
-          ORDER BY n.paid_at DESC,n.id LIMIT $3`,
+          ) SELECT * FROM receipts WHERE delivery_rank=1 ORDER BY paid_at DESC,id LIMIT $3`,
         [organizationId, memberId, n],
       );
       return rows.map((r: Record<string, unknown>) => ({
@@ -128,6 +131,7 @@ export class MemberSpaceService {
         paymentReference: r.payment_reference as string,
         amount: Number(r.amount),
         amountDecimal: reportDecimal(String(r.amount)),
+        deliveryCount: Number(r.delivery_count),
         paidAt: r.paid_at as Date,
         status: r.status as string,
       }));

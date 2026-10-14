@@ -24,6 +24,8 @@ interface PaymentFeedItem {
   paymentReference: string;
   amount: number;
   amountDecimal?: string;
+  deliveryCount?: number;
+  deliveryReferences?: string[];
   paidAt: string;
   status: string;
 }
@@ -174,7 +176,7 @@ export default function CollectionsPage() {
               {feed.map((p) => (
                 <tr key={p.id} aria-label={`Payment reference ${p.paymentReference}`}>
                   <td>{p.accountNumber}</td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{p.paymentReference}</td>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{p.paymentReference}{(p.deliveryCount??1)>1&&<small style={{display:'block'}} title={p.deliveryReferences?.join(', ')}>{p.deliveryCount} deliveries · one bank receipt</small>}</td>
                   <td>{reportMoney(p.amountDecimal??p.amount)}</td>
                   <td>{new Date(p.paidAt).toLocaleString()}</td>
                   <td>{paymentStatus(p.status)}</td>
