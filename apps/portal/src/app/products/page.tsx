@@ -39,6 +39,8 @@ export default function ProductsPage() {
   const [loans, setLoans] = useState<LoanProduct[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [minimumDrafts, setMinimumDrafts] = useState<Record<string, string>>({});
+  const [minimumSaved, setMinimumSaved] = useState<string | null>(null);
   const [newSavings, setNewSavings] = useState({ code: '', name: '', interestRatePa: '6', minDeposit: '0' });
   const [newLoan, setNewLoan] = useState({
     code: '',
@@ -128,11 +130,13 @@ export default function ProductsPage() {
   }
 
   async function updateMinimum(product: SavingsProduct, value: string) {
-    const token=readToken();if(!token)return;setBusy(true);setError(null);
+    const token=readToken();if(!token)return;setBusy(true);setError(null);setMinimumSaved(null);
     try {
       const minDeposit=savingsMinimum(value);
       await apiFetch(`/products/savings/${product.id}`,token,{method:'PATCH',body:JSON.stringify({code:product.code,name:product.name,interestRatePa:product.interestRatePa,minDeposit,allowWithdrawal:product.allowWithdrawal})});
       await load();
+      setMinimumDrafts(previous=>{const next={...previous};delete next[product.id];return next;});
+      setMinimumSaved(product.id);
     }catch(e){setError(e instanceof Error?e.message:'Minimum update failed');}finally{setBusy(false);}
   }
 
@@ -233,7 +237,17 @@ export default function ProductsPage() {
                     }}
                   />
                 </td>
-                <td style={cell}><span>{reportMoney(p.minDepositDecimal ?? p.minDeposit)}</span><input aria-label={`Minimum deposit for ${p.code}`} key={`${p.id}:${p.minDepositDecimal ?? p.minDeposit}`} inputMode="decimal" defaultValue={p.minDepositDecimal ?? String(p.minDeposit)} disabled={busy} style={{...input,width:120}} onBlur={e=>{if(e.target.value.trim()!==(p.minDepositDecimal ?? String(p.minDeposit)))void updateMinimum(p,e.target.value);}} /></td>
+                <td style={cell}>
+                  <form onSubmit={e=>{e.preventDefault();void updateMinimum(p,minimumDrafts[p.id] ?? p.minDepositDecimal ?? String(p.minDeposit));}}>
+                    <div>Current: {reportMoney(p.minDepositDecimal ?? p.minDeposit)}</div>
+                    <input aria-label={`Minimum deposit for ${p.code}`} inputMode="decimal"
+                      value={minimumDrafts[p.id] ?? p.minDepositDecimal ?? String(p.minDeposit)}
+                      disabled={busy} style={{...input,width:120}}
+                      onChange={e=>{setMinimumDrafts(previous=>({...previous,[p.id]:e.target.value}));setMinimumSaved(null);}} />
+                    <button type="submit" disabled={busy} aria-label={`Save minimum deposit for ${p.code}`} style={{marginLeft:6}}>Save</button>
+                    {minimumSaved===p.id && <div role="status">Minimum deposit saved.</div>}
+                  </form>
+                </td>
                 <td style={cell}>{p.allowWithdrawal ? 'Yes' : 'No'}</td>
                 <td style={cell}>{p.accountCount}</td>
                 <td style={cell}>{p.status}</td>
